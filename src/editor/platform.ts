@@ -1,0 +1,144 @@
+/**
+ * Files: in the desktop app through Electron (electron/preload.ts → window.chroeditorNative), in a
+ * browser (development, tests) through the folder picker / File System Access API, or a folder
+ * handed in by a test (window.__chroeditorTestFolder).
+ */
+
+export interface MapFolder {
+  /** Shown to the user. */
+  name: string;
+  files: string[];
+  readText(name: string): Promise<string>;
+  readBinary(name: string): Promise<ArrayBuffer>;
+  writeText(name: string, text: string): Promise<void>;
+  writeBinary(name: string, data: ArrayBuffer): Promise<void>;
+  /** Re-reads the list of files. */
+  refresh(): Promise<void>;
+}
+
+interface NativeApi {
+  openFolder(): Promise<{ path: string; files: string[] } | null>;
+  listFolder(path: string): Promise<string[]>;
+  readFile(path: string): Promise<ArrayBuffer>;
+  writeFile(path: string, data: ArrayBuffer | string): Promise<void>;
+  /** The folders opened before (newest first). */
+  recentFolders(): Promise<string[]>;
+  openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
+}
+
+declare global {
+  interface Window {
+    chroeditorNative?: NativeApi;
+    __chroeditorTestFolder?: Record<string, string | ArrayBuffer>;
+    showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+  }
+}
+
+export const isDesktop = () => window.chroeditorNative !== undefined;
+
+function joinPath(folder: string, name: string) {
+  return `${folder.replace(/[\\/]+$/u, '')}/${name}`;
+}
+
+function nativeFolder(native: NativeApi, opened: { path: string; files: string[] }): MapFolder {
+  const folder: MapFolder = {
+    name: opened.path,
+    files: opened.files,
+    readText: async (name) => new TextDecoder().decode(await native.readFile(joinPath(opened.path, name))),
+    readBinary: (name) => native.readFile(joinPath(opened.path, name)),
+    writeText: (name, text) => native.writeFile(joinPath(opened.path, name), text),
+    writeBinary: (name, data) => native.writeFile(joinPath(opened.path, name), data),
+    refresh: async () => {
+      folder.files = await native.listFolder(opened.path);
+    },
+  };
+  return folder;
+}
+
+function memoryFolder(name: string, files: Record<string, string | ArrayBuffer>): MapFolder {
+  const folder: MapFolder = {
+    name,
+    files: Object.keys(files),
+    readText: (file) => {
+      const data = files[file];
+      if (data === undefined) return Promise.reject(new Error(`no ${file}`));
+      return Promise.resolve(typeof data === 'string' ? data : new TextDecoder().decode(data));
+    },
+    readBinary: (file) => {
+      const data = files[file];
+      if (data === undefined) return Promise.reject(new Error(`no ${file}`));
+      return Promise.resolve(typeof data === 'string' ? (new TextEncoder().encode(data).buffer as ArrayBuffer) : data);
+    },
+    writeText: (file, text) => {
+      files[file] = text;
+      folder.files = Object.keys(files);
+      return Promise.resolve();
+    },
+    writeBinary: (file, data) => {
+      files[file] = data;
+      folder.files = Object.keys(files);
+      return Promise.resolve();
+    },
+    refresh: () => Promise.resolve(),
+  };
+  return folder;
+}
+
+async function handleFolder(handle: FileSystemDirectoryHandle): Promise<MapFolder> {
+  const list = async () => {
+    const names: string[] = [];
+    for await (const [name, entry] of handle as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+      if (entry.kind === 'file') names.push(name);
+    }
+    return names;
+  };
+  const folder: MapFolder = {
+    name: handle.name,
+    files: await list(),
+    readText: async (name) => (await (await handle.getFileHandle(name)).getFile()).text(),
+    readBinary: async (name) => (await (await handle.getFileHandle(name)).getFile()).arrayBuffer(),
+    writeText: async (name, text) => {
+      const writable = await (await handle.getFileHandle(name, { create: true })).createWritable();
+      await writable.write(text);
+      await writable.close();
+    },
+    writeBinary: async (name, data) => {
+      const writable = await (await handle.getFileHandle(name, { create: true })).createWritable();
+      await writable.write(data);
+      await writable.close();
+    },
+    refresh: async () => {
+      folder.files = await list();
+    },
+  };
+  return folder;
+}
+
+/** "Open a map": its folder (null: cancelled). */
+export async function openMapFolder(): Promise<MapFolder | null> {
+  const native = window.chroeditorNative;
+  if (native !== undefined) {
+    const opened = await native.openFolder();
+    return opened === null ? null : nativeFolder(native, opened);
+  }
+  if (window.__chroeditorTestFolder !== undefined) return memoryFolder('test', window.__chroeditorTestFolder);
+  if (window.showDirectoryPicker !== undefined) {
+    try {
+      return await handleFolder(await window.showDirectoryPicker({ mode: 'readwrite' }));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function recentFolders(): Promise<string[]> {
+  return (await window.chroeditorNative?.recentFolders()) ?? [];
+}
+
+export async function openRecentFolder(path: string): Promise<MapFolder | null> {
+  const native = window.chroeditorNative;
+  if (native === undefined) return null;
+  const opened = await native.openRecent(path);
+  return opened === null ? null : nativeFolder(native, opened);
+}
