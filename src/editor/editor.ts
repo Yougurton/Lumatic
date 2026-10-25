@@ -26,7 +26,8 @@ import {
   type StartMode,
 } from './model';
 import { clipRank } from './bake';
-import { childrenSignature, defaultParams, effectItems, generateEffect, KIND_NAMES, type Effect, type EffectKind, type EffectParams } from './effects';
+import { buildEffect, childrenSignature, defaultParams, effectItems, KIND_NAMES, type Effect, type EffectExtras, type EffectKind, type EffectParams } from './effects';
+import { defaultGls } from './gls';
 import { lightGroupName, otherEventName } from './names';
 import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
@@ -126,7 +127,7 @@ export class Editor {
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
-  private clipboard: { clips: LightClip[]; raw: RawEvent[]; effects: { effect: Effect; children: LightClip[] }[] } | null = null;
+  private clipboard: { clips: LightClip[]; raw: RawEvent[]; effects: { effect: Effect; children: LightClip[]; raw: RawEvent[] }[] } | null = null;
   private rebuildTimer: number | null = null;
   private toSong: (jsonTime: number) => number = (beat) => beat;
 
@@ -747,6 +748,58 @@ export class Editor {
     return this.addGroup(name, items);
   }
 
+  /** The lights of an event type, sorted (by depth / height / left to right / ID). */
+  private sortedLights(type: number, key: 'z' | 'y' | 'x' | 'id' = 'z'): LightRef[] {
+    const lights = (this.lightsByType.get(type) ?? []).map((id): LightRef => ({ kind: 'light', type, id }));
+    const info = (light: LightRef) => this.lightInfo.find((item) => item.type === light.type && item.lightId === light.id)?.position ?? [0, 0, 0];
+    const value = (light: LightRef) => (key === 'id' ? light.id : key === 'x' ? info(light)[0] : key === 'y' ? info(light)[1] : this.depthOf(info(light)));
+    return lights.sort((a, b) => value(a) - value(b) || a.id - b.id);
+  }
+
+  /**
+   * Laser templates: the left and right lasers (or any two event types) as pairs — the nearest left
+   * with the nearest right, and so on ('pairs', each a subgroup); or one side then the other
+   * ('sides', two subgroups). For one type whose lights stand on both sides (the back lasers), its
+   * left and right halves.
+   */
+  laserPreset(mode: 'pairs' | 'sides', leftType: number, rightType: number | null): LightGroup | null {
+    let left: LightRef[];
+    let right: LightRef[];
+    if (rightType === null) {
+      const all = this.sortedLights(leftType, 'z');
+      const x = (light: LightRef) => this.lightInfo.find((item) => item.type === light.type && item.lightId === light.id)?.position[0] ?? 0;
+      left = all.filter((light) => x(light) < 0).sort((a, b) => Math.abs(x(a)) - Math.abs(x(b)) || a.id - b.id);
+      right = all.filter((light) => x(light) >= 0).sort((a, b) => Math.abs(x(a)) - Math.abs(x(b)) || a.id - b.id);
+    } else {
+      left = this.sortedLights(leftType, 'z');
+      right = this.sortedLights(rightType, 'z');
+    }
+    if (left.length + right.length === 0) return null;
+    const title = rightType === null ? lightGroupName(leftType) : `${lightGroupName(leftType)} + ${lightGroupName(rightType)}`;
+    let items: GroupItem[];
+    if (mode === 'pairs') {
+      items = [];
+      for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        const pair = [left[i], right[i]].filter((light) => light !== undefined);
+        items.push({ kind: 'group', id: newId('g'), name: `Пара ${String(i + 1)}`, items: pair });
+      }
+    } else {
+      items = [
+        { kind: 'group', id: newId('g'), name: 'Левые', items: left },
+        { kind: 'group', id: newId('g'), name: 'Правые', items: right },
+      ];
+    }
+    return this.addGroup(`${title}: ${mode === 'pairs' ? 'парами' : 'по сторонам'}`, items);
+  }
+
+  /** One group of an event type's lights in the order of where they are. */
+  orderedPreset(type: number, key: 'z' | 'y' | 'x'): LightGroup | null {
+    const lights = this.sortedLights(type, key);
+    if (lights.length === 0) return null;
+    const how = key === 'z' ? 'от ближних к дальним' : key === 'y' ? 'снизу вверх' : 'слева направо';
+    return this.addGroup(`${lightGroupName(type)}: ${how}`, lights);
+  }
+
   // ----- edits -------------------------------------------------------------------------------------
 
   private snapshot() {
@@ -913,7 +966,7 @@ export class Editor {
     project.effects = this.effects.filter((effect) => !effects.has(effect.id));
     if (this.openEffect !== null && effects.has(this.openEffect)) this.openEffect = null;
     project.clips = project.clips.filter((clip) => !this.selection.has(clip.id) && (clip.group === undefined || !effects.has(clip.group)));
-    project.raw = project.raw.filter((event) => !this.selection.has(event.id));
+    project.raw = project.raw.filter((event) => !this.selection.has(event.id) && (event.group === undefined || !effects.has(event.group)));
     this.selection.clear();
     this.changed();
   }
@@ -922,7 +975,7 @@ export class Editor {
     const project = this.project;
     if (project === null) return;
     const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
-    this.select([...project.clips.filter((clip) => clip.group === undefined || !hidden.has(clip.group)).map((clip) => clip.id), ...project.raw.map((event) => event.id), ...this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id)]);
+    this.select([...project.clips.filter((clip) => clip.group === undefined || !hidden.has(clip.group)).map((clip) => clip.id), ...project.raw.filter((event) => event.group === undefined || !hidden.has(event.group)).map((event) => event.id), ...this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id)]);
   }
 
   copy() {
@@ -930,7 +983,7 @@ export class Editor {
     if (project === null) return;
     const clips = this.selectedClips().map((clip) => cloneClip(clip, { id: clip.id }));
     const raw = project.raw.filter((event) => this.selection.has(event.id)).map((event) => ({ ...event }));
-    const effects = this.selectedEffects().map((effect) => ({ effect: structuredClone(effect), children: this.effectChildren(effect.id).map((clip) => cloneClip(clip, { id: clip.id })) }));
+    const effects = this.selectedEffects().map((effect) => ({ effect: structuredClone(effect), children: this.effectChildren(effect.id).map((clip) => cloneClip(clip, { id: clip.id })), raw: this.effectRaw(effect.id).map((event) => structuredClone(event)) }));
     if (clips.length + raw.length + effects.length > 0) this.clipboard = { clips, raw, effects };
   }
 
@@ -953,10 +1006,11 @@ export class Editor {
       project.raw.push(copy);
       pasted.push(copy.id);
     }
-    for (const { effect, children } of board.effects) {
+    for (const { effect, children, raw } of board.effects) {
       const copy: Effect = { ...structuredClone(effect), id: newId('e'), start: effect.start + shift, end: effect.end + shift };
       this.effects.push(copy);
       for (const child of children) project.clips.push(cloneClip(child, { start: child.start + shift, end: child.end + shift, group: copy.id }));
+      for (const event of raw) project.raw.push({ ...structuredClone(event), id: newId('r'), beat: event.beat + shift, group: copy.id });
       pasted.push(copy.id);
     }
     this.selection = new Set(pasted);
@@ -989,6 +1043,25 @@ export class Editor {
     return this.project?.clips.filter((clip) => clip.group === id) ?? [];
   }
 
+  /** The ring events a GLS block made. */
+  effectRaw(id: string) {
+    return this.project?.raw.filter((event) => event.group === id) ?? [];
+  }
+
+  /** What making effects needs from the map and the environment. */
+  effectExtras(): EffectExtras {
+    const systems = this.preview.ringSystems().filter((system) => system.rotates);
+    return {
+      secondsPerBeat: 60 / this.songBpm,
+      ringCount: (name) => (name === '' ? Math.max(1, ...systems.map((system) => system.rings)) : (systems.find((system) => system.name === name)?.rings ?? 1)),
+    };
+  }
+
+  /** An effect's events as they would be made now. */
+  buildEffectEvents(effect: Effect) {
+    return buildEffect(effect, this.effectItemsOf(effect), this.scheme(), this.effectExtras());
+  }
+
   selectedEffects(): Effect[] {
     return this.effects.filter((effect) => this.selection.has(effect.id));
   }
@@ -1007,7 +1080,10 @@ export class Editor {
     const project = this.project;
     if (project === null || effect.custom === true) return;
     project.clips = project.clips.filter((clip) => clip.group !== effect.id);
-    project.clips.push(...generateEffect(effect, this.effectItemsOf(effect), this.scheme()));
+    project.raw = project.raw.filter((event) => event.group !== effect.id);
+    const made = this.buildEffectEvents(effect);
+    project.clips.push(...made.clips);
+    project.raw.push(...made.raw.map((event) => ({ ...event, id: newId('r'), group: effect.id })));
   }
 
   /** The row an effect would go on → what it runs over (null: not a light row). */
@@ -1031,12 +1107,13 @@ export class Editor {
       end: Math.max(end, start + 0.25),
       layer: this.brush.layer,
       params: { ...defaultParams(this.brush.color), ...structuredClone(params) },
+      ...(kind === 'gls' ? { gls: defaultGls(this.brush.color) } : {}),
     };
   }
 
   /** The events an effect would make (not put anywhere). */
   previewEffectChildren(effect: Effect): LightClip[] {
-    return generateEffect(effect, this.effectItemsOf(effect), this.scheme());
+    return this.buildEffectEvents(effect).clips;
   }
 
   addEffect(effect: Effect) {
@@ -1062,10 +1139,23 @@ export class Editor {
       startMode: 'on',
       fadeIn: 0.5,
       endMode: 'stay',
-      color: p.color,
-      endColor: p.color2,
+      color: effect.kind === 'gls' ? (effect.gls?.boxes.find((box) => box.kind === 'color')?.events[0]?.color ?? p.color) : p.color,
+      endColor: effect.kind === 'gls' ? null : p.color2,
       layer: effect.layer,
     };
+  }
+
+  /** Opens a GLS block's editor (set by the app). */
+  glsEditorHook: ((id: string) => void) | null = null;
+
+  /** Changes one effect (one undo step) and makes its events anew. */
+  updateEffect(id: string, patch: (effect: Effect) => void) {
+    const effect = this.effectById(id);
+    if (effect === undefined) return;
+    this.checkpoint();
+    patch(effect);
+    this.regenerate(effect);
+    this.changed();
   }
 
   /** Changes the selected effects (one undo step) and makes their events anew. */
@@ -1090,6 +1180,10 @@ export class Editor {
       clip.start = from.start + delta;
       clip.end = from.end + delta;
     }
+    for (const event of this.effectRaw(effect.id)) {
+      const from = origin.children.get(event.id);
+      if (from !== undefined) event.beat = from.start + delta;
+    }
   }
 
   /** Stretching an effect: made anew for its new length — or, changed by hand, its events
@@ -1104,6 +1198,10 @@ export class Editor {
         if (from === undefined) continue;
         clip.start = effect.start + (from.start - origin.start) * scale;
         clip.end = effect.start + (from.end - origin.start) * scale;
+      }
+      for (const event of this.effectRaw(effect.id)) {
+        const from = origin.children.get(event.id);
+        if (from !== undefined) event.beat = effect.start + (from.start - origin.start) * scale;
       }
     } else this.regenerate(effect);
   }
@@ -1155,6 +1253,7 @@ export class Editor {
       const copy: Effect = { ...structuredClone(effect), id: newId('e') };
       this.effects.push(copy);
       for (const child of this.effectChildren(effect.id)) project.clips.push(cloneClip(child, { group: copy.id }));
+      for (const event of this.effectRaw(effect.id)) project.raw.push({ ...structuredClone(event), id: newId('r'), group: copy.id });
       return copy.id;
     });
   }
@@ -1170,6 +1269,7 @@ export class Editor {
       delete clip.group;
       delete clip.slot;
     }
+    for (const event of this.effectRaw(id)) delete event.group;
     project.effects = this.effects.filter((item) => item.id !== id);
     if (this.openEffect === id) this.openEffect = null;
     this.selection = new Set(children.map((clip) => clip.id));
@@ -1181,8 +1281,9 @@ export class Editor {
   private noteHandEdits() {
     const open = this.openEffect === null ? undefined : this.effectById(this.openEffect);
     if (open !== undefined && open.custom !== true) {
-      const made = generateEffect(open, this.effectItemsOf(open), this.scheme());
-      if (childrenSignature(made) !== childrenSignature(this.effectChildren(open.id).map((clip) => ({ ...clip, id: '' })))) open.custom = true;
+      const made = this.buildEffectEvents(open);
+      const rawSignature = (events: readonly Omit<RawEvent, 'id'>[]) => JSON.stringify(events.map((event) => [Math.round(event.beat * 1e4), event.type, event.value, event.customData]).sort());
+      if (childrenSignature(made.clips) !== childrenSignature(this.effectChildren(open.id)) || rawSignature(made.raw) !== rawSignature(this.effectRaw(open.id))) open.custom = true;
     }
     for (const effect of this.effects) {
       if (effect.custom !== true) continue;

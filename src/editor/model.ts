@@ -83,6 +83,8 @@ export interface RawEvent {
   value: number;
   floatValue: number;
   customData?: Record<string, unknown>;
+  /** The effect that made it (ring events of a GLS block), if any. */
+  group?: string;
 }
 
 export interface Project {

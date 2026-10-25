@@ -2,7 +2,9 @@ import { Editor } from './editor/editor';
 import { Inspector } from './editor/inspector';
 import { encodeOgg, findBpm } from './editor/audio-tools';
 import { MiniMap } from './editor/minimap';
+import { GlsEditor } from './editor/gls-editor';
 import { Library } from './editor/library';
+import { mapSettingsDialog } from './editor/map-settings';
 import { newMapDialog } from './editor/new-map';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
@@ -17,6 +19,7 @@ new Inspector(editor, byId('inspector'));
 new MiniMap(editor, byId<HTMLCanvasElement>('minimap'));
 const library = new Library(editor, byId('library'));
 const presets = library.presets;
+new GlsEditor(editor);
 
 // for tests and the console
 (window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, library, audio: { findBpm, encodeOgg } };
@@ -37,6 +40,7 @@ function formatTime(seconds: number) {
 function refreshToolbar() {
   status.textContent = `${editor.dirty ? '● ' : ''}${editor.status}`;
   saveButton.disabled = editor.project === null;
+  byId<HTMLButtonElement>('settings').disabled = editor.project === null;
   const rows = editor.difficulties();
   difficultySelect.disabled = rows.length === 0;
   const key = rows.map((row) => row.key).join('|');
@@ -121,6 +125,7 @@ difficultySelect.addEventListener('change', () => {
   void editor.openDifficulty(row);
 });
 saveButton.addEventListener('click', () => void save());
+byId('settings').addEventListener('click', () => void mapSettingsDialog(editor));
 byId('undo').addEventListener('click', () => editor.undo());
 byId('redo').addEventListener('click', () => editor.redo());
 playButton.addEventListener('click', () => editor.togglePlay());

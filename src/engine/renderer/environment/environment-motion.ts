@@ -149,6 +149,7 @@ function buildRingGroups(data: EnvironmentData, nodes: Group[]) {
                 minPositionStep: positionSpawner.MinPositionStep,
                 maxPositionStep: positionSpawner.MaxPositionStep,
                 moveSpeed: positionSpawner.MoveSpeed,
+                name: object.name,
               },
         seed: objectIndex,
       });

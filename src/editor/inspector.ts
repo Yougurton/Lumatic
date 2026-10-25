@@ -174,11 +174,21 @@ export class Inspector {
       button.addEventListener('click', act);
       actions.append(button);
     };
-    if (effects.length === 1) action('Войти', 'Открыть события эффекта для правки (двойной клик по нему)', () => editor.enterEffect(effect.id));
+    if (effects.length === 1 && effect.kind === 'gls' && effect.custom !== true) action('Редактор GLS', 'Открыть редактор блока (двойной клик по нему)', () => editor.glsEditorHook?.(effect.id));
+    if (effects.length === 1) action('Войти', 'Открыть события эффекта для правки вручную', () => editor.enterEffect(effect.id));
     action('▶ Проиграть', 'Проиграть эффект по кругу в окне просмотра', () => editor.startTrial({ clips: [], raw: [], start: Math.min(...effects.map((item) => item.start)), end: Math.max(...effects.map((item) => item.end)) }));
     if (effects.length === 1) action('Разобрать', 'Превратить эффект в обычные события', () => editor.explodeEffect(effect.id));
     root.append(actions);
 
+    if (effects.every((item) => item.kind === 'gls')) {
+      root.append(this.numberField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => (item.layer = Math.max(0, Math.round(value))))));
+      const boxes = effect.gls?.boxes ?? [];
+      const note = document.createElement('div');
+      note.className = 'ins-note';
+      note.textContent = `Коробок: ${String(boxes.length)} (света ${String(boxes.filter((box) => box.kind === 'color').length)}, вращения ${String(boxes.filter((box) => box.kind === 'rotation').length)}). Событий света: ${String(editor.effectChildren(effect.id).length)}, событий колец: ${String(editor.effectRaw(effect.id).length)}.`;
+      root.append(note);
+      return;
+    }
     // the colour(s)
     root.append(this.section('Цвет', this.colorPicker(p.color, (color) => change((params) => (params.color = color)))));
     const secondLabel = effect.kind === 'strobe' ? ' Чередовать со вторым цветом' : effect.kind === 'twinkle' ? ' Случайные цвета до второго' : ' Градиент по элементам';

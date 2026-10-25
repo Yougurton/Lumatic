@@ -1,5 +1,6 @@
 import { lerpHsv, resolveRgb, type SchemeColors } from './bake';
-import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, type Rgb, type StartMode } from './model';
+import { generateGls, type GlsData } from './gls';
+import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, type RawEvent, type Rgb, type StartMode } from './model';
 
 /**
  * Effects: one event on the timeline that lights a group's lights (or subgroups) one after another
@@ -13,7 +14,7 @@ import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, t
  * lines — or its lights); on an event type's row, that type's lights by ID.
  */
 
-export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle';
+export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'gls';
 export type Direction = 'forward' | 'backward' | 'outward' | 'inward' | 'pingpong';
 export type StrobePattern = 'all' | 'alternate' | 'sequence';
 
@@ -56,6 +57,15 @@ export interface Effect {
   params: EffectParams;
   /** Its events were changed by hand: they stay as they are (moved and stretched with it). */
   custom?: boolean;
+  /** kind 'gls': its boxes (gls.ts). */
+  gls?: GlsData;
+}
+
+/** What making an effect's events needs besides the effect. */
+export interface EffectExtras {
+  secondsPerBeat: number;
+  /** Rings in a ring system ('': all of them together). */
+  ringCount: (system: string) => number;
 }
 
 /** What an effect goes through, one by one. */
@@ -67,6 +77,7 @@ export const KIND_NAMES: Record<EffectKind, string> = {
   strobe: 'Стробоскоп',
   gradient: 'Градиент',
   twinkle: 'Мерцание',
+  gls: 'GLS-группа',
 };
 
 export function defaultParams(color: ClipColor): EffectParams {
@@ -138,7 +149,57 @@ function random(seed: number) {
  * The effect's events. `items`: what it goes through; `whole`: a clip for its whole target at once
  * (a strobe of everything). Each event remembers which item it is for (`slot`).
  */
-export function generateEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors): LightClip[] {
+export function generateEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): LightClip[] {
+  return buildEffect(effect, items, scheme, extras).clips;
+}
+
+/** The effect's events: light clips — and, for a GLS block's rotation boxes, ring events. */
+export function buildEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
+  if (effect.kind === 'gls') {
+    const made = generateGls(effect.gls ?? { boxes: [] }, effect.start, effect.end, {
+      scheme,
+      items: items.length,
+      makeClip: (item, start, end) => childClip(effect, items[item] ?? null, start, end, item),
+      ringCount: extras?.ringCount ?? (() => 1),
+      secondsPerBeat: extras?.secondsPerBeat ?? 0.5,
+    });
+    return { clips: made.clips, raw: made.raw.map((event) => ({ ...event, group: effect.id })) };
+  }
+  return { clips: classicEffect(effect, items, scheme), raw: [] };
+}
+
+/** One of an effect's clips: for an item (null: the whole target), from `start` to `end`. */
+function childClip(effect: Effect, item: EffectItem | null, start: number, end: number, slot: number): LightClip {
+  const p = effect.params;
+  const clip: LightClip = {
+    id: newId(),
+    type: effect.type,
+    ids: effect.ids === null ? null : [...effect.ids],
+    start,
+    end: Math.max(start + 1 / 64, end),
+    startMode: p.startMode,
+    fadeIn: 0.25,
+    endMode: p.endMode,
+    color: { ...p.color },
+    endColor: null,
+    layer: effect.layer,
+    group: effect.id,
+    slot,
+  };
+  if (item === null) {
+    if (effect.target !== undefined) clip.target = effect.target;
+  } else if (item.kind === 'group') {
+    clip.target = item.id;
+    clip.ids = null;
+  } else {
+    clip.type = item.type;
+    clip.ids = [item.id];
+    clip.scope = 'light';
+  }
+  return clip;
+}
+
+function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors): LightClip[] {
   const p = effect.params;
   const out: LightClip[] = [];
   const duration = Math.max(1 / 64, effect.end - effect.start);

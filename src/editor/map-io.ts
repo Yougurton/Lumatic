@@ -134,3 +134,65 @@ export function suggestChroma(infoText: string, difficulty: string): string {
   }
   return JSON.stringify(info, null, 2);
 }
+
+/**
+ * Moves or stretches every time in a difficulty file (notes, walls, arcs, chains, events, light
+ * groups, bookmarks…): `beat` maps a time to its new one, `length` a duration. What comes out before
+ * the song's start is dropped (its count returned). v2 and v3 files; v4 isn't supported yet.
+ */
+export function transformDifficultyBeats(text: string, beat: (b: number) => number, length: (d: number) => number): { text: string; dropped: number } {
+  const version = difficultyVersion(text);
+  if (version === '4') throw new Error('Формат v4 пока не поддерживается');
+  const data = JSON.parse(text) as Record<string, unknown>;
+  let dropped = 0;
+  const each = (holder: Record<string, unknown> | undefined, key: string, time: string, extra: { times?: string[]; lengths?: string[] } = {}) => {
+    const list = holder?.[key];
+    if (!Array.isArray(list)) return;
+    holder![key] = list.filter((item: Record<string, unknown>) => {
+      if (typeof item[time] !== 'number' && item[time] !== undefined) return true;
+      const moved = beat((item[time] as number | undefined) ?? 0);
+      if (moved < -1e-6) {
+        dropped++;
+        return false;
+      }
+      item[time] = Math.round(moved * 1e6) / 1e6;
+      for (const other of extra.times ?? []) if (typeof item[other] === 'number') item[other] = Math.round(beat(item[other] as number) * 1e6) / 1e6;
+      for (const span of extra.lengths ?? []) if (typeof item[span] === 'number') item[span] = Math.round(length(item[span] as number) * 1e6) / 1e6;
+      return true;
+    });
+  };
+  if (version === '3') {
+    for (const key of ['colorNotes', 'bombNotes', 'basicBeatmapEvents', 'colorBoostBeatmapEvents', 'rotationEvents', 'waypoints', 'lightColorEventBoxGroups', 'lightRotationEventBoxGroups', 'lightTranslationEventBoxGroups', 'vfxEventBoxGroups']) each(data, key, 'b');
+    each(data, 'bpmEvents', 'b');
+    each(data, 'obstacles', 'b', { lengths: ['d'] });
+    each(data, 'sliders', 'b', { times: ['tb'] });
+    each(data, 'burstSliders', 'b', { times: ['tb'] });
+    const custom = data.customData as Record<string, unknown> | undefined;
+    for (const key of ['bookmarks', 'customEvents', 'fakeColorNotes', 'fakeBombNotes', 'fakeObstacles', 'fakeBurstSliders']) each(custom, key, 'b', key === 'fakeObstacles' ? { lengths: ['d'] } : key === 'fakeBurstSliders' ? { times: ['tb'] } : {});
+  } else {
+    for (const key of ['_notes', '_events', '_waypoints']) each(data, key, '_time');
+    each(data, '_obstacles', '_time', { lengths: ['_duration'] });
+    each(data, '_sliders', '_headTime', { times: ['_tailTime'] });
+    const custom = data._customData as Record<string, unknown> | undefined;
+    for (const key of ['_bookmarks', '_customEvents', '_BPMChanges', '_bpmChanges']) each(custom, key, '_time');
+  }
+  return { text: JSON.stringify(data), dropped };
+}
+
+/** The same for the editor's own file of a difficulty (clips, events, effects). */
+export function transformProjectBeats(project: Project, beat: (b: number) => number, length: (d: number) => number): Project {
+  const copy = structuredClone(project);
+  copy.clips = copy.clips
+    .map((clip) => ({ ...clip, start: beat(clip.start), end: beat(clip.end), fadeIn: length(clip.fadeIn) }))
+    .filter((clip) => clip.end > 0)
+    .map((clip) => ({ ...clip, start: Math.max(0, clip.start) }));
+  copy.raw = copy.raw.map((event) => ({ ...event, beat: beat(event.beat) })).filter((event) => event.beat >= -1e-6);
+  copy.effects = (copy.effects ?? [])
+    .map((effect) => {
+      const params = { ...effect.params, pulse: length(effect.params.pulse), rate: length(effect.params.rate), fadeIn: length(effect.params.fadeIn) };
+      const gls = effect.gls === undefined ? undefined : { boxes: effect.gls.boxes.map((box) => ({ ...box, beatValue: length(box.beatValue), events: box.events.map((event) => ({ ...event, beat: length(event.beat) })), rotations: box.rotations.map((event) => ({ ...event, beat: length(event.beat) })) })) };
+      return { ...effect, start: beat(effect.start), end: beat(effect.end), params, ...(gls === undefined ? {} : { gls }) };
+    })
+    .filter((effect) => effect.end > 0);
+  return copy;
+}

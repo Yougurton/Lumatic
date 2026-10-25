@@ -2,6 +2,7 @@ import type { SchemeColors } from './bake';
 import type { Editor } from './editor';
 import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectKind, type EffectParams } from './effects';
 import type { ClipColor, LightClip, RawEvent } from './model';
+import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
 
 /**
@@ -21,6 +22,7 @@ interface EffectCard {
 }
 
 const EFFECTS: EffectCard[] = [
+  { name: 'GLS-группа', hint: 'Блок как в редакторе Beat Saber (Group Lighting System): коробки с фильтрами, распределение по времени и яркости, свои события, строб, вращение колец', kind: 'gls', length: 4, params: () => ({}) },
   { name: 'Волна', hint: 'Вспышка бежит по элементам группы по порядку', kind: 'wave', length: 4, params: () => ({ direction: 'forward', pulse: 1, startMode: 'flash', endMode: 'fade' }) },
   { name: 'Туда-обратно', hint: 'Волна проходит туда и обратно', kind: 'wave', length: 4, params: () => ({ direction: 'pingpong', repeats: 2, pulse: 0.75, startMode: 'flash', endMode: 'fade' }) },
   { name: 'От центра', hint: 'Волна расходится от середины к краям', kind: 'wave', length: 2, params: () => ({ direction: 'outward', pulse: 0.75, startMode: 'flash', endMode: 'fade' }) },
@@ -80,6 +82,7 @@ function drawEffectSketch(canvas: HTMLCanvasElement, card: EffectCard, colors: S
     start: 0,
     end: card.length,
     layer: 1,
+    ...(card.kind === 'gls' ? { gls: { boxes: [{ ...newColorBox(main), beatValue: 2, events: [{ id: 'a', beat: 0, transition: 'instant', color: main, brightness: 1, strobe: 0 }, { id: 'b', beat: 1.5, transition: 'fade', color: main, brightness: 0, strobe: 0 }] }] } } : {}),
     params: { color: main, color2: null, hsv: false, startMode: 'flash', endMode: 'fade', fadeIn: 0.25, pulse: 1, repeats: 1, direction: 'forward', rate: 0.25, duty: 0.5, pattern: 'all', density: 0.3, seed: 7, ...card.params({ main, other }) },
   };
   const items: EffectItem[] = Array.from({ length: 8 }, (_, id) => ({ kind: 'light', type: 0, id }));
@@ -156,6 +159,8 @@ export class Library {
   private readonly presetBox: HTMLElement;
   readonly presets: PresetPanel;
   private targetLabel: HTMLElement | null = null;
+  /** Which ring system ring events go to (Chroma's nameFilter; null: all of them). */
+  private ringFilter: string | null = null;
   private animating: { canvas: HTMLCanvasElement; draw: (t: number) => void; started: number } | null = null;
 
   constructor(private readonly editor: Editor, private readonly root: HTMLElement) {
@@ -220,6 +225,19 @@ export class Library {
       head.append(plain);
     }
     this.body.append(head);
+    if (this.tab === 'rings') {
+      const systems = this.editor.preview.ringSystems().filter((system) => system.rotates || system.zooms);
+      if (systems.length > 1) {
+        const pick = document.createElement('select');
+        pick.className = 'lib-select';
+        pick.title = 'Какие кольца поворачивать (Chroma nameFilter)';
+        pick.append(Object.assign(document.createElement('option'), { value: '', textContent: 'Все кольца' }));
+        for (const system of systems) pick.append(Object.assign(document.createElement('option'), { value: system.name, textContent: `${ringSystemName(system.name)} (${String(system.rings)})` }));
+        pick.value = this.ringFilter ?? '';
+        pick.addEventListener('change', () => (this.ringFilter = pick.value === '' ? null : pick.value));
+        head.append(pick);
+      } else this.ringFilter = null;
+    }
     this.updateTarget();
     const grid = document.createElement('div');
     grid.className = 'lib-grid';
@@ -314,6 +332,7 @@ export class Library {
     this.editor.tool = { kind: 'clip' };
     this.editor.addEffect(effect);
     this.render();
+    if (effect.kind === 'gls') this.editor.glsEditorHook?.(effect.id);
   }
 
   private tryEffect(card: EffectCard) {
@@ -324,7 +343,7 @@ export class Library {
   }
 
   private ringEvent(card: RingCard): Omit<RawEvent, 'id'> {
-    return { beat: this.editor.snapBeat(this.editor.playhead()), type: card.type, value: 0, floatValue: 1, customData: { ...card.data } };
+    return { beat: this.editor.snapBeat(this.editor.playhead()), type: card.type, value: 0, floatValue: 1, customData: { ...card.data, ...(this.ringFilter === null ? {} : { nameFilter: this.ringFilter }) } };
   }
 
   private insertRing(card: RingCard) {
@@ -339,4 +358,13 @@ export class Library {
     this.editor.startTrial({ clips: [], raw: [event], start: event.beat, end: event.beat + 4 });
     this.editor.setStatus(`Пробую «${card.name}» — Esc, чтобы остановить`);
   }
+}
+
+/** A ring system's name as people say it. */
+export function ringSystemName(name: string) {
+  const lower = name.toLowerCase();
+  if (lower.includes('small')) return 'Малые кольца';
+  if (lower.includes('big')) return 'Большие кольца';
+  if (lower.includes('panel')) return 'Панели';
+  return name === '' ? 'Кольца' : name;
 }

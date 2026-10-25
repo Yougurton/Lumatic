@@ -64,7 +64,7 @@ export function infoText(settings: NewMapSettings, difficultyFile: string, songF
       _environmentName: settings.environment,
       _allDirectionsEnvironmentName: 'GlassDesertEnvironment',
       _songTimeOffset: 0,
-      _customData: { _editors: { _lastEditedBy: 'ChroEditor', ChroEditor: { version: '0.3.0' } } },
+      _customData: { _editors: { _lastEditedBy: 'ChroEditor', ChroEditor: { version: '0.4.0' } } },
       _difficultyBeatmapSets: [
         {
           _beatmapCharacteristicName: 'Standard',

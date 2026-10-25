@@ -304,6 +304,19 @@ export class MapView implements RenderView {
   readonly overlayRoot = new Group();
   private overlayAdded = false;
 
+  /** The environment's ring systems: their names (what Chroma's nameFilter picks), how many rings,
+   *  whether ring events turn them / move them. */
+  ringSystems(): { name: string; rings: number; rotates: boolean; zooms: boolean }[] {
+    const environment = this.environment;
+    if (environment === null) return [];
+    return environment.ringGroups.map((group) => ({
+      name: group.rotationConfig?.name ?? group.positionConfig?.name ?? '',
+      rings: group.rings.length,
+      rotates: group.rotationConfig !== undefined,
+      zooms: group.positionConfig !== undefined,
+    }));
+  }
+
   /** The environment's lights as events address them: per event type, each light ID, where it is
    *  in the world, and the ring (group, index from the camera) it rides on, if any. */
   lightLayout(): { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null }[] {

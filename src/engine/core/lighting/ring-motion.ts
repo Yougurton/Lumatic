@@ -29,6 +29,8 @@ export interface RingPositionConfig {
   minPositionStep: number;
   maxPositionStep: number;
   moveSpeed: number;
+  /** The ring system's name (Chroma's nameFilter picks ring systems by it). */
+  name?: string;
 }
 
 export type RingRandom = (event: BasicEvent | null, index: number, channel: 'direction' | 'step') => number;
@@ -48,6 +50,14 @@ interface SampledTargetChange {
 }
 
 const custom = (event: BasicEvent, v2: string, v3: string) => event.customData?.[v2] ?? event.customData?.[v3];
+
+/** Whether a ring system answers to a Chroma nameFilter (its name, ignoring case). */
+export function matchesRingName(name: string | undefined, filter: string) {
+  if (name === undefined) return true;
+  const a = name.toLowerCase();
+  const b = filter.toLowerCase();
+  return a === b || a.includes(b);
+}
 const tickAt = (seconds: number) => Math.max(1, Math.ceil(seconds / FIXED_DELTA));
 const lerp = (start: number, end: number, time: number) => start + (end - start) * Math.min(Math.max(time, 0), 1);
 
@@ -177,7 +187,10 @@ export function createRingRotationSampler(
     const rotationStep = ringRotation === undefined ? config.rotationStep : numberSchema.parse(ringRotation);
     const signedRotation = clockwise ? rotation : -rotation;
     const nameFilter = custom(event, '_nameFilter', 'nameFilter');
-    if (nameFilter === undefined || !config.name.includes(stringSchema.parse(nameFilter))) {
+    // (Chroma: a named event turns only the ring system of that name — the others don't move, and
+    // don't count it either)
+    if (nameFilter !== undefined && !matchesRingName(config.name, stringSchema.parse(nameFilter))) return;
+    {
       let step = randomStep(config, event, tieIndex, random);
       let propagationSpeed = config.propagationSpeed;
       let flexySpeed = config.flexySpeed;
@@ -226,6 +239,10 @@ export function createRingRotationSampler(
 
 export function createRingPositionSampler(events: BasicEvent[], songBpm: number, config: RingPositionConfig) {
   const changes = config.initialPositions.map<TargetChange[]>(() => []);
+  events = events.filter((event) => {
+    const nameFilter = custom(event, '_nameFilter', 'nameFilter');
+    return nameFilter === undefined || matchesRingName(config.name, stringSchema.parse(nameFilter));
+  });
   events.forEach((event, index) => {
     const customStep = custom(event, '_step', 'step');
     const customSpeed = custom(event, '_speed', 'speed');

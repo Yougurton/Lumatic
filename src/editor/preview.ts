@@ -65,6 +65,11 @@ export class Preview {
     return this.view.lightLayout();
   }
 
+  /** The ring systems (big / small rings…). */
+  ringSystems() {
+    return this.view.ringSystems();
+  }
+
   get colors(): ColorScheme {
     return this.view.currentColors;
   }

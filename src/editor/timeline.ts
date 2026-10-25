@@ -254,7 +254,7 @@ export class Timeline {
     if (item === null) return null;
     const { row, top, height } = item;
     if (row.kind === 'raw') {
-      const events = this.editor.project?.raw.filter((event) => event.type === row.type) ?? [];
+      const events = this.visibleRaw(row.type);
       const found = events.find((event) => Math.abs(this.beatToX(event.beat) - x) <= 6);
       return found === undefined ? null : { raw: found, row };
     }
@@ -638,7 +638,7 @@ export class Timeline {
 
   private drawRaw(row: Extract<Row, { kind: 'raw' }>, top: number, height: number) {
     const ctx = this.context;
-    const events = this.editor.project?.raw.filter((event) => event.type === row.type) ?? [];
+    const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
     for (const event of events) {
       const x = this.beatToX(event.beat);
@@ -758,22 +758,39 @@ export class Timeline {
     tools.append(
       button(count > 0 ? `＋ Группа (${String(count)})` : '＋ Группа', 'Сгруппировать выбранные light ID (Ctrl+G). Выбирайте их в строках ламп или на мини-карте', () => void this.groupSelected(), count === 0 || editor.project === null),
     );
-    const rings = editor.ringTypes();
     tools.append(
-      button('Кольца ▾', 'Готовые группы колец', (event) => {
+      button('Шаблоны ▾', 'Готовые группы: кольца, лазеры парами, лампы по порядку', (event) => {
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-        showMenu(rect.left, rect.bottom + 2, this.ringMenu(rings));
-      }, rings.length === 0),
+        showMenu(rect.left, rect.bottom + 2, this.templateMenu());
+      }, editor.project === null),
     );
     return tools;
   }
 
-  private ringMenu(types: number[]): MenuItem[] {
+  /** The templates menu: ring groups, laser pairs, lights in order. */
+  private templateMenu(): MenuItem[] {
+    const editor = this.editor;
     const items: MenuItem[] = [];
+    const types = [...editor.lightsByType.keys()].sort((a, b) => a - b);
+    for (const type of editor.ringTypes()) {
+      items.push({ label: `Кольца — ${lightGroupName(type)}`, heading: true });
+      items.push({ label: 'По кольцам', hint: 'одно событие — одно кольцо', action: () => editor.ringPreset(type, 'rings') });
+      items.push({ label: 'По линиям', hint: 'одно событие — одна линия', action: () => editor.ringPreset(type, 'lines') });
+    }
+    if (types.includes(2) && types.includes(3)) {
+      items.push({ label: 'Левые + правые лазеры', heading: true });
+      items.push({ label: 'Парами', hint: 'ближний левый с ближним правым…', action: () => editor.laserPreset('pairs', 2, 3) });
+      items.push({ label: 'По сторонам', hint: 'левые, потом правые', action: () => editor.laserPreset('sides', 2, 3) });
+    }
+    if (types.includes(0)) {
+      items.push({ label: lightGroupName(0), heading: true });
+      items.push({ label: 'Зеркальными парами', hint: 'левая и правая половины', action: () => editor.laserPreset('pairs', 0, null) });
+      items.push({ label: 'По сторонам', action: () => editor.laserPreset('sides', 0, null) });
+    }
+    items.push({ label: 'Лампы одной группы по порядку', heading: true });
     for (const type of types) {
-      items.push({ label: lightGroupName(type), heading: true });
-      items.push({ label: 'Группа по кольцам', hint: 'одно событие — одно кольцо', action: () => this.editor.ringPreset(type, 'rings') });
-      items.push({ label: 'Группа по линиям', hint: 'одно событие — одна линия', action: () => this.editor.ringPreset(type, 'lines') });
+      items.push({ label: `${lightGroupName(type)}: слева направо`, action: () => editor.orderedPreset(type, 'x') });
+      items.push({ label: `${lightGroupName(type)}: от ближних к дальним`, action: () => editor.orderedPreset(type, 'z') });
     }
     return items;
   }
@@ -1120,7 +1137,10 @@ export class Timeline {
       const hit = this.hit(x, y);
       if (hit === null || !('clip' in hit)) return;
       const effect = this.editor.effectById(hit.clip.id);
-      if (effect !== undefined) this.editor.enterEffect(effect.id);
+      if (effect === undefined) return;
+      // (a GLS block opens its own editor; other effects are gone into)
+      if (effect.kind === 'gls' && effect.custom !== true && this.editor.glsEditorHook !== null) this.editor.glsEditorHook(effect.id);
+      else this.editor.enterEffect(effect.id);
     });
 
     window.addEventListener('mousemove', (event) => {
@@ -1271,7 +1291,14 @@ export class Timeline {
         const tool = this.editor.tool;
         if (tool.kind === 'effect') {
           const effect = this.editor.makeEffect(tool.effect, tool.params, row, a, Math.max(end, a + 1), tool.name);
-          if (effect !== null) this.editor.addEffect(effect);
+          if (effect !== null) {
+            this.editor.addEffect(effect);
+            if (effect.kind === 'gls') {
+              // (a new GLS block opens its editor; the tool goes back to plain light)
+              this.editor.tool = { kind: 'clip' };
+              this.editor.glsEditorHook?.(effect.id);
+            }
+          }
         } else {
           const clip = this.editor.newClipForRow(row, a, end);
           if (clip !== null) this.editor.addClip(clip);
@@ -1283,7 +1310,7 @@ export class Timeline {
         for (const { row, top, height } of this.layout()) {
           if (top + height < ys[0]! || top > ys[1]!) continue;
           if (row.kind === 'raw') {
-            for (const event of this.editor.project?.raw ?? []) if (event.type === row.type && event.beat >= beats[0]! && event.beat <= beats[1]!) picked.push(event.id);
+            for (const event of this.visibleRaw(row.type)) if (event.beat >= beats[0]! && event.beat <= beats[1]!) picked.push(event.id);
           } else for (const { clip, role } of this.clipsOf(row)) if (role !== 'background' && clip.end > beats[0]! && clip.start < beats[1]!) picked.push(clip.id);
         }
         this.editor.select(picked, drag.additive ? 'add' : 'replace');
@@ -1295,6 +1322,12 @@ export class Timeline {
     });
   }
 
+  /** The other events of a type shown on its row (a block's ring events only while it is gone into). */
+  private visibleRaw(type: number) {
+    const open = this.editor.openEffect;
+    return this.editor.project?.raw.filter((event) => event.type === type && (event.group === undefined || event.group === open)) ?? [];
+  }
+
   /** Where the selected effects (and their events) are now — before a drag. */
   private effectOrigins(): Map<string, EffectOrigin> {
     const out = new Map<string, EffectOrigin>();
@@ -1302,7 +1335,10 @@ export class Timeline {
       out.set(effect.id, {
         start: effect.start,
         end: effect.end,
-        children: new Map(this.editor.effectChildren(effect.id).map((clip) => [clip.id, { start: clip.start, end: clip.end }])),
+        children: new Map([
+          ...this.editor.effectChildren(effect.id).map((clip): [string, { start: number; end: number }] => [clip.id, { start: clip.start, end: clip.end }]),
+          ...this.editor.effectRaw(effect.id).map((event): [string, { start: number; end: number }] => [event.id, { start: event.beat, end: event.beat }]),
+        ]),
         target: { ...(effect.target === undefined ? {} : { target: effect.target }), type: effect.type, ids: effect.ids === null ? null : [...effect.ids] },
       });
     }
