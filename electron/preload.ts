@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   openFolder: () => ipcRenderer.invoke('open-folder'),
   openRecent: (folder: string) => ipcRenderer.invoke('open-recent', folder),
   recentFolders: () => ipcRenderer.invoke('recent-folders'),
+  createMapFolder: (suggested: string) => ipcRenderer.invoke('create-map-folder', suggested),
   listFolder: (folder: string) => ipcRenderer.invoke('list-folder', folder),
   readFile: (file: string) => ipcRenderer.invoke('read-file', file),
   writeFile: (file: string, data: ArrayBuffer | string) => ipcRenderer.invoke('write-file', file, data),

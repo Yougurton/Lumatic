@@ -1,7 +1,8 @@
 import { resolveRgb } from './bake';
-import type { Editor, Row } from './editor';
-import { clipHas, cloneClip, newId, type ClipColor, type LightClip, type RawEvent } from './model';
-import { groupHue } from './names';
+import type { Editor, Row, ShownClip, SortKey } from './editor';
+import { ask, showMenu, type MenuItem } from './menu';
+import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
+import { groupHue, lightGroupName } from './names';
 
 /**
  * The timeline: a ruler, the rows (each light group, opened up into its lights on request, and the
@@ -12,25 +13,48 @@ import { groupHue } from './names';
  *
  * Mouse: drag on an empty spot of a row to draw a clip; drag a clip to move it, its edges to
  * resize; Shift/Ctrl+drag on an empty spot selects a box; Alt+drag copies; right click deletes.
- * Wheel: through time; Shift+wheel: through the rows; Ctrl+wheel: zoom.
+ * Wheel: through time; Alt/Shift+wheel (or the wheel over the row names): through the rows;
+ * Ctrl+wheel: zoom.
+ *
+ * Row names: ▸ opens a group up; a click picks lights (Ctrl adds, Shift a range) — for grouping
+ * them (Ctrl+G) — right click: what can be done with it; the lights and subgroups of a group of the
+ * user's can be dragged into another order.
  */
 
-const RULER_H = 26;
+const RULER_H = 30;
+const SCROLLBAR_W = 9;
 const GROUP_H = 28;
 const LIGHT_H = 20;
 const RAW_H = 22;
 const SPECTRO_H = 110;
 const EDGE_PX = 6;
 
-const rowHeight = (row: Row) => (row.kind === 'group' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
+const rowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
+
+/** A colour per user group (from its name). */
+export function customHue(name: string) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) % 3600;
+  return (hash * 7) % 360;
+}
+
+const SORTS: [SortKey, string][] = [
+  ['id', 'по light ID'],
+  ['x', 'слева направо'],
+  ['y', 'снизу вверх'],
+  ['z', 'от ближних к дальним'],
+  ['angle', 'по кругу (от верха по часовой)'],
+  ['reverse', 'обратный порядок'],
+];
 const LAYER_FACTOR = [1, 0.8, 0.64, 0.52, 0.44];
 
 type Drag =
   | { kind: 'create'; row: Row; from: number; to: number }
-  | { kind: 'move'; origin: Map<string, { start: number; end: number; type: number; ids: number[] | null }>; rawOrigin: Map<string, number>; grabBeat: number; anchor: number; moved: boolean; rowIndex: number }
+  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
   | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; anchor: number }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
-  | { kind: 'seek' };
+  | { kind: 'seek' }
+  | { kind: 'scroll'; grabY: number; scrollY: number };
 
 export class Timeline {
   private readonly canvas: HTMLCanvasElement;
@@ -138,17 +162,23 @@ export class Timeline {
     return this.layout().find((item) => y >= item.top && y < item.top + item.height) ?? null;
   }
 
-  /** Clips shown on a row (lowest layer first). */
-  private clipsOf(row: Row): LightClip[] {
-    const project = this.editor.project;
-    if (project === null || row.kind === 'raw') return [];
-    return project.clips
-      .filter((clip) => clip.type === row.type && (row.kind === 'group' || clipHas(clip, row.id)))
-      .sort((a, b) => a.layer - b.layer || a.start - b.start);
+  private maxScroll() {
+    return Math.max(0, this.rowsHeight() - (this.rowsBottom - this.rowsTop) + 20);
   }
 
-  private clipRect(clip: LightClip, top: number, height: number) {
-    const factor = LAYER_FACTOR[Math.min(clip.layer, LAYER_FACTOR.length - 1)]!;
+  scrollRows(delta: number) {
+    this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.scrollY + delta));
+    this.needsDraw = true;
+  }
+
+  /** Clips shown on a row (lowest first). */
+  private clipsOf(row: Row): ShownClip[] {
+    return this.editor.rowClips(row);
+  }
+
+  private clipRect(shown: ShownClip, top: number, height: number) {
+    const clip = shown.clip;
+    const factor = LAYER_FACTOR[Math.min(shown.level, LAYER_FACTOR.length - 1)]!;
     const inner = height - 4;
     const h = Math.max(6, inner * factor);
     return { x: this.beatToX(clip.start), y: top + 2 + (inner - h), w: (clip.end - clip.start) * this.pxPerBeat, h };
@@ -167,8 +197,10 @@ export class Timeline {
     const clips = this.clipsOf(row);
     // (the top layer wins; within its height)
     for (let i = clips.length - 1; i >= 0; i--) {
-      const clip = clips[i]!;
-      const rect = this.clipRect(clip, top, height);
+      const shown = clips[i]!;
+      if (shown.role === 'background') continue;
+      const clip = shown.clip;
+      const rect = this.clipRect(shown, top, height);
       if (x < rect.x - 2 || x > rect.x + rect.w + 2 || y < rect.y || y > rect.y + rect.h) continue;
       const edge = rect.w > EDGE_PX * 3 ? (x - rect.x < EDGE_PX ? 'start' : rect.x + rect.w - x < EDGE_PX ? 'end' : null) : x > rect.x + rect.w - EDGE_PX ? 'end' : null;
       return { clip, edge, row };
@@ -205,14 +237,26 @@ export class Timeline {
     const last = Math.ceil(this.viewStart + beatsVisible);
 
     // rows
+    this.scrollY = Math.min(this.scrollY, this.maxScroll());
+    if (editor.reveal !== null) {
+      const wanted = this.layout().find((item) => item.row.key === editor.reveal);
+      editor.reveal = null;
+      if (wanted !== undefined && (wanted.top < this.rowsTop || wanted.top + wanted.height > this.rowsBottom)) {
+        this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.scrollY + wanted.top - (this.rowsTop + this.rowsBottom) / 2));
+      }
+    }
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, this.rowsTop, width, this.rowsBottom - this.rowsTop);
     ctx.clip();
     for (const { row, top, height: h } of this.layout()) {
       if (top + h < this.rowsTop || top > this.rowsBottom) continue;
-      ctx.fillStyle = row.kind === 'group' ? '#1b1d24' : row.kind === 'light' ? '#17181e' : '#191a1f';
+      ctx.fillStyle = row.kind === 'group' ? '#1b1d24' : row.kind === 'custom' ? '#1a1c26' : row.kind === 'light' ? '#17181e' : '#191a1f';
       ctx.fillRect(0, top, width, h);
+      if (row.kind === 'light' && editor.lightSelection.has(lightKey(row.type, row.id))) {
+        ctx.fillStyle = 'rgba(90,170,255,0.07)';
+        ctx.fillRect(0, top, width, h);
+      }
       if (editor.pickedLight !== null && row.kind === 'light' && row.type === editor.pickedLight.type && row.id === editor.pickedLight.id) {
         ctx.fillStyle = 'rgba(60,255,120,0.07)';
         ctx.fillRect(0, top, width, h);
@@ -226,7 +270,7 @@ export class Timeline {
     for (const { row, top, height: h } of this.layout()) {
       if (top + h < this.rowsTop || top > this.rowsBottom) continue;
       if (row.kind === 'raw') this.drawRaw(row, top, h);
-      else for (const clip of this.clipsOf(row)) this.drawClip(clip, row, top, h);
+      else for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
     }
     // the clip being drawn
     const creating = this.drag?.kind === 'create' ? this.drag : null;
@@ -234,8 +278,9 @@ export class Timeline {
       const item = this.layout().find((entry) => entry.row.key === creating.row.key);
       if (item !== undefined && item.row.kind !== 'raw') {
         const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
-        const ghost = editor.newClip(item.row.type, null, a, Math.max(b, a + Math.max(editor.snap, 0.0625)));
-        this.drawClip(ghost, item.row, item.top, item.height, true);
+        const ghost = editor.newClipForRow(item.row, a, Math.max(b, a + Math.max(editor.snap, 0.0625)));
+        const shown = this.clipsOf(item.row);
+        if (ghost !== null) this.drawClip({ clip: ghost, partial: false, level: Math.min(shown.length === 0 ? 0 : Math.max(...shown.map((entry) => entry.level)) + 1, 1), role: 'own' }, item.top, item.height, true);
       }
     }
     if (this.drag?.kind === 'box') {
@@ -246,6 +291,7 @@ export class Timeline {
       ctx.strokeRect(Math.min(x0, x1) + 0.5, Math.min(y0, y1) + 0.5, Math.abs(x1 - x0), Math.abs(y1 - y0));
     }
     ctx.restore();
+    this.drawScrollbar();
 
     // ruler
     ctx.fillStyle = '#101115';
@@ -300,11 +346,26 @@ export class Timeline {
     }
   }
 
-  private drawClip(clip: LightClip, row: Row, top: number, height: number, ghost = false) {
+  private drawScrollbar() {
+    const total = this.rowsHeight() + 20;
+    const visible = this.rowsBottom - this.rowsTop;
+    if (total <= visible) return;
     const ctx = this.context;
-    const { x, y, w, h } = this.clipRect(clip, top, height);
+    const x = this.width - SCROLLBAR_W;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(x, this.rowsTop, SCROLLBAR_W, visible);
+    const thumb = Math.max(24, (visible / total) * visible);
+    const y = this.rowsTop + (this.scrollY / this.maxScroll()) * (visible - thumb);
+    ctx.fillStyle = this.drag?.kind === 'scroll' ? '#7d8396' : '#4a4f5d';
+    ctx.fillRect(x + 2, y, SCROLLBAR_W - 4, thumb);
+  }
+
+  private drawClip(shown: ShownClip, top: number, height: number, ghost = false) {
+    const ctx = this.context;
+    const clip = shown.clip;
+    const { x, y, w, h } = this.clipRect(shown, top, height);
     if (x > this.width || x + w < 0) return;
-    const partial = row.kind === 'group' && clip.ids !== null;
+    const partial = shown.partial;
     const bpm = this.editor.songBpm;
     const gradient = ctx.createLinearGradient(x, 0, x + Math.max(1, w), 0);
     const startColor = this.colorCss(clip.color, 1);
@@ -322,7 +383,8 @@ export class Timeline {
       if (rise > 0) gradient.addColorStop(rise, startColor);
       gradient.addColorStop(1, clip.endMode === 'fade' ? this.colorCss(clip.endColor ?? clip.color, 0.08) : endColor);
     }
-    ctx.globalAlpha = ghost ? 0.6 : 1;
+    const background = shown.role === 'background';
+    ctx.globalAlpha = ghost ? 0.6 : background ? 0.28 : 1;
     ctx.fillStyle = gradient;
     ctx.fillRect(x, y, w, h);
     if (partial) {
@@ -354,13 +416,27 @@ export class Timeline {
       ctx.lineTo(x + w - 7, y + h / 2 + 4);
       ctx.fill();
     }
+    if (background) {
+      ctx.globalAlpha = 1;
+      return;
+    }
     ctx.strokeStyle = this.editor.selection.has(clip.id) ? '#ffffff' : 'rgba(0,0,0,0.55)';
     ctx.lineWidth = this.editor.selection.has(clip.id) ? 2 : 1;
     ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), h - 1);
-    if (clip.layer > 0 && w > 26 && h >= 12) {
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.font = '10px system-ui, sans-serif';
-      ctx.fillText(`L${String(clip.layer)}`, x + 5, y + h - 4);
+    if (w > 26 && h >= 12) {
+      // (the group's name where it shows on another row; the layer when it isn't the usual)
+      const target = clip.target === undefined || shown.role === 'own' ? null : findGroup(this.editor.groups, clip.target)?.group.name ?? null;
+      const label = [clip.layer >= 2 ? `L${String(clip.layer)}` : '', w > 70 && target !== null ? target : ''].filter((part) => part !== '').join(' · ');
+      if (label !== '') {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, w - 8, h);
+        ctx.clip();
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.fillText(label, x + 5, y + h - 4);
+        ctx.restore();
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -422,51 +498,22 @@ export class Timeline {
   // ----- headers -------------------------------------------------------------------------------------
 
   renderHeaders(force = false) {
-    const rows = this.editor.rows;
-    const key = rows.map((row) => row.key + (row.kind === 'group' && row.expanded ? '+' : '')).join(',') + `|${String(this.editor.pickedLight?.type)}:${String(this.editor.pickedLight?.id)}`;
+    const editor = this.editor;
+    const rows = editor.rows;
+    const key = `${rows.map((row) => row.key + (row.kind === 'group' || row.kind === 'custom' ? (row.expanded ? '+' : '-') + row.label : '')).join(',')}|${String(editor.pickedLight?.type)}:${String(editor.pickedLight?.id)}|${[...editor.lightSelection].join(',')}|${String(editor.focus)}|${String(editor.project !== null)}`;
     if (!force && key === this.headerKey) return;
     this.headerKey = key;
     const box = this.headers;
     box.replaceChildren();
-    const ruler = document.createElement('div');
-    ruler.className = 'th-ruler';
-    ruler.style.height = `${String(RULER_H)}px`;
-    ruler.textContent = 'Такты';
+    box.append(this.headerTools());
     const list = document.createElement('div');
     list.className = 'th-rows';
-    for (const row of rows) {
-      const item = document.createElement('div');
-      item.className = `th-row th-${row.kind}`;
-      item.style.height = `${String(rowHeight(row))}px`;
-      if (row.kind === 'group') {
-        const toggle = document.createElement('button');
-        toggle.className = 'th-toggle';
-        toggle.textContent = row.expanded ? '▾' : '▸';
-        toggle.title = row.expanded ? 'Свернуть' : `Раскрыть (${String(row.lights.length)} light ID)`;
-        toggle.disabled = row.lights.length === 0;
-        toggle.addEventListener('click', (event) => {
-          event.stopPropagation();
-          this.editor.toggleExpanded(row.type);
-        });
-        const swatch = document.createElement('span');
-        swatch.className = 'th-swatch';
-        swatch.style.background = `hsl(${String(groupHue(row.type))} 70% 55%)`;
-        const name = document.createElement('span');
-        name.className = 'th-name';
-        name.textContent = row.label;
-        const count = document.createElement('span');
-        count.className = 'th-count';
-        count.textContent = row.lights.length > 0 ? String(row.lights.length) : '';
-        item.append(toggle, swatch, name, count);
-      } else if (row.kind === 'light') {
-        item.textContent = row.label;
-        if (this.editor.pickedLight?.type === row.type && this.editor.pickedLight.id === row.id) item.classList.add('picked');
-        item.addEventListener('click', () => this.editor.pickLight(row.type, row.id));
-      } else {
-        item.textContent = row.label;
-      }
-      list.append(item);
-    }
+    list.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) return;
+      this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
+    }, { passive: false });
+    for (const row of rows) list.append(this.headerRow(row));
     const tail = document.createElement('div');
     tail.style.height = '400px';
     list.append(tail);
@@ -474,8 +521,263 @@ export class Timeline {
     spectro.className = 'th-spectro';
     spectro.style.height = `${String(SPECTRO_H)}px`;
     spectro.textContent = 'Спектрограмма';
-    box.append(ruler, list, spectro);
+    box.append(list, spectro);
     this.needsDraw = true;
+  }
+
+  /** Over the row names: going back out of a group, or making groups. */
+  private headerTools() {
+    const editor = this.editor;
+    const tools = document.createElement('div');
+    tools.className = 'th-ruler';
+    tools.style.height = `${String(RULER_H)}px`;
+    const button = (label: string, title: string, action: (event: MouseEvent) => void, disabled = false) => {
+      const item = document.createElement('button');
+      item.className = 'th-tool';
+      item.textContent = label;
+      item.title = title;
+      item.disabled = disabled;
+      item.addEventListener('click', action);
+      return item;
+    };
+    if (editor.focus !== null) {
+      tools.append(button('◂', 'Выйти из группы (Esc)', () => editor.enterGroup(null)));
+      const path = editor.focusPath();
+      path.forEach((group, index) => {
+        const crumb = document.createElement('button');
+        crumb.className = `th-crumb${index === path.length - 1 ? ' current' : ''}`;
+        crumb.textContent = group.name;
+        crumb.title = group.name;
+        crumb.addEventListener('click', () => editor.enterGroup(group.id));
+        if (index > 0) tools.append(Object.assign(document.createElement('span'), { className: 'th-crumb-sep', textContent: '›' }));
+        tools.append(crumb);
+      });
+      return tools;
+    }
+    const count = editor.lightSelection.size;
+    tools.append(
+      button(count > 0 ? `＋ Группа (${String(count)})` : '＋ Группа', 'Сгруппировать выбранные light ID (Ctrl+G). Выбирайте их в строках ламп или на мини-карте', () => void this.groupSelected(), count === 0 || editor.project === null),
+    );
+    const rings = editor.ringTypes();
+    tools.append(
+      button('Кольца ▾', 'Готовые группы колец', (event) => {
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        showMenu(rect.left, rect.bottom + 2, this.ringMenu(rings));
+      }, rings.length === 0),
+    );
+    return tools;
+  }
+
+  private ringMenu(types: number[]): MenuItem[] {
+    const items: MenuItem[] = [];
+    for (const type of types) {
+      items.push({ label: lightGroupName(type), heading: true });
+      items.push({ label: 'Группа по кольцам', hint: 'одно событие — одно кольцо', action: () => this.editor.ringPreset(type, 'rings') });
+      items.push({ label: 'Группа по линиям', hint: 'одно событие — одна линия', action: () => this.editor.ringPreset(type, 'lines') });
+    }
+    return items;
+  }
+
+  async groupSelected() {
+    const editor = this.editor;
+    if (editor.lightSelection.size === 0) return;
+    const name = await ask('Название группы', `Группа ${String(editor.groups.length + 1)}`);
+    if (name !== null) editor.groupSelectedLights(name);
+  }
+
+  private headerRow(row: Row) {
+    const editor = this.editor;
+    const item = document.createElement('div');
+    item.className = `th-row th-${row.kind}`;
+    item.style.height = `${String(rowHeight(row))}px`;
+    item.style.paddingLeft = `${String(8 + row.depth * 14 + (row.kind === 'light' ? 22 : 0))}px`;
+    item.dataset.key = row.key;
+    const toggle = (expanded: boolean, enabled: boolean, title: string, act: () => void) => {
+      const button = document.createElement('button');
+      button.className = 'th-toggle';
+      button.textContent = expanded ? '▾' : '▸';
+      button.title = title;
+      button.disabled = !enabled;
+      button.addEventListener('mousedown', (event) => event.stopPropagation());
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        act();
+      });
+      return button;
+    };
+    const swatch = (hue: number) => {
+      const mark = document.createElement('span');
+      mark.className = 'th-swatch';
+      mark.style.background = `hsl(${String(hue)} 70% 55%)`;
+      return mark;
+    };
+    const text = (value: string, className: string) => {
+      const span = document.createElement('span');
+      span.className = className;
+      span.textContent = value;
+      return span;
+    };
+    if (row.kind === 'group') {
+      item.append(
+        toggle(row.expanded, row.lights.length > 0, row.expanded ? 'Свернуть' : `Раскрыть (${String(row.lights.length)} light ID)`, () => editor.toggleExpanded(row.type)),
+        swatch(groupHue(row.type)),
+        text(row.label, 'th-name'),
+        text(row.lights.length > 0 ? String(row.lights.length) : '', 'th-count'),
+      );
+      item.title = 'Клик — выбрать все его лампы, ПКМ — действия';
+      item.addEventListener('click', () => editor.selectLights(editor.rowLights(row).map((light) => lightKey(light.type, light.id))));
+      item.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        showMenu(event.clientX, event.clientY, [
+          { label: row.expanded ? 'Свернуть' : 'Раскрыть light ID', action: () => editor.toggleExpanded(row.type), disabled: row.lights.length === 0 },
+          { label: 'Выбрать все лампы', action: () => editor.selectLights(row.lights.map((id) => lightKey(row.type, id))) },
+          { label: 'Группа из всех его ламп', action: () => void ask('Название группы', row.label).then((name) => name !== null && editor.addGroup(name, row.lights.map((id) => ({ kind: 'light', type: row.type, id })))) },
+          ...(editor.ringTypes().includes(row.type)
+            ? [null, { label: 'Группа по кольцам', hint: 'одно событие — одно кольцо', action: () => editor.ringPreset(row.type, 'rings') }, { label: 'Группа по линиям', hint: 'одно событие — одна линия', action: () => editor.ringPreset(row.type, 'lines') }]
+            : []),
+        ]);
+      });
+    } else if (row.kind === 'custom') {
+      const group = row.group;
+      const lights = groupLights(group);
+      const enter = document.createElement('button');
+      enter.className = 'th-enter';
+      enter.textContent = '⤵';
+      enter.title = 'Войти в группу (двойной клик)';
+      enter.addEventListener('mousedown', (event) => event.stopPropagation());
+      enter.addEventListener('click', (event) => {
+        event.stopPropagation();
+        editor.enterGroup(group.id);
+      });
+      item.append(
+        toggle(row.expanded, group.items.length > 0, row.expanded ? 'Свернуть' : 'Раскрыть', () => editor.toggleGroupExpanded(group.id)),
+        swatch(customHue(group.name)),
+        text(row.label, 'th-name'),
+        text(String(lights.length), 'th-count'),
+      );
+      if (editor.focus !== group.id) item.append(enter);
+      item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выбрать его лампы, двойной — войти, ПКМ — действия`;
+      item.addEventListener('click', () => editor.selectLights(lights.map((light) => lightKey(light.type, light.id)), 'replace', row.parent));
+      item.addEventListener('dblclick', () => editor.enterGroup(group.id));
+      item.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        this.groupMenu(event.clientX, event.clientY, row);
+      });
+    } else if (row.kind === 'light') {
+      item.textContent = row.label;
+      const key = lightKey(row.type, row.id);
+      if (editor.lightSelection.has(key)) item.classList.add('selected');
+      if (editor.pickedLight?.type === row.type && editor.pickedLight.id === row.id) item.classList.add('picked');
+      item.title = 'Клик — выбрать лампу (Ctrl — добавить, Shift — диапазон), ПКМ — действия';
+      item.addEventListener('click', (event) => {
+        if (this.headerDragged) return;
+        if (event.shiftKey && this.lastLightRow !== null) {
+          const lightRows = editor.rows.filter((other): other is Extract<Row, { kind: 'light' }> => other.kind === 'light');
+          const a = lightRows.findIndex((other) => other.key === this.lastLightRow);
+          const b = lightRows.findIndex((other) => other.key === row.key);
+          if (a >= 0 && b >= 0) {
+            const range = lightRows.slice(Math.min(a, b), Math.max(a, b) + 1).map((other) => lightKey(other.type, other.id));
+            editor.selectLights(range, 'add', row.parent);
+          }
+        } else {
+          editor.selectLights([key], event.ctrlKey || event.metaKey ? 'toggle' : 'replace', row.parent);
+          this.lastLightRow = row.key;
+        }
+        editor.pickLight(row.type, row.id);
+      });
+      item.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        if (!editor.lightSelection.has(key)) editor.selectLights([key], 'replace', row.parent);
+        const picked = editor.selectedLights();
+        const groups = editor.groups;
+        const addTo: MenuItem[] = [];
+        const walk = (list: typeof groups, depth: number) => {
+          for (const group of list) {
+            addTo.push({ label: `${'  '.repeat(depth)}${group.name}`, action: () => editor.addLightsToGroup(group.id, picked) });
+            walk(group.items.filter((child): child is (typeof groups)[number] => child.kind === 'group'), depth + 1);
+          }
+        };
+        walk(groups, 0);
+        showMenu(event.clientX, event.clientY, [
+          { label: `Сгруппировать выбранные (${String(picked.length)})`, hint: 'Ctrl+G', action: () => void this.groupSelected() },
+          ...(row.parent !== null ? [{ label: 'Убрать из группы', action: () => editor.removeLightsFromGroup(row.parent!, picked) }] : []),
+          ...(addTo.length > 0 ? [null, { label: 'Добавить в группу', heading: true }, ...addTo] : []),
+        ]);
+      });
+    } else {
+      item.textContent = row.label;
+    }
+    // the lights and subgroups of a user's group: dragged into another order
+    if ((row.kind === 'light' || row.kind === 'custom') && row.parent !== null) {
+      item.addEventListener('mousedown', (event) => {
+        if (event.button !== 0) return;
+        this.headerDrag = { row, startY: event.clientY, active: false };
+        this.headerDragged = false;
+      });
+    }
+    return item;
+  }
+
+  private headerDrag: { row: Extract<Row, { kind: 'light' | 'custom' }>; startY: number; active: boolean } | null = null;
+  private headerDragged = false;
+  private lastLightRow: string | null = null;
+
+  /** Where a dragged row would go: the gap among its siblings nearest the mouse. */
+  private headerDropTarget(clientY: number): { parent: string; from: number; to: number; y: number } | null {
+    const drag = this.headerDrag;
+    if (drag === null || drag.row.parent === null) return null;
+    const parent = findGroup(this.editor.groups, drag.row.parent)?.group;
+    if (parent === undefined) return null;
+    const indexOf = (row: Row) => parent.items.findIndex((item) => (row.kind === 'custom' ? item.kind === 'group' && item.id === row.group.id : row.kind === 'light' && item.kind === 'light' && item.type === row.type && item.id === row.id));
+    const from = indexOf(drag.row);
+    const list = this.headers.querySelector<HTMLElement>('.th-rows');
+    if (from < 0 || list === null) return null;
+    const siblings = this.editor.rows.filter((row) => (row.kind === 'light' || row.kind === 'custom') && row.parent === drag.row.parent);
+    const listRect = list.getBoundingClientRect();
+    let best: { to: number; y: number; d: number } | null = null;
+    for (const row of siblings) {
+      const element = list.querySelector<HTMLElement>(`[data-key="${CSS.escape(row.key)}"]`);
+      if (element === null) continue;
+      const rect = element.getBoundingClientRect();
+      const index = indexOf(row);
+      // (a subgroup that is opened up: its rows below it belong to it)
+      let bottom = rect.bottom;
+      if (row.kind === 'custom' && row.expanded) {
+        const at = this.editor.rows.indexOf(row);
+        for (let i = at + 1; i < this.editor.rows.length && this.editor.rows[i]!.depth > row.depth; i++) {
+          const inner = list.querySelector<HTMLElement>(`[data-key="${CSS.escape(this.editor.rows[i]!.key)}"]`);
+          if (inner !== null) bottom = inner.getBoundingClientRect().bottom;
+        }
+      }
+      for (const [edge, to] of [[rect.top, index], [bottom, index + 1]] as const) {
+        const d = Math.abs(clientY - edge);
+        if (best === null || d < best.d) best = { to, y: edge - listRect.top, d };
+      }
+    }
+    return best === null ? null : { parent: drag.row.parent, from, to: best.to, y: best.y };
+  }
+
+  private groupMenu(x: number, y: number, row: Extract<Row, { kind: 'custom' }>) {
+    const editor = this.editor;
+    const group = row.group;
+    const picked = editor.selectedLights();
+    showMenu(x, y, [
+      { label: 'Войти в группу', action: () => editor.enterGroup(group.id), disabled: editor.focus === group.id },
+      { label: 'Переименовать…', action: () => void ask('Новое название', group.name).then((name) => name !== null && editor.renameGroup(group.id, name)) },
+      { label: 'Выбрать её лампы', action: () => editor.selectLights(groupLights(group).map((light) => lightKey(light.type, light.id)), 'replace', group.id) },
+      null,
+      { label: 'Сортировать', heading: true },
+      ...SORTS.map(([key, label]) => ({ label, action: () => editor.sortGroup(group.id, key) })),
+      null,
+      { label: `Добавить выбранные лампы (${String(picked.length)})`, action: () => editor.addLightsToGroup(group.id, picked), disabled: picked.length === 0 },
+      { label: `Убрать выбранные лампы`, action: () => editor.removeLightsFromGroup(group.id, picked), disabled: picked.length === 0 },
+      { label: 'Подгруппа из выбранных', hint: 'Ctrl+G', action: () => void this.groupSelected(), disabled: picked.length === 0 },
+      null,
+      ...(row.parent !== null ? [{ label: 'Разгруппировать', hint: 'лампы — в группу выше', action: () => editor.deleteGroup(group.id, true) }] : []),
+      { label: 'Удалить группу', hint: 'события останутся на лампах', action: () => {
+        if (window.confirm(`Удалить группу «${group.name}»? Её события останутся на тех же лампах.`)) editor.deleteGroup(group.id, false);
+      } },
+    ]);
   }
 
   // ----- mouse ---------------------------------------------------------------------------------------------
@@ -494,9 +796,9 @@ export class Timeline {
         const beat = this.xToBeat(x);
         this.pxPerBeat = Math.min(800, Math.max(4, this.pxPerBeat * Math.exp(-event.deltaY * 0.0015)));
         this.viewStart = beat - x / this.pxPerBeat;
-      } else if (event.shiftKey) {
-        const max = Math.max(0, this.rowsHeight() - (this.rowsBottom - this.rowsTop) + 20);
-        this.scrollY = Math.min(max, Math.max(0, this.scrollY + event.deltaY));
+      } else if (event.altKey || event.shiftKey) {
+        // (Shift+wheel comes as a sideways wheel on some systems)
+        this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
       } else {
         this.viewStart += ((event.deltaX !== 0 ? event.deltaX : event.deltaY) / this.pxPerBeat) * 0.9;
         this.followPlayhead = false;
@@ -508,6 +810,17 @@ export class Timeline {
       if (this.editor.project === null) return;
       const { x, y } = local(event);
       const beat = this.xToBeat(x);
+      if (x >= this.width - SCROLLBAR_W && y >= this.rowsTop && y < this.rowsBottom && this.maxScroll() > 0) {
+        // the scrollbar: drag it, or a click above / below its thumb jumps there
+        const visible = this.rowsBottom - this.rowsTop;
+        const total = this.rowsHeight() + 20;
+        const thumb = Math.max(24, (visible / total) * visible);
+        const thumbTop = this.rowsTop + (this.scrollY / this.maxScroll()) * (visible - thumb);
+        if (y < thumbTop || y > thumbTop + thumb) this.scrollY = Math.min(this.maxScroll(), Math.max(0, ((y - this.rowsTop - thumb / 2) / (visible - thumb)) * this.maxScroll()));
+        this.drag = { kind: 'scroll', grabY: y, scrollY: this.scrollY };
+        this.needsDraw = true;
+        return;
+      }
       if (y < RULER_H || y >= this.rowsBottom) {
         this.drag = { kind: 'seek' };
         this.editor.seek(Math.max(0, beat));
@@ -564,18 +877,21 @@ export class Timeline {
         project.raw.push(...rawCopies);
         this.editor.selection = new Set([...copies.map((clip) => clip.id), ...rawCopies.map((event) => event.id)]);
       }
-      const origin = new Map<string, { start: number; end: number; type: number; ids: number[] | null }>();
-      for (const clip of this.editor.selectedClips()) origin.set(clip.id, { start: clip.start, end: clip.end, type: clip.type, ids: clip.ids === null ? null : [...clip.ids] });
+      const origin = new Map<string, LightClip>();
+      for (const clip of this.editor.selectedClips()) origin.set(clip.id, cloneClip(clip, { id: clip.id }));
       const rawOrigin = new Map<string, number>();
       for (const raw of this.editor.project.raw) if (this.editor.selection.has(raw.id)) rawOrigin.set(raw.id, raw.beat);
       const grabbed = 'clip' in hit ? hit.clip.start : hit.raw.beat;
-      const rowIndex = this.editor.rows.findIndex((row) => row.key === hit.row.key);
-      this.drag = { kind: 'move', origin, rawOrigin, grabBeat: beat, anchor: grabbed, moved: false, rowIndex };
+      this.drag = { kind: 'move', origin, rawOrigin, grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key };
     });
 
     window.addEventListener('mousemove', (event) => {
       const { x, y } = local(event);
       this.hover = { x, y };
+      if (this.headerDrag !== null) {
+        this.moveHeaderDrag(event.clientY);
+        return;
+      }
       const drag = this.drag;
       if (drag === null) {
         const hit = x >= 0 && x <= this.width ? this.hit(x, y) : null;
@@ -585,7 +901,11 @@ export class Timeline {
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
-      if (drag.kind === 'seek') {
+      if (drag.kind === 'scroll') {
+        const visible = this.rowsBottom - this.rowsTop;
+        const thumb = Math.max(24, (visible / (this.rowsHeight() + 20)) * visible);
+        this.scrollY = Math.min(this.maxScroll(), Math.max(0, drag.scrollY + ((y - drag.grabY) / Math.max(1, visible - thumb)) * this.maxScroll()));
+      } else if (drag.kind === 'seek') {
         this.editor.seek(Math.max(0, beat));
       } else if (drag.kind === 'create') {
         drag.to = snap(beat);
@@ -615,20 +935,21 @@ export class Timeline {
           const raw = this.editor.rawById(id);
           if (raw !== undefined) raw.beat = origin + delta;
         }
-        // one clip dragged onto another row: it goes there (a group: all of its lights; a light:
-        // that one)
+        // one clip dragged onto another row: it goes there (it lights what that row stands for);
+        // back on its own row: as it was
         if (drag.origin.size === 1 && drag.rawOrigin.size === 0) {
           const target = this.rowAt(y)?.row;
           const [[id, origin]] = [...drag.origin];
           const clip = this.editor.clipById(id!);
-          if (clip !== undefined && origin !== undefined && target !== undefined) {
-            if (target.kind === 'group') {
-              clip.type = target.type;
-              clip.ids = target.type === origin.type ? origin.ids : null;
-            } else if (target.kind === 'light') {
-              clip.type = target.type;
-              clip.ids = target.type === origin.type && origin.ids !== null && origin.ids.includes(target.id) ? origin.ids : [target.id];
-            }
+          if (clip !== undefined && origin !== undefined && target !== undefined && target.kind !== 'raw') {
+            if (target.key === drag.rowKey) {
+              clip.type = origin.type;
+              clip.ids = origin.ids === null ? null : [...origin.ids];
+              if (origin.target === undefined) delete clip.target;
+              else clip.target = origin.target;
+              if (origin.scope === undefined) delete clip.scope;
+              else clip.scope = origin.scope;
+            } else this.editor.retarget(clip, target);
           }
         }
         this.editor.changed();
@@ -636,7 +957,11 @@ export class Timeline {
       this.needsDraw = true;
     });
 
-    window.addEventListener('mouseup', () => {
+    window.addEventListener('mouseup', (event) => {
+      if (this.headerDrag !== null) {
+        this.dropHeaderDrag(event.clientY);
+        return;
+      }
       const drag = this.drag;
       this.drag = null;
       if (drag === null) return;
@@ -645,7 +970,8 @@ export class Timeline {
         if (row.kind === 'raw') return;
         const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
         const end = b - a < 1e-6 ? a + Math.max(this.editor.snap, 0.25) : b;
-        this.editor.addClip(this.editor.newClip(row.type, row.kind === 'light' ? [row.id] : null, a, end));
+        const clip = this.editor.newClipForRow(row, a, end);
+        if (clip !== null) this.editor.addClip(clip);
       } else if (drag.kind === 'box') {
         const beats = [this.xToBeat(Math.min(drag.x0, drag.x1)), this.xToBeat(Math.max(drag.x0, drag.x1))];
         const ys = [Math.min(drag.y0, drag.y1), Math.max(drag.y0, drag.y1)];
@@ -654,7 +980,7 @@ export class Timeline {
           if (top + height < ys[0]! || top > ys[1]!) continue;
           if (row.kind === 'raw') {
             for (const event of this.editor.project?.raw ?? []) if (event.type === row.type && event.beat >= beats[0]! && event.beat <= beats[1]!) picked.push(event.id);
-          } else for (const clip of this.clipsOf(row)) if (clip.end > beats[0]! && clip.start < beats[1]!) picked.push(clip.id);
+          } else for (const { clip, role } of this.clipsOf(row)) if (role !== 'background' && clip.end > beats[0]! && clip.start < beats[1]!) picked.push(clip.id);
         }
         this.editor.select(picked, drag.additive ? 'add' : 'replace');
       } else if (drag.kind === 'move' && !drag.moved) {
@@ -663,6 +989,34 @@ export class Timeline {
       }
       this.needsDraw = true;
     });
+  }
+
+  private moveHeaderDrag(clientY: number) {
+    const drag = this.headerDrag!;
+    if (!drag.active && Math.abs(clientY - drag.startY) < 5) return;
+    drag.active = true;
+    this.headerDragged = true;
+    const list = this.headers.querySelector<HTMLElement>('.th-rows');
+    if (list === null) return;
+    let marker = list.querySelector<HTMLElement>('.th-drop');
+    if (marker === null) {
+      marker = document.createElement('div');
+      marker.className = 'th-drop';
+      list.append(marker);
+    }
+    const target = this.headerDropTarget(clientY);
+    marker.style.display = target === null ? 'none' : 'block';
+    if (target !== null) marker.style.top = `${String(target.y + list.scrollTop - 1)}px`;
+  }
+
+  private dropHeaderDrag(clientY: number) {
+    const drag = this.headerDrag!;
+    const target = drag.active ? this.headerDropTarget(clientY) : null;
+    this.headerDrag = null;
+    this.headers.querySelector('.th-drop')?.remove();
+    if (target !== null) this.editor.moveGroupItem(target.parent, target.from, target.to);
+    // (the click that ends a drag doesn't pick the light)
+    window.setTimeout(() => (this.headerDragged = false), 0);
   }
 
   /** Zoom so the whole song fits. */

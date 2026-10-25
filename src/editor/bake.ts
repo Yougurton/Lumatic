@@ -1,4 +1,4 @@
-import type { ClipColor, LightClip, RawEvent, Rgb } from './model';
+import { clipLights, clipPriority, type ClipColor, type LightClip, type LightGroup, type RawEvent, type Rgb } from './model';
 
 /**
  * Clips → the plain light events the game plays (format-neutral; map-io.ts writes them in the
@@ -155,13 +155,22 @@ function sortFrames(frames: Keyframe[]) {
     .map((item) => item.frame);
 }
 
+/** A clip as the bake sees it: on one event type, with the rank it covers others by. */
+type BakeClip = LightClip & { rank: number };
+
+/** Where a clip stands among the others on a light: its layer, then what it was drawn on (see
+ *  `clipPriority`). */
+export function clipRank(clip: LightClip, groups: readonly LightGroup[]) {
+  return clip.layer * 16 + clipPriority(clip, groups);
+}
+
 /** One light's events from all the clips on it. */
-function bakeLight(clips: readonly LightClip[], scheme: SchemeColors, secondsPerBeat: number): Keyframe[] {
+function bakeLight(clips: readonly BakeClip[], scheme: SchemeColors, secondsPerBeat: number): Keyframe[] {
   const beatsPerSecond = 1 / secondsPerBeat;
-  const layers = [...new Set(clips.map((clip) => clip.layer))].sort((a, b) => a - b);
+  const layers = [...new Set(clips.map((clip) => clip.rank))].sort((a, b) => a - b);
   let base: Keyframe[] = [];
   for (const layer of layers) {
-    const onLayer = clips.filter((clip) => clip.layer === layer).sort((a, b) => a.start - b.start || a.end - b.end);
+    const onLayer = clips.filter((clip) => clip.rank === layer).sort((a, b) => a.start - b.start || a.end - b.end);
     const below = base;
     let kept = base;
     const added: Keyframe[] = [];
@@ -204,21 +213,27 @@ function valueOf(kind: Kind, color: ClipColor | null): number {
   return base + (kind === 'on' ? 0 : kind === 'flash' ? 1 : kind === 'fade' ? 2 : 3);
 }
 
-/** Every light event of the show. `lights`: each light group's light IDs (from the environment). */
+/** Every light event of the show. `lights`: each light group's light IDs (from the environment);
+ *  `groups`: the user's light groups (clips drawn on them light their lights). */
 export function bakeLights(
   clips: readonly LightClip[],
   lights: ReadonlyMap<number, readonly number[]>,
   scheme: SchemeColors,
   secondsPerBeat: number,
+  groups: readonly LightGroup[] = [],
 ): OutEvent[] {
   const out: (OutEvent & { rank: number; order: number })[] = [];
   let order = 0;
-  const byType = new Map<number, LightClip[]>();
+  const byType = new Map<number, BakeClip[]>();
   for (const clip of clips) {
     if (clip.end <= clip.start) continue;
-    const list = byType.get(clip.type) ?? [];
-    list.push(clip);
-    byType.set(clip.type, list);
+    const rank = clipRank(clip, groups);
+    for (const [type, ids] of clipLights(clip, groups)) {
+      if (ids !== null && ids.length === 0) continue;
+      const list = byType.get(type) ?? [];
+      list.push({ ...clip, type, ids, rank });
+      byType.set(type, list);
+    }
   }
   for (const [type, typeClips] of byType) {
     const known = lights.get(type) ?? [];

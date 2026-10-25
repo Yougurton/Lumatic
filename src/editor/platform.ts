@@ -24,12 +24,16 @@ interface NativeApi {
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
+  /** A new, empty folder for a new map (the user names it and picks where). */
+  createMapFolder(suggested: string): Promise<{ path: string; files: string[] } | null>;
 }
 
 declare global {
   interface Window {
     chroeditorNative?: NativeApi;
     __chroeditorTestFolder?: Record<string, string | ArrayBuffer>;
+    /** Tests: where a new map goes. */
+    __chroeditorNewFolder?: Record<string, string | ArrayBuffer>;
     showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
   }
 }
@@ -141,4 +145,25 @@ export async function openRecentFolder(path: string): Promise<MapFolder | null> 
   if (native === undefined) return null;
   const opened = await native.openRecent(path);
   return opened === null ? null : nativeFolder(native, opened);
+}
+
+/** "New map": an empty folder for it (null: cancelled). */
+export async function createMapFolder(suggested: string): Promise<MapFolder | null> {
+  const native = window.chroeditorNative;
+  if (native !== undefined) {
+    const created = await native.createMapFolder(suggested);
+    return created === null ? null : nativeFolder(native, created);
+  }
+  if (window.__chroeditorNewFolder !== undefined) return memoryFolder(suggested, window.__chroeditorNewFolder);
+  if (window.showDirectoryPicker !== undefined) {
+    try {
+      const folder = await handleFolder(await window.showDirectoryPicker({ mode: 'readwrite' }));
+      if (folder.files.some((name) => name.toLowerCase() === 'info.dat')) throw new Error('В этой папке уже есть карта (Info.dat)');
+      return folder;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Info.dat')) throw error;
+      return null;
+    }
+  }
+  return null;
 }

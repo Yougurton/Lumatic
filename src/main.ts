@@ -1,6 +1,9 @@
 import { Editor } from './editor/editor';
 import { Inspector } from './editor/inspector';
+import { encodeOgg, findBpm } from './editor/audio-tools';
 import { MiniMap } from './editor/minimap';
+import { PresetPanel } from './editor/presets';
+import { newMapDialog } from './editor/new-map';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
 import { Timeline } from './editor/timeline';
@@ -12,9 +15,10 @@ const editor = new Editor(preview);
 const timeline = new Timeline(editor, byId('timeline'));
 new Inspector(editor, byId('inspector'));
 new MiniMap(editor, byId<HTMLCanvasElement>('minimap'));
+const presets = new PresetPanel(editor, byId('presets'));
 
 // for tests and the console
-(window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview };
+(window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, audio: { findBpm, encodeOgg } };
 
 const status = byId('status');
 const timeLabel = byId('time');
@@ -84,6 +88,22 @@ async function refreshRecent() {
 void refreshRecent();
 
 byId('open').addEventListener('click', () => void openMapFolder().then(openFolder));
+byId('new-map').addEventListener('click', () => void newMap());
+
+async function newMap() {
+  if (editor.dirty && !window.confirm('Несохранённые изменения пропадут. Создать новую карту?')) return;
+  let mapper = '';
+  try {
+    mapper = localStorage.getItem('chroeditor.mapper') ?? '';
+  } catch {
+    // (only a convenience)
+  }
+  const folder = await newMapDialog(mapper);
+  if (folder === null) return;
+  editor.dirty = false;
+  await openFolder(folder);
+  editor.setStatus(`Карта создана: ${folder.name}`);
+}
 recentSelect.addEventListener('change', () => {
   const path = recentSelect.value;
   recentSelect.value = '';
@@ -119,29 +139,51 @@ async function save() {
   }
 }
 
+// (keys by their place on the keyboard — with a Russian layout Ctrl+Z is Ctrl+Я)
 window.addEventListener('keydown', (event) => {
   const target = event.target as HTMLElement;
-  if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA') return;
+  if (document.querySelector('.ce-shade') !== null) return;
+  const typing = target.tagName === 'TEXTAREA' || (target instanceof HTMLInputElement && ['text', 'number', 'search'].includes(target.type));
+  if (typing) return;
   const ctrl = event.ctrlKey || event.metaKey;
-  const key = event.key.toLowerCase();
-  if (ctrl && key === 'o') void openMapFolder().then(openFolder);
-  else if (ctrl && key === 's') void save();
-  else if (ctrl && key === 'z' && !event.shiftKey) editor.undo();
-  else if (ctrl && (key === 'y' || (key === 'z' && event.shiftKey))) editor.redo();
-  else if (ctrl && key === 'c') editor.copy();
-  else if (ctrl && key === 'x') {
+  const code = event.code;
+  if (target.tagName === 'SELECT' && !ctrl) return;
+  if (ctrl && code === 'KeyO') void openMapFolder().then(openFolder);
+  else if (ctrl && code === 'KeyN') void newMap();
+  else if (ctrl && code === 'KeyS') void save();
+  else if (ctrl && code === 'KeyZ' && !event.shiftKey) editor.undo();
+  else if (ctrl && (code === 'KeyY' || (code === 'KeyZ' && event.shiftKey))) editor.redo();
+  else if (ctrl && code === 'KeyC') editor.copy();
+  else if (ctrl && code === 'KeyX') {
     editor.copy();
     editor.deleteSelection();
-  } else if (ctrl && key === 'v') editor.paste(editor.snapBeat(editor.playhead()));
-  else if (ctrl && key === 'd') editor.duplicateSelection();
-  else if (ctrl && key === 'a') editor.selectAll();
-  else if (key === ' ') editor.togglePlay();
-  else if (key === 'delete' || key === 'backspace') editor.deleteSelection();
-  else if (key === 'escape') editor.select([]);
-  else if (key === 'arrowleft' || key === 'arrowright') editor.seek(editor.snapBeat(editor.playhead()) + (key === 'arrowleft' ? -1 : 1) * (editor.snap || 0.25));
-  else if (key === 'home') editor.seek(0);
+  } else if (ctrl && code === 'KeyV') editor.paste(editor.snapBeat(editor.playhead()));
+  else if (ctrl && code === 'KeyD') editor.duplicateSelection();
+  else if (ctrl && code === 'KeyA') editor.selectAll();
+  else if (ctrl && code === 'KeyG') void timeline.groupSelected();
+  else if (ctrl && event.shiftKey && code === 'KeyP') void presets.saveSelection();
+  else if (ctrl) return;
+  else if (code === 'Space') editor.togglePlay();
+  else if (code === 'Delete' || code === 'Backspace') editor.deleteSelection();
+  else if (code === 'Escape') {
+    if (editor.selection.size > 0) editor.select([]);
+    else if (editor.lightSelection.size > 0) editor.selectLights([]);
+    else if (editor.focus !== null) editor.enterGroup(editor.focusPath().at(-2)?.id ?? null);
+  } else if (code === 'ArrowLeft' || code === 'ArrowRight') editor.seek(editor.snapBeat(editor.playhead()) + (code === 'ArrowLeft' ? -1 : 1) * (editor.snap || 0.25));
+  else if (code === 'ArrowUp' || code === 'ArrowDown') timeline.scrollRows(code === 'ArrowUp' ? -60 : 60);
+  else if (code === 'Home') editor.seek(0);
   else return;
   event.preventDefault();
+});
+
+// (a clicked button gives the focus back: Space is play, not "press that button again")
+document.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement;
+  if (target instanceof HTMLButtonElement || (target instanceof HTMLInputElement && (target.type === 'checkbox' || target.type === 'range' || target.type === 'color'))) target.blur();
+});
+document.addEventListener('change', (event) => {
+  const target = event.target as HTMLElement;
+  if (target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && target.type === 'range')) target.blur();
 });
 
 window.addEventListener('beforeunload', (event) => {

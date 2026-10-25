@@ -2,7 +2,7 @@
   "name": "chroeditor",
   "productName": "ChroEditor",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Beat Saber lightshow editor: a timeline with layers, light ID groups and effects, previewed with ChroPaper's renderer",
   "author": "Yougurton",
   "license": "GPL-2.0-only",
@@ -25,6 +25,7 @@
     "three": "^0.185.1",
     "troika-three-text": "^0.52.4",
     "use-intl": "^4.14.9",
+    "wasm-media-encoders": "^0.7.0",
     "zod": "4.3.6"
   },
   "devDependencies": {

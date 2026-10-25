@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -68,6 +68,14 @@ function createWindow() {
       sandbox: false,
     },
   });
+  // (no menu: its accelerators — Ctrl+Z, Ctrl+R… — would take the keys from the editor; F12 still
+  // opens the developer tools)
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      window.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
   // (links open in the browser, not in the editor's window)
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -78,6 +86,7 @@ function createWindow() {
 }
 
 void app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   protocol.handle('app', (request) => {
     const url = new URL(request.url);
     const file = path.normalize(path.join(distRoot, decodeURIComponent(url.pathname)));
@@ -99,6 +108,23 @@ void app.whenReady().then(() => {
     }
   });
   ipcMain.handle('recent-folders', () => readRecent());
+  // a new map: where to put its folder (named by the user in the save dialog), made here
+  ipcMain.handle('create-map-folder', async (_event, suggested: string) => {
+    const recent = await readRecent();
+    const parent = recent[0] === undefined ? app.getPath('documents') : path.dirname(recent[0]);
+    const result = await dialog.showSaveDialog({
+      title: 'Папка новой карты',
+      buttonLabel: 'Создать',
+      defaultPath: path.join(parent, suggested),
+      properties: ['createDirectory', 'showOverwriteConfirmation'],
+    });
+    if (result.canceled || result.filePath === undefined) return null;
+    const folder = result.filePath;
+    await fs.mkdir(folder, { recursive: true });
+    const existing = await listFolder(folder);
+    if (existing.some((name) => name.toLowerCase() === 'info.dat')) throw new Error('В этой папке уже есть карта (Info.dat)');
+    return openFolder(folder);
+  });
   ipcMain.handle('list-folder', async (_event, folder: string) => {
     if (!allowed(folder)) throw new Error('not an opened folder');
     return listFolder(folder);

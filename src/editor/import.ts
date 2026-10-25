@@ -70,12 +70,17 @@ export function importEvents(
       });
       let open: { start: number; startMode: LightClip['startMode']; fadeIn: number; color: ClipColor; hsv?: boolean } | null = null;
       let offAt: number | null = null;
+      let last: (typeof perLight)[number]['clip'] | null = null;
       const close = (end: number, endMode: LightClip['endMode'], endColor: ClipColor | null, hsv = false) => {
         if (open === null) return;
         if (end > open.start + 1e-6) {
           const clip: (typeof perLight)[number]['clip'] = { start: open.start, end, startMode: open.startMode, fadeIn: open.fadeIn, endMode, color: open.color, endColor };
           if (hsv || open.hsv) clip.hsv = true;
           perLight.push({ id, clip });
+          last = clip;
+        } else if (endMode === 'off' && last !== null && Math.abs(last.end - end) < 1e-6 && last.endMode === 'stay') {
+          // (a light put out at the very moment it was handed on: the one before goes out there)
+          last.endMode = 'off';
         }
         open = null;
       };

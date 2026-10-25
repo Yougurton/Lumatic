@@ -1,5 +1,5 @@
 import type { Editor } from './editor';
-import type { ClipColor, EndMode, LightClip, Rgb, StartMode } from './model';
+import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type Rgb, type StartMode } from './model';
 
 /**
  * The panel on the right: what the selected clips do (their start, their end, colour, gradient,
@@ -101,13 +101,14 @@ export class Inspector {
       );
       const lights = document.createElement('div');
       lights.className = 'ins-note';
-      lights.textContent = clip.ids === null ? 'Все лампы группы' : `Лампы: ${clip.ids.join(', ')}`;
+      const target = clip.target === undefined ? undefined : findGroup(this.editor.groups, clip.target)?.group;
+      lights.textContent = target !== undefined ? `Группа «${target.name}» (${String(groupLights(target).length)} ламп)` : clip.ids === null ? 'Все лампы группы' : `Лампы: ${clip.ids.join(', ')}`;
       root.append(lights);
     }
     if (clips.length === 0) {
       const note = document.createElement('div');
       note.className = 'ins-note';
-      note.textContent = 'Протяните по строке таймлайна, чтобы нарисовать событие. Shift — выделение рамкой, Alt — копия при перетаскивании, ПКМ — удалить.';
+      note.textContent = 'Протяните по строке таймлайна, чтобы нарисовать событие. Shift — выделение рамкой, Alt — копия при перетаскивании, ПКМ — удалить. Колесо — по времени, Alt+колесо или колесо над названиями — по строкам, Ctrl+колесо — масштаб.';
       root.append(note);
     }
   }
@@ -198,6 +199,10 @@ export class Inspector {
     input.addEventListener('change', () => {
       const number = Number(input.value);
       if (Number.isFinite(number)) change(number);
+    });
+    // (Enter: done — the keys go back to the editor)
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === 'Escape') input.blur();
     });
     wrap.append(label, input);
     return wrap;

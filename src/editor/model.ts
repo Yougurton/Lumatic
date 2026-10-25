@@ -43,9 +43,32 @@ export interface LightClip {
   hsv?: boolean;
   /** Higher covers lower. Imported lights are layer 0, new ones 1 by default. */
   layer: number;
+  /** Lit through one of the project's light groups (its id): the group's lights, whatever they are
+   *  now; `type`/`ids` are then only where it was first drawn. */
+  target?: string;
+  /** Drawn on a single light's row: above the clips of the groups it is in (see `clipPriority`). */
+  scope?: 'light';
   /** The group (or effect) it belongs to, if any. */
   group?: string;
 }
+
+/** One light of the environment: its group (event type) and its light ID. */
+export interface LightRef {
+  kind: 'light';
+  type: number;
+  id: number;
+}
+
+/** A user's group of lights: lights and subgroups, in the order the user put them (the order waves
+ *  and other effects go through them). */
+export interface LightGroup {
+  kind: 'group';
+  id: string;
+  name: string;
+  items: GroupItem[];
+}
+
+export type GroupItem = LightRef | LightGroup;
 
 /** An event the editor shows but doesn't model yet (ring spins, zoom, laser speeds, boost…): kept
  *  as the map had it, movable and removable. */
@@ -68,6 +91,10 @@ export interface Project {
   raw: RawEvent[];
   /** Which light groups are opened up into their lights on the timeline. */
   expanded: number[];
+  /** The user's light groups (older project files have none). */
+  groups?: LightGroup[];
+  /** Which of those are opened up on the timeline. */
+  expandedGroups?: string[];
 }
 
 let counter = 0;
@@ -96,4 +123,92 @@ export function clipHas(clip: LightClip, id: number): boolean {
 export const NON_LIGHT_TYPES = new Set([5, 8, 9, 12, 13, 14, 15, 16, 17, 18, 19, 40, 41, 42, 43, 100]);
 export function isLightType(type: number) {
   return !NON_LIGHT_TYPES.has(type) && type >= 0;
+}
+
+/** Every light of a group, subgroups included, in its order (each light once). */
+export function groupLights(group: LightGroup): LightRef[] {
+  const seen = new Set<string>();
+  const out: LightRef[] = [];
+  const walk = (items: readonly GroupItem[]) => {
+    for (const item of items) {
+      if (item.kind === 'group') walk(item.items);
+      else {
+        const key = lightKey(item.type, item.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+      }
+    }
+  };
+  walk(group.items);
+  return out;
+}
+
+export const lightKey = (type: number, id: number) => `${String(type)}:${String(id)}`;
+
+/** A group by its id (anywhere in the tree), with how deep it sits (1: a top group) and its path. */
+export function findGroup(groups: readonly LightGroup[], id: string): { group: LightGroup; depth: number; path: LightGroup[] } | null {
+  const walk = (items: readonly GroupItem[], path: LightGroup[]): { group: LightGroup; depth: number; path: LightGroup[] } | null => {
+    for (const item of items) {
+      if (item.kind !== 'group') continue;
+      const here = [...path, item];
+      if (item.id === id) return { group: item, depth: here.length, path: here };
+      const found = walk(item.items, here);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  return walk(groups, []);
+}
+
+/** The group holding `item` directly (null: it is a top group). */
+export function parentOf(groups: LightGroup[], item: GroupItem): { items: GroupItem[] } | null {
+  const walk = (holder: { items: GroupItem[] }): { items: GroupItem[] } | null => {
+    for (const child of holder.items) {
+      if (child === item) return holder;
+      if (child.kind === 'group') {
+        const found = walk(child);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  };
+  return walk({ items: groups });
+}
+
+/**
+ * Which clip wins on a light when several on one layer overlap: the one drawn deeper in — on a
+ * light's own row over a subgroup's over a group's over the light group's (the event type's).
+ * Layers still come first: a clip on a higher layer covers lower ones whatever they were drawn on.
+ */
+export function clipPriority(clip: LightClip, groups: readonly LightGroup[]): number {
+  if (clip.scope === 'light') return 9;
+  if (clip.target !== undefined) return Math.min(8, findGroup(groups, clip.target)?.depth ?? 1);
+  return 0;
+}
+
+/** The lights a clip lights: per event type, its light IDs (null: all of that type's). */
+export function clipLights(clip: LightClip, groups: readonly LightGroup[]): Map<number, number[] | null> {
+  const out = new Map<number, number[] | null>();
+  if (clip.target !== undefined) {
+    const found = findGroup(groups, clip.target);
+    if (found !== null) {
+      for (const light of groupLights(found.group)) {
+        const list = out.get(light.type) ?? [];
+        list.push(light.id);
+        out.set(light.type, list);
+      }
+      return out;
+    }
+  }
+  out.set(clip.type, clip.ids);
+  return out;
+}
+
+/** Whether a clip lights light `id` of type `type` (id null: any light of that type). */
+export function clipTouches(clip: LightClip, groups: readonly LightGroup[], type: number, id: number | null): boolean {
+  const lights = clipLights(clip, groups);
+  if (!lights.has(type)) return false;
+  const ids = lights.get(type)!;
+  return id === null || ids === null || ids.includes(id);
 }
