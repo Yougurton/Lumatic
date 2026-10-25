@@ -1,3 +1,5 @@
+import type { Effect } from './effects';
+
 /**
  * The editor's own picture of a lightshow (what the project file keeps): light clips on the
  * timeline, each a rectangle from its start to its end — two (or more) events in the map, the light
@@ -48,8 +50,10 @@ export interface LightClip {
   target?: string;
   /** Drawn on a single light's row: above the clips of the groups it is in (see `clipPriority`). */
   scope?: 'light';
-  /** The group (or effect) it belongs to, if any. */
+  /** The effect it was made by (its id), if any. */
   group?: string;
+  /** Which of the effect's items it is for (-1: all of them at once). */
+  slot?: number;
 }
 
 /** One light of the environment: its group (event type) and its light ID. */
@@ -95,6 +99,8 @@ export interface Project {
   groups?: LightGroup[];
   /** Which of those are opened up on the timeline. */
   expandedGroups?: string[];
+  /** Effects (their events are clips with `group` = the effect's id). */
+  effects?: Effect[];
 }
 
 let counter = 0;

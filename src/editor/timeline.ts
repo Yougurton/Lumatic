@@ -1,5 +1,6 @@
 import { resolveRgb } from './bake';
 import type { Editor, Row, ShownClip, SortKey } from './editor';
+import type { Effect } from './effects';
 import { ask, showMenu, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { groupHue, lightGroupName } from './names';
@@ -22,14 +23,19 @@ import { groupHue, lightGroupName } from './names';
  */
 
 const RULER_H = 30;
-const SCROLLBAR_W = 9;
+/** The row scrollbar, left of the rows. */
+const GUTTER = 14;
+/** The song overview under the spectrogram. */
+const NAV_H = 26;
+/** Grips at the ends of a scrollbar's thumb (dragged: zoom). */
+const GRIP = 7;
 const GROUP_H = 28;
 const LIGHT_H = 20;
 const RAW_H = 22;
 const SPECTRO_H = 110;
 const EDGE_PX = 6;
 
-const rowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
+const baseRowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
 
 /** A colour per user group (from its name). */
 export function customHue(name: string) {
@@ -48,13 +54,23 @@ const SORTS: [SortKey, string][] = [
 ];
 const LAYER_FACTOR = [1, 0.8, 0.64, 0.52, 0.44];
 
+/** Where a dragged effect and its events were. */
+interface EffectOrigin {
+  start: number;
+  end: number;
+  children: Map<string, { start: number; end: number }>;
+  target: Pick<Effect, 'target' | 'type' | 'ids'>;
+}
+
 type Drag =
   | { kind: 'create'; row: Row; from: number; to: number }
-  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
-  | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; anchor: number }
+  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; effectOrigin: Map<string, EffectOrigin>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
+  | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; effectOrigin: Map<string, EffectOrigin>; anchor: number }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'seek' }
-  | { kind: 'scroll'; grabY: number; scrollY: number };
+  | { kind: 'scroll'; grabY: number; scrollY: number }
+  | { kind: 'rowZoom'; edge: 'top' | 'bottom'; grabY: number; thumb: number; scale: number; scrollY: number }
+  | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number };
 
 export class Timeline {
   private readonly canvas: HTMLCanvasElement;
@@ -64,6 +80,8 @@ export class Timeline {
   viewStart = -1;
   pxPerBeat = 60;
   scrollY = 0;
+  /** How tall the rows are (1: normal). */
+  rowScale = 1;
   private drag: Drag | null = null;
   private needsDraw = true;
   private hover: { x: number; y: number } | null = null;
@@ -86,7 +104,7 @@ export class Timeline {
         this.needsDraw = true;
         if (this.followPlayhead) {
           const beat = this.editor.playhead();
-          const width = this.width / this.pxPerBeat;
+          const width = this.trackWidth / this.pxPerBeat;
           if (beat > this.viewStart + width * 0.85 || beat < this.viewStart) this.viewStart = beat - width * 0.15;
         }
       }
@@ -107,12 +125,25 @@ export class Timeline {
     return this.canvas.clientHeight;
   }
 
+  /** The width time is drawn across (right of the row scrollbar). */
+  private get trackWidth() {
+    return Math.max(10, this.width - GUTTER);
+  }
+
+  private rowHeight(row: Row) {
+    return Math.round(baseRowHeight(row) * this.rowScale);
+  }
+
   private get rowsTop() {
     return RULER_H;
   }
 
   private get rowsBottom() {
-    return this.height - SPECTRO_H;
+    return this.height - SPECTRO_H - NAV_H;
+  }
+
+  private get navTop() {
+    return this.height - NAV_H;
   }
 
   redraw() {
@@ -135,18 +166,18 @@ export class Timeline {
   // ----- coordinates ---------------------------------------------------------------------------------
 
   beatToX(beat: number) {
-    return (beat - this.viewStart) * this.pxPerBeat;
+    return GUTTER + (beat - this.viewStart) * this.pxPerBeat;
   }
 
   xToBeat(x: number) {
-    return this.viewStart + x / this.pxPerBeat;
+    return this.viewStart + (x - GUTTER) / this.pxPerBeat;
   }
 
   /** Each row's top (in canvas pixels, scrolled). */
   private layout(): { row: Row; top: number; height: number }[] {
     let y = this.rowsTop - this.scrollY;
     return this.editor.rows.map((row) => {
-      const height = rowHeight(row);
+      const height = this.rowHeight(row);
       const item = { row, top: y, height };
       y += height;
       return item;
@@ -154,7 +185,7 @@ export class Timeline {
   }
 
   private rowsHeight() {
-    return this.editor.rows.reduce((sum, row) => sum + rowHeight(row), 0);
+    return this.editor.rows.reduce((sum, row) => sum + this.rowHeight(row), 0);
   }
 
   private rowAt(y: number) {
@@ -169,6 +200,39 @@ export class Timeline {
   scrollRows(delta: number) {
     this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.scrollY + delta));
     this.needsDraw = true;
+  }
+
+  /** Rows taller or shorter (the rows at `anchorY` stay where they are). */
+  zoomRows(scale: number, anchorY = this.rowsTop) {
+    const next = Math.min(3, Math.max(0.6, scale));
+    if (Math.abs(next - this.rowScale) < 1e-4) return;
+    const offset = anchorY - this.rowsTop + this.scrollY;
+    const ratio = next / this.rowScale;
+    this.rowScale = next;
+    this.scrollY = Math.min(this.maxScroll(), Math.max(0, offset * ratio - (anchorY - this.rowsTop)));
+    this.renderHeaders(true);
+    this.needsDraw = true;
+  }
+
+  /** The row scrollbar: its track and thumb (null: everything fits). */
+  private vbar() {
+    const total = this.rowsHeight() + 20;
+    const visible = this.rowsBottom - this.rowsTop;
+    const thumb = Math.min(visible, Math.max(28, (visible / total) * visible));
+    const max = this.maxScroll();
+    const thumbTop = this.rowsTop + (max <= 0 ? 0 : (this.scrollY / max) * (visible - thumb));
+    return { visible, total, thumb, thumbTop, fits: total <= visible };
+  }
+
+  /** The song overview: the beats it spans and where the view is in it. */
+  private nav() {
+    const from = -1;
+    const to = Math.max(16, this.editor.endBeat + 2);
+    const width = this.trackWidth;
+    const toX = (beat: number) => GUTTER + ((beat - from) / (to - from)) * width;
+    const toBeat = (x: number) => from + ((x - GUTTER) / width) * (to - from);
+    const viewEnd = this.viewStart + this.trackWidth / this.pxPerBeat;
+    return { from, to, toX, toBeat, x0: toX(this.viewStart), x1: toX(viewEnd) };
   }
 
   /** Clips shown on a row (lowest first). */
@@ -232,7 +296,7 @@ export class Timeline {
       ctx.fillText('Откройте папку карты (Ctrl+O)', 20, 60);
       return;
     }
-    const beatsVisible = width / this.pxPerBeat;
+    const beatsVisible = this.trackWidth / this.pxPerBeat;
     const first = Math.floor(this.viewStart);
     const last = Math.ceil(this.viewStart + beatsVisible);
 
@@ -278,9 +342,21 @@ export class Timeline {
       const item = this.layout().find((entry) => entry.row.key === creating.row.key);
       if (item !== undefined && item.row.kind !== 'raw') {
         const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
-        const ghost = editor.newClipForRow(item.row, a, Math.max(b, a + Math.max(editor.snap, 0.0625)));
+        const end = Math.max(b, a + Math.max(editor.snap, 0.0625));
         const shown = this.clipsOf(item.row);
-        if (ghost !== null) this.drawClip({ clip: ghost, partial: false, level: Math.min(shown.length === 0 ? 0 : Math.max(...shown.map((entry) => entry.level)) + 1, 1), role: 'own' }, item.top, item.height, true);
+        const level = Math.min(shown.length === 0 ? 0 : Math.max(...shown.map((entry) => entry.level)) + 1, 1);
+        const tool = editor.tool;
+        if (tool.kind === 'effect') {
+          const effect = editor.makeEffect(tool.effect, tool.params, item.row, a, end, tool.name);
+          if (effect !== null) {
+            this.ghostChildren = editor.previewEffectChildren(effect);
+            this.drawClip({ clip: editor.effectProxy(effect), effect, partial: false, level, role: 'own' }, item.top, item.height, true);
+            this.ghostChildren = null;
+          }
+        } else {
+          const ghost = editor.newClipForRow(item.row, a, end);
+          if (ghost !== null) this.drawClip({ clip: ghost, partial: false, level, role: 'own' }, item.top, item.height, true);
+        }
       }
     }
     if (this.drag?.kind === 'box') {
@@ -291,7 +367,6 @@ export class Timeline {
       ctx.strokeRect(Math.min(x0, x1) + 0.5, Math.min(y0, y1) + 0.5, Math.abs(x1 - x0), Math.abs(y1 - y0));
     }
     ctx.restore();
-    this.drawScrollbar();
 
     // ruler
     ctx.fillStyle = '#101115';
@@ -312,13 +387,18 @@ export class Timeline {
 
     // playhead
     const px = this.beatToX(editor.playhead());
-    ctx.fillStyle = '#ff4d6d';
-    ctx.fillRect(Math.round(px), 0, 1.5, height);
-    ctx.beginPath();
-    ctx.moveTo(px - 6, 0);
-    ctx.lineTo(px + 6, 0);
-    ctx.lineTo(px, 8);
-    ctx.fill();
+    if (px >= GUTTER - 6) {
+      ctx.fillStyle = '#ff4d6d';
+      ctx.fillRect(Math.round(px), 0, 1.5, this.navTop);
+      ctx.beginPath();
+      ctx.moveTo(px - 6, 0);
+      ctx.lineTo(px + 6, 0);
+      ctx.lineTo(px, 8);
+      ctx.fill();
+    }
+    // the row scrollbar (left), the song overview (bottom)
+    this.drawScrollbar();
+    this.drawNav();
     // headers follow the rows
     const list = this.headers.querySelector<HTMLElement>('.th-rows');
     if (list !== null) {
@@ -347,24 +427,75 @@ export class Timeline {
   }
 
   private drawScrollbar() {
-    const total = this.rowsHeight() + 20;
-    const visible = this.rowsBottom - this.rowsTop;
-    if (total <= visible) return;
     const ctx = this.context;
-    const x = this.width - SCROLLBAR_W;
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(x, this.rowsTop, SCROLLBAR_W, visible);
-    const thumb = Math.max(24, (visible / total) * visible);
-    const y = this.rowsTop + (this.scrollY / this.maxScroll()) * (visible - thumb);
-    ctx.fillStyle = this.drag?.kind === 'scroll' ? '#7d8396' : '#4a4f5d';
-    ctx.fillRect(x + 2, y, SCROLLBAR_W - 4, thumb);
+    ctx.fillStyle = '#121318';
+    ctx.fillRect(0, 0, GUTTER, this.navTop);
+    ctx.fillStyle = '#2a2c34';
+    ctx.fillRect(GUTTER - 1, this.rowsTop, 1, this.rowsBottom - this.rowsTop);
+    const bar = this.vbar();
+    const active = this.drag?.kind === 'scroll' || this.drag?.kind === 'rowZoom';
+    const x = 3;
+    const w = GUTTER - 7;
+    ctx.fillStyle = active ? '#6f7588' : '#454a58';
+    roundRect(ctx, x, bar.thumbTop + 1, w, bar.thumb - 2, 4);
+    // the grips: drag them to make the rows taller / shorter
+    ctx.fillStyle = active ? '#c3c8d6' : '#8a90a0';
+    roundRect(ctx, x + 1, bar.thumbTop + 2, w - 2, GRIP - 2, 3);
+    roundRect(ctx, x + 1, bar.thumbTop + bar.thumb - GRIP, w - 2, GRIP - 2, 3);
+  }
+
+  private drawNav() {
+    const ctx = this.context;
+    const top = this.navTop;
+    const width = this.width;
+    ctx.fillStyle = '#0d0e12';
+    ctx.fillRect(0, top, width, NAV_H);
+    ctx.fillStyle = '#2a2c34';
+    ctx.fillRect(0, top, width, 1);
+    if (this.editor.project === null) return;
+    const nav = this.nav();
+    // the whole song, small: its spectrogram, and where the lights are
+    const spectrogram = this.editor.spectrogram;
+    if (spectrogram !== null) {
+      const x0 = nav.toX(this.editor.secondsToBeat(0));
+      const x1 = nav.toX(this.editor.secondsToBeat(spectrogram.frames * spectrogram.secondsPerFrame));
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(spectrogram.image, 0, 0, spectrogram.frames, spectrogram.image.height, x0, top + 2, Math.max(1, x1 - x0), NAV_H - 3);
+      ctx.globalAlpha = 1;
+    }
+    // the view
+    const vx0 = Math.max(GUTTER, nav.x0);
+    const vx1 = Math.min(width, Math.max(vx0 + 6, nav.x1));
+    ctx.fillStyle = 'rgba(140,170,230,0.16)';
+    ctx.fillRect(vx0, top + 2, vx1 - vx0, NAV_H - 4);
+    ctx.strokeStyle = this.drag?.kind === 'nav' ? 'rgba(200,215,255,0.95)' : 'rgba(160,180,230,0.7)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(vx0 + 0.5, top + 2.5, vx1 - vx0 - 1, NAV_H - 5);
+    ctx.fillStyle = 'rgba(200,215,255,0.85)';
+    ctx.fillRect(vx0, top + 2, 3, NAV_H - 4);
+    ctx.fillRect(vx1 - 3, top + 2, 3, NAV_H - 4);
+    // where the cursor is: red
+    const px = nav.toX(this.editor.playhead());
+    ctx.fillStyle = '#ff3355';
+    ctx.fillRect(Math.round(px) - 1, top + 1, 2, NAV_H - 1);
+    ctx.beginPath();
+    ctx.moveTo(px - 4, top + 1);
+    ctx.lineTo(px + 4, top + 1);
+    ctx.lineTo(px, top + 6);
+    ctx.fill();
+    ctx.fillStyle = '#121318';
+    ctx.fillRect(0, top + 1, GUTTER, NAV_H - 1);
   }
 
   private drawClip(shown: ShownClip, top: number, height: number, ghost = false) {
     const ctx = this.context;
     const clip = shown.clip;
     const { x, y, w, h } = this.clipRect(shown, top, height);
-    if (x > this.width || x + w < 0) return;
+    if (x > this.width || x + w < GUTTER) return;
+    if (shown.effect !== undefined) {
+      this.drawEffect(shown, x, y, w, h, ghost);
+      return;
+    }
     const partial = shown.partial;
     const bpm = this.editor.songBpm;
     const gradient = ctx.createLinearGradient(x, 0, x + Math.max(1, w), 0);
@@ -441,6 +572,70 @@ export class Timeline {
     ctx.globalAlpha = 1;
   }
 
+  /** An effect: one block — inside it, a sketch of its events (a line per item it goes through). */
+  private drawEffect(shown: ShownClip, x: number, y: number, w: number, h: number, ghost: boolean) {
+    const ctx = this.context;
+    const effect = shown.effect!;
+    const background = shown.role === 'background';
+    ctx.save();
+    ctx.globalAlpha = ghost ? 0.6 : background ? 0.3 : 1;
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.fillStyle = '#14151b';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = this.colorCss(effect.params.color, 0.1);
+    ctx.fillRect(x, y, w, h);
+    const children = ghost ? (this.ghostChildren ?? []) : this.editor.effectChildren(effect.id);
+    const slots = Math.max(1, ...children.map((child) => (child.slot ?? 0) + 1));
+    const laneH = Math.max(1, (h - 4) / slots);
+    for (const child of children) {
+      const cx = this.beatToX(child.start);
+      const cw = Math.max(1.5, (child.end - child.start) * this.pxPerBeat);
+      if (cx > this.width || cx + cw < x) continue;
+      const slot = child.slot ?? 0;
+      const ly = slot < 0 ? y + 2 : Math.floor(y + 2 + slot * laneH);
+      const lh = slot < 0 ? h - 4 : Math.max(1.5, Math.round(laneH - (laneH > 3 ? 1 : 0)));
+      const fades = child.endMode === 'fade';
+      if (fades) {
+        const gradient = ctx.createLinearGradient(cx, 0, cx + cw, 0);
+        gradient.addColorStop(0, this.colorCss(child.color, 1));
+        gradient.addColorStop(1, this.colorCss(child.color, 0.1));
+        ctx.fillStyle = gradient;
+      } else ctx.fillStyle = this.colorCss(child.color, 1);
+      ctx.fillRect(cx, ly, cw, lh);
+    }
+    ctx.restore();
+    if (background) return;
+    ctx.globalAlpha = ghost ? 0.6 : 1;
+    const selected = this.editor.selection.has(effect.id);
+    ctx.strokeStyle = selected ? '#ffffff' : this.colorCss(effect.params.color, 0.9);
+    ctx.lineWidth = selected ? 2 : 1.2;
+    ctx.setLineDash(effect.custom === true ? [4, 3] : []);
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), h - 1);
+    ctx.setLineDash([]);
+    if (w > 40 && h >= 12) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w - 4, h);
+      ctx.clip();
+      ctx.font = '600 10px system-ui, sans-serif';
+      const label = `${effect.custom === true ? '✎ ' : '≋ '}${effect.name}`;
+      const tw = ctx.measureText(label).width;
+      // (the name sits at the bottom right, where a forward wave has already passed)
+      const lx = Math.max(x + 3, x + w - tw - 9);
+      ctx.fillStyle = 'rgba(10,11,15,0.8)';
+      ctx.fillRect(lx, y + h - 14, tw + 6, 12);
+      ctx.fillStyle = '#e8ebf2';
+      ctx.fillText(label, lx + 3, y + h - 4);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** The events of the effect being drawn (for its ghost). */
+  private ghostChildren: LightClip[] | null = null;
+
   private drawRaw(row: Extract<Row, { kind: 'raw' }>, top: number, height: number) {
     const ctx = this.context;
     const events = this.editor.project?.raw.filter((event) => event.type === row.type) ?? [];
@@ -467,7 +662,7 @@ export class Timeline {
     const spectrogram = this.editor.spectrogram;
     if (spectrogram !== null) {
       // (chunks of 8 px: each drawn with the time it covers — exact also where the BPM changes)
-      for (let x = 0; x < this.width; x += 8) {
+      for (let x = GUTTER; x < this.width; x += 8) {
         const s0 = this.editor.beatToSeconds(this.xToBeat(x));
         const s1 = this.editor.beatToSeconds(this.xToBeat(x + 8));
         const f0 = s0 / spectrogram.secondsPerFrame;
@@ -488,7 +683,7 @@ export class Timeline {
     ctx.fillRect(0, top, this.width, 1);
     // bars over it
     const first = Math.floor(this.viewStart);
-    const last = Math.ceil(this.viewStart + this.width / this.pxPerBeat);
+    const last = Math.ceil(this.viewStart + this.trackWidth / this.pxPerBeat);
     for (let beat = Math.ceil(first / 4) * 4; beat <= last; beat += 4) {
       ctx.fillStyle = 'rgba(255,255,255,0.12)';
       ctx.fillRect(this.beatToX(beat), top, 1, height);
@@ -521,7 +716,12 @@ export class Timeline {
     spectro.className = 'th-spectro';
     spectro.style.height = `${String(SPECTRO_H)}px`;
     spectro.textContent = 'Спектрограмма';
-    box.append(list, spectro);
+    const nav = document.createElement('div');
+    nav.className = 'th-nav';
+    nav.style.height = `${String(NAV_H)}px`;
+    nav.textContent = 'Вся песня';
+    nav.title = 'Обзор песни: тяните рамку, чтобы листать, её края — чтобы менять масштаб; клик — перейти туда. Красная черта — курсор';
+    box.append(list, spectro, nav);
     this.needsDraw = true;
   }
 
@@ -589,7 +789,8 @@ export class Timeline {
     const editor = this.editor;
     const item = document.createElement('div');
     item.className = `th-row th-${row.kind}`;
-    item.style.height = `${String(rowHeight(row))}px`;
+    item.style.height = `${String(this.rowHeight(row))}px`;
+    if (this.rowScale < 0.85) item.classList.add('compact');
     item.style.paddingLeft = `${String(8 + row.depth * 14 + (row.kind === 'light' ? 22 : 0))}px`;
     item.dataset.key = row.key;
     const toggle = (expanded: boolean, enabled: boolean, title: string, act: () => void) => {
@@ -791,12 +992,16 @@ export class Timeline {
     canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     canvas.addEventListener('wheel', (event) => {
       event.preventDefault();
-      const { x } = local(event);
-      if (event.ctrlKey || event.metaKey) {
+      const { x, y } = local(event);
+      if ((event.ctrlKey || event.metaKey) && event.altKey) {
+        // Ctrl+Alt+wheel: the rows taller / shorter
+        this.zoomRows(this.rowScale * Math.exp(-event.deltaY * 0.0015), Math.max(this.rowsTop, Math.min(this.rowsBottom, y)));
+      } else if (event.ctrlKey || event.metaKey) {
         const beat = this.xToBeat(x);
-        this.pxPerBeat = Math.min(800, Math.max(4, this.pxPerBeat * Math.exp(-event.deltaY * 0.0015)));
-        this.viewStart = beat - x / this.pxPerBeat;
-      } else if (event.altKey || event.shiftKey) {
+        this.pxPerBeat = Math.min(800, Math.max(0.5, this.pxPerBeat * Math.exp(-event.deltaY * 0.0015)));
+        this.viewStart = beat - (x - GUTTER) / this.pxPerBeat;
+        this.followPlayhead = false;
+      } else if (event.altKey || event.shiftKey || x < GUTTER) {
         // (Shift+wheel comes as a sideways wheel on some systems)
         this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
       } else {
@@ -810,14 +1015,36 @@ export class Timeline {
       if (this.editor.project === null) return;
       const { x, y } = local(event);
       const beat = this.xToBeat(x);
-      if (x >= this.width - SCROLLBAR_W && y >= this.rowsTop && y < this.rowsBottom && this.maxScroll() > 0) {
-        // the scrollbar: drag it, or a click above / below its thumb jumps there
-        const visible = this.rowsBottom - this.rowsTop;
-        const total = this.rowsHeight() + 20;
-        const thumb = Math.max(24, (visible / total) * visible);
-        const thumbTop = this.rowsTop + (this.scrollY / this.maxScroll()) * (visible - thumb);
-        if (y < thumbTop || y > thumbTop + thumb) this.scrollY = Math.min(this.maxScroll(), Math.max(0, ((y - this.rowsTop - thumb / 2) / (visible - thumb)) * this.maxScroll()));
-        this.drag = { kind: 'scroll', grabY: y, scrollY: this.scrollY };
+      if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
+        // the row scrollbar: its grips zoom the rows, its thumb scrolls, a click beside it jumps
+        const bar = this.vbar();
+        if (y >= bar.thumbTop && y < bar.thumbTop + GRIP) this.drag = { kind: 'rowZoom', edge: 'top', grabY: y, thumb: bar.thumb, scale: this.rowScale, scrollY: this.scrollY };
+        else if (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) this.drag = { kind: 'rowZoom', edge: 'bottom', grabY: y, thumb: bar.thumb, scale: this.rowScale, scrollY: this.scrollY };
+        else {
+          if ((y < bar.thumbTop || y > bar.thumbTop + bar.thumb) && this.maxScroll() > 0) {
+            this.scrollY = Math.min(this.maxScroll(), Math.max(0, ((y - this.rowsTop - bar.thumb / 2) / Math.max(1, bar.visible - bar.thumb)) * this.maxScroll()));
+          }
+          this.drag = { kind: 'scroll', grabY: y, scrollY: this.scrollY };
+        }
+        this.needsDraw = true;
+        return;
+      }
+      if (y >= this.navTop) {
+        // the song overview: drag the view (its ends: zoom), click elsewhere: go there
+        const nav = this.nav();
+        const x0 = Math.max(GUTTER, nav.x0);
+        const x1 = Math.max(x0 + 6, nav.x1);
+        let part: 'body' | 'left' | 'right';
+        if (Math.abs(x - x0) <= 5) part = 'left';
+        else if (Math.abs(x - x1) <= 5) part = 'right';
+        else if (x > x0 && x < x1) part = 'body';
+        else {
+          const visibleBeats = this.trackWidth / this.pxPerBeat;
+          this.viewStart = nav.toBeat(x) - visibleBeats / 2;
+          part = 'body';
+        }
+        this.followPlayhead = false;
+        this.drag = { kind: 'nav', part, grabX: x, viewStart: this.viewStart, pxPerBeat: this.pxPerBeat };
         this.needsDraw = true;
         return;
       }
@@ -828,6 +1055,8 @@ export class Timeline {
         return;
       }
       const hit = this.hit(x, y);
+      const under = this.rowAt(y);
+      if (under !== null && under.row.kind !== 'raw') this.editor.setActiveRow(under.row.key);
       if (event.button === 2) {
         // right click: delete what's under it
         if (hit !== null) {
@@ -864,7 +1093,7 @@ export class Timeline {
         const origin = new Map<string, { start: number; end: number }>();
         for (const clip of this.editor.selectedClips()) origin.set(clip.id, { start: clip.start, end: clip.end });
         this.editor.checkpoint();
-        this.drag = { kind: 'resize', edge: hit.edge, origin, anchor: hit.edge === 'start' ? hit.clip.start : hit.clip.end };
+        this.drag = { kind: 'resize', edge: hit.edge, origin, effectOrigin: this.effectOrigins(), anchor: hit.edge === 'start' ? hit.clip.start : hit.clip.end };
         return;
       }
       this.editor.checkpoint();
@@ -873,16 +1102,25 @@ export class Timeline {
         const project = this.editor.project;
         const copies = this.editor.selectedClips().map((clip) => cloneClip(clip));
         const rawCopies = project.raw.filter((event) => this.editor.selection.has(event.id)).map((event) => ({ ...event, id: newId('r') }));
+        const effectCopies = this.editor.cloneEffectsInPlace(this.editor.selectedEffects());
         project.clips.push(...copies);
         project.raw.push(...rawCopies);
-        this.editor.selection = new Set([...copies.map((clip) => clip.id), ...rawCopies.map((event) => event.id)]);
+        this.editor.selection = new Set([...copies.map((clip) => clip.id), ...rawCopies.map((event) => event.id), ...effectCopies]);
       }
       const origin = new Map<string, LightClip>();
       for (const clip of this.editor.selectedClips()) origin.set(clip.id, cloneClip(clip, { id: clip.id }));
       const rawOrigin = new Map<string, number>();
       for (const raw of this.editor.project.raw) if (this.editor.selection.has(raw.id)) rawOrigin.set(raw.id, raw.beat);
       const grabbed = 'clip' in hit ? hit.clip.start : hit.raw.beat;
-      this.drag = { kind: 'move', origin, rawOrigin, grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key };
+      this.drag = { kind: 'move', origin, rawOrigin, effectOrigin: this.effectOrigins(), grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key };
+    });
+
+    canvas.addEventListener('dblclick', (event) => {
+      const { x, y } = local(event);
+      const hit = this.hit(x, y);
+      if (hit === null || !('clip' in hit)) return;
+      const effect = this.editor.effectById(hit.clip.id);
+      if (effect !== undefined) this.editor.enterEffect(effect.id);
     });
 
     window.addEventListener('mousemove', (event) => {
@@ -894,17 +1132,49 @@ export class Timeline {
       }
       const drag = this.drag;
       if (drag === null) {
-        const hit = x >= 0 && x <= this.width ? this.hit(x, y) : null;
-        canvas.style.cursor = hit !== null && 'clip' in hit && hit.edge !== null ? 'ew-resize' : hit !== null ? 'grab' : 'default';
+        let cursor = 'default';
+        if (x >= 0 && x <= this.width && y >= 0 && y <= this.height) {
+          if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
+            const bar = this.vbar();
+            cursor = (y >= bar.thumbTop && y < bar.thumbTop + GRIP) || (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) ? 'ns-resize' : 'default';
+          } else if (y >= this.navTop) {
+            const nav = this.nav();
+            const x0 = Math.max(GUTTER, nav.x0);
+            const x1 = Math.max(x0 + 6, nav.x1);
+            cursor = Math.abs(x - x0) <= 5 || Math.abs(x - x1) <= 5 ? 'ew-resize' : x > x0 && x < x1 ? 'grab' : 'pointer';
+          } else {
+            const hit = this.hit(x, y);
+            cursor = hit !== null && 'clip' in hit && hit.edge !== null ? 'ew-resize' : hit !== null ? 'grab' : 'default';
+          }
+        }
+        canvas.style.cursor = cursor;
         return;
       }
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
-      if (drag.kind === 'scroll') {
-        const visible = this.rowsBottom - this.rowsTop;
-        const thumb = Math.max(24, (visible / (this.rowsHeight() + 20)) * visible);
-        this.scrollY = Math.min(this.maxScroll(), Math.max(0, drag.scrollY + ((y - drag.grabY) / Math.max(1, visible - thumb)) * this.maxScroll()));
+      if (drag.kind === 'rowZoom') {
+        // the thumb's length follows the grip; the rows grow or shrink to match it
+        const length = Math.max(20, drag.thumb + (drag.edge === 'bottom' ? y - drag.grabY : drag.grabY - y));
+        this.zoomRows(drag.scale * (drag.thumb / length), drag.edge === 'bottom' ? this.rowsTop : this.rowsBottom);
+      } else if (drag.kind === 'nav') {
+        const nav = this.nav();
+        const perPx = (nav.to - nav.from) / this.trackWidth;
+        const delta = (x - drag.grabX) * perPx;
+        const viewEnd = drag.viewStart + this.trackWidth / drag.pxPerBeat;
+        if (drag.part === 'body') this.viewStart = drag.viewStart + delta;
+        else if (drag.part === 'left') {
+          const start = Math.min(viewEnd - 2, drag.viewStart + delta);
+          this.pxPerBeat = Math.min(800, this.trackWidth / (viewEnd - start));
+          this.viewStart = viewEnd - this.trackWidth / this.pxPerBeat;
+        } else {
+          const end = Math.max(drag.viewStart + 2, viewEnd + delta);
+          this.pxPerBeat = Math.min(800, this.trackWidth / (end - drag.viewStart));
+          this.viewStart = drag.viewStart;
+        }
+      } else if (drag.kind === 'scroll') {
+        const bar = this.vbar();
+        this.scrollY = Math.min(this.maxScroll(), Math.max(0, drag.scrollY + ((y - drag.grabY) / Math.max(1, bar.visible - bar.thumb)) * this.maxScroll()));
       } else if (drag.kind === 'seek') {
         this.editor.seek(Math.max(0, beat));
       } else if (drag.kind === 'create') {
@@ -914,6 +1184,13 @@ export class Timeline {
         drag.y1 = y;
       } else if (drag.kind === 'resize') {
         const delta = snap(beat) - drag.anchor;
+        for (const [id, origin] of drag.effectOrigin) {
+          const effect = this.editor.effectById(id);
+          if (effect === undefined) continue;
+          const min = Math.max(this.editor.snap, 1 / 16);
+          if (drag.edge === 'start') this.editor.resizeEffect(effect, origin, Math.min(origin.end - min, origin.start + delta), origin.end);
+          else this.editor.resizeEffect(effect, origin, origin.start, Math.max(origin.start + min, origin.end + delta));
+        }
         for (const [id, origin] of drag.origin) {
           const clip = this.editor.clipById(id);
           if (clip === undefined) continue;
@@ -934,6 +1211,27 @@ export class Timeline {
         for (const [id, origin] of drag.rawOrigin) {
           const raw = this.editor.rawById(id);
           if (raw !== undefined) raw.beat = origin + delta;
+        }
+        for (const [id, origin] of drag.effectOrigin) {
+          const effect = this.editor.effectById(id);
+          if (effect !== undefined) this.editor.moveEffect(effect, origin, delta);
+        }
+        // one effect dragged onto another row: it runs over that row's lights now
+        if (drag.effectOrigin.size === 1 && drag.origin.size === 0 && drag.rawOrigin.size === 0) {
+          const target = this.rowAt(y)?.row;
+          const [[id, origin]] = [...drag.effectOrigin];
+          const effect = this.editor.effectById(id!);
+          if (effect !== undefined && origin !== undefined && target !== undefined && target.kind !== 'raw') {
+            if (target.key === drag.rowKey) {
+              if (effect.target !== origin.target.target || effect.type !== origin.target.type) {
+                delete effect.target;
+                Object.assign(effect, structuredClone(origin.target));
+                this.editor.retargetEffect(effect, target);
+              }
+            } else this.editor.retargetEffect(effect, target);
+            // (made anew: the events' starting places follow the effect)
+            origin.children = new Map(this.editor.effectChildren(effect.id).map((clip) => [clip.id, { start: clip.start - (effect.start - origin.start), end: clip.end - (effect.start - origin.start) }]));
+          }
         }
         // one clip dragged onto another row: it goes there (it lights what that row stands for);
         // back on its own row: as it was
@@ -970,8 +1268,14 @@ export class Timeline {
         if (row.kind === 'raw') return;
         const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
         const end = b - a < 1e-6 ? a + Math.max(this.editor.snap, 0.25) : b;
-        const clip = this.editor.newClipForRow(row, a, end);
-        if (clip !== null) this.editor.addClip(clip);
+        const tool = this.editor.tool;
+        if (tool.kind === 'effect') {
+          const effect = this.editor.makeEffect(tool.effect, tool.params, row, a, Math.max(end, a + 1), tool.name);
+          if (effect !== null) this.editor.addEffect(effect);
+        } else {
+          const clip = this.editor.newClipForRow(row, a, end);
+          if (clip !== null) this.editor.addClip(clip);
+        }
       } else if (drag.kind === 'box') {
         const beats = [this.xToBeat(Math.min(drag.x0, drag.x1)), this.xToBeat(Math.max(drag.x0, drag.x1))];
         const ys = [Math.min(drag.y0, drag.y1), Math.max(drag.y0, drag.y1)];
@@ -989,6 +1293,20 @@ export class Timeline {
       }
       this.needsDraw = true;
     });
+  }
+
+  /** Where the selected effects (and their events) are now — before a drag. */
+  private effectOrigins(): Map<string, EffectOrigin> {
+    const out = new Map<string, EffectOrigin>();
+    for (const effect of this.editor.selectedEffects()) {
+      out.set(effect.id, {
+        start: effect.start,
+        end: effect.end,
+        children: new Map(this.editor.effectChildren(effect.id).map((clip) => [clip.id, { start: clip.start, end: clip.end }])),
+        target: { ...(effect.target === undefined ? {} : { target: effect.target }), type: effect.type, ids: effect.ids === null ? null : [...effect.ids] },
+      });
+    }
+    return out;
   }
 
   private moveHeaderDrag(clientY: number) {
@@ -1022,7 +1340,7 @@ export class Timeline {
   /** Zoom so the whole song fits. */
   fit() {
     const end = Math.max(16, this.editor.endBeat);
-    this.pxPerBeat = Math.max(2, this.width / (end + 4));
+    this.pxPerBeat = Math.max(0.5, this.trackWidth / (end + 4));
     this.viewStart = -1;
     this.needsDraw = true;
   }
@@ -1030,11 +1348,23 @@ export class Timeline {
   zoom(factor: number) {
     const center = this.editor.playhead();
     this.pxPerBeat = Math.min(800, Math.max(2, this.pxPerBeat * factor));
-    this.viewStart = center - this.width / this.pxPerBeat / 2;
+    this.viewStart = center - this.trackWidth / this.pxPerBeat / 2;
     this.needsDraw = true;
   }
 
   hoverBeat() {
     return this.hover === null ? null : this.xToBeat(this.hover.x);
   }
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  if (w <= 0 || h <= 0) return;
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + w, y, x + w, y + h, radius);
+  ctx.arcTo(x + w, y + h, x, y + h, radius);
+  ctx.arcTo(x, y + h, x, y, radius);
+  ctx.arcTo(x, y, x + w, y, radius);
+  ctx.fill();
 }

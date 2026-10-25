@@ -108,7 +108,7 @@
         overflow: hidden;
         display: grid;
         grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: minmax(120px, 1fr) minmax(90px, 46%);
+        grid-template-rows: minmax(110px, 38%) minmax(120px, 1fr);
         border-left: 1px solid var(--line);
         background: var(--panel);
         min-height: 0;
@@ -122,10 +122,115 @@
         cursor: crosshair;
         min-height: 0;
       }
-      #presets {
+      #library {
         display: flex;
         flex-direction: column;
         min-height: 0;
+      }
+      .lib-tabs {
+        display: flex;
+        gap: 2px;
+        padding: 4px 6px 0;
+        border-bottom: 1px solid var(--line);
+        flex-shrink: 0;
+      }
+      .lib-tabs button {
+        border-radius: 5px 5px 0 0;
+        border-bottom: 0;
+        padding: 4px 10px;
+        background: none;
+        color: var(--dim);
+      }
+      .lib-tabs button.active {
+        background: var(--panel2);
+        color: #fff;
+        border-color: var(--line);
+      }
+      .lib-body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+      .lib-presets {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        flex: 1;
+      }
+      .lib-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 6px 8px 2px;
+      }
+      .lib-head button {
+        padding: 2px 8px;
+        font-size: 12px;
+      }
+      .lib-target {
+        color: var(--dim);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .lib-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        padding: 6px 8px;
+      }
+      .lib-card {
+        position: relative;
+        background: #16171d;
+        border: 1px solid #2a2c35;
+        border-radius: 6px;
+        padding: 4px;
+        cursor: pointer;
+        min-width: 0;
+      }
+      .lib-card:hover {
+        border-color: #4a5068;
+      }
+      .lib-card.armed {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px var(--accent) inset;
+      }
+      .lib-card canvas {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 200 / 64;
+        display: block;
+        border-radius: 3px;
+      }
+      .lib-name {
+        font-size: 11px;
+        margin-top: 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding-right: 18px;
+      }
+      .lib-try {
+        position: absolute;
+        right: 3px;
+        bottom: 2px;
+        padding: 0 4px;
+        font-size: 10px;
+        line-height: 15px;
+        opacity: 0;
+      }
+      .lib-card:hover .lib-try {
+        opacity: 1;
+      }
+      .lib-tip {
+        color: var(--dim);
+        font-size: 11px;
+        padding: 4px 10px 10px;
+        line-height: 1.4;
       }
       .pr-head {
         display: flex;
@@ -267,7 +372,50 @@
         margin: 6px 0 10px;
         color: var(--text);
       }
+      .ins-inside {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        background: #2a2140;
+        border: 1px solid #5b4a8a;
+        border-radius: 6px;
+        padding: 5px 8px;
+        margin-bottom: 10px;
+        color: #e4dcff;
+      }
+      .ins-inside button {
+        padding: 2px 8px;
+      }
+      .ins-warn {
+        background: #3a2e14;
+        border: 1px solid #6b5521;
+        color: #ffe2a3;
+        border-radius: 6px;
+        padding: 6px 8px;
+        margin-bottom: 10px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .ins-warn button {
+        display: block;
+        margin-top: 6px;
+      }
+      .ins-actions {
+        margin-bottom: 10px;
+      }
+      .ins-text {
+        width: 100%;
+        background: #121318;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 5px 8px;
+        font: inherit;
+        margin-bottom: 10px;
+      }
       .ins-note {
+        overflow-wrap: anywhere;
         color: var(--dim);
         font-size: 12px;
         line-height: 1.45;
@@ -343,6 +491,22 @@
         font-size: 11px;
         padding: 8px 10px;
         background: #0b0b10;
+      }
+      .th-nav {
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 11px;
+        padding: 6px 10px;
+        background: #0d0e12;
+        flex-shrink: 0;
+      }
+      .th-row.compact {
+        font-size: 11px;
+      }
+      .th-row.compact .th-toggle {
+        height: 15px;
+        width: 16px;
+        font-size: 10px;
       }
       .th-row {
         display: flex;
@@ -599,7 +763,7 @@
         <div id="preview-wrap"><canvas id="preview"></canvas></div>
         <aside id="side">
           <canvas id="minimap"></canvas>
-          <div id="presets"></div>
+          <div id="library"></div>
         </aside>
       </section>
       <div id="splitter"></div>

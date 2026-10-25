@@ -60,9 +60,21 @@ export function difficultyVersion(text: string): '2' | '3' | '4' {
   return match?.[1] === '3' ? '3' : match?.[1] === '4' ? '4' : '2';
 }
 
+/** Chroma's event keys: "_rotation" in v2 files, "rotation" in v3 ones. */
+const CHROMA_KEYS = new Set(['rotation', 'step', 'prop', 'speed', 'direction', 'nameFilter', 'counterSpin', 'reset', 'stepMult', 'propMult', 'speedMult', 'lockRotation', 'preciseSpeed', 'lightID', 'color', 'lerpType', 'easing']);
+
+function chromaKeys(data: Record<string, unknown>, v2: boolean): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    const bare = key.startsWith('_') ? key.slice(1) : key;
+    out[CHROMA_KEYS.has(bare) ? (v2 ? `_${bare}` : bare) : key] = value;
+  }
+  return out;
+}
+
 function v2Event(event: OutEvent) {
   const node: Record<string, unknown> = { _time: event.beat, _type: event.type, _value: event.value, _floatValue: event.floatValue };
-  const custom: Record<string, unknown> = { ...(event.customData ?? {}) };
+  const custom: Record<string, unknown> = chromaKeys(event.customData ?? {}, true);
   if (event.color !== undefined) custom._color = event.color;
   if (event.lightIds !== undefined) custom._lightID = event.lightIds.length === 1 ? event.lightIds[0] : event.lightIds;
   if (event.hsv === true) custom._lerpType = 'HSV';
@@ -72,7 +84,7 @@ function v2Event(event: OutEvent) {
 
 function v3Event(event: OutEvent) {
   const node: Record<string, unknown> = { b: event.beat, et: event.type, i: event.value, f: event.floatValue };
-  const custom: Record<string, unknown> = { ...(event.customData ?? {}) };
+  const custom: Record<string, unknown> = chromaKeys(event.customData ?? {}, false);
   if (event.color !== undefined) custom.color = event.color;
   if (event.lightIds !== undefined) custom.lightID = event.lightIds.length === 1 ? event.lightIds[0] : event.lightIds;
   if (event.hsv === true) custom.lerpType = 'HSV';

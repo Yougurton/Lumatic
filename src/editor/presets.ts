@@ -1,5 +1,6 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
+import type { Effect } from './effects';
 import { ask, showMenu } from './menu';
 import { clipLights, cloneClip, findGroup, newId, type LightClip, type LightGroup, type LightRef, type RawEvent } from './model';
 
@@ -22,6 +23,8 @@ export interface Preset {
   length: number;
   clips: PresetClip[];
   raw: Omit<RawEvent, 'id'>[];
+  /** Effects (their settings, the group they ran over by name, their events). */
+  effects?: { effect: Omit<Effect, 'id'>; targetName?: string; children: PresetClip[] }[];
 }
 
 const STORE = 'chroeditor.presets.v1';
@@ -49,25 +52,32 @@ export function presetFromSelection(editor: Editor, name: string): Preset | null
   if (project === null) return null;
   const clips = editor.selectedClips();
   const raw = project.raw.filter((event) => editor.selection.has(event.id));
-  if (clips.length + raw.length === 0) return null;
-  const first = Math.min(...clips.map((clip) => clip.start), ...raw.map((event) => event.beat));
-  const last = Math.max(...clips.map((clip) => clip.end), ...raw.map((event) => event.beat));
+  const effects = editor.selectedEffects();
+  if (clips.length + raw.length + effects.length === 0) return null;
+  const first = Math.min(...clips.map((clip) => clip.start), ...raw.map((event) => event.beat), ...effects.map((effect) => effect.start));
+  const last = Math.max(...clips.map((clip) => clip.end), ...raw.map((event) => event.beat), ...effects.map((effect) => effect.end));
   const groups = editor.groups;
+  const save = (clip: LightClip): PresetClip => {
+    const { id: _id, ...rest } = cloneClip(clip, { start: clip.start - first, end: clip.end - first });
+    const saved: PresetClip = rest;
+    if (clip.target !== undefined) {
+      const group = findGroup(groups, clip.target)?.group;
+      if (group !== undefined) saved.targetName = group.name;
+      saved.lights = [...clipLights(clip, groups)].flatMap(([type, ids]) => (ids ?? editor.lightsByType.get(type) ?? []).map((id): LightRef => ({ kind: 'light', type, id })));
+    }
+    return saved;
+  };
   return {
     id: newId('p'),
     name,
     length: last - first,
-    clips: clips.map((clip) => {
-      const { id: _id, ...rest } = cloneClip(clip, { start: clip.start - first, end: clip.end - first });
-      const saved: PresetClip = rest;
-      if (clip.target !== undefined) {
-        const group = findGroup(groups, clip.target)?.group;
-        if (group !== undefined) saved.targetName = group.name;
-        saved.lights = [...clipLights(clip, groups)].flatMap(([type, ids]) => (ids ?? editor.lightsByType.get(type) ?? []).map((id): LightRef => ({ kind: 'light', type, id })));
-      }
-      return saved;
-    }),
+    clips: clips.map(save),
     raw: raw.map(({ id: _id, ...event }) => ({ ...event, beat: event.beat - first })),
+    effects: effects.map((effect) => {
+      const { id: _id, ...rest } = structuredClone(effect);
+      const targetName = effect.target === undefined ? undefined : findGroup(groups, effect.target)?.group.name;
+      return { effect: { ...rest, start: effect.start - first, end: effect.end - first }, ...(targetName === undefined ? {} : { targetName }), children: editor.effectChildren(effect.id).map(save) };
+    }),
   };
 }
 
@@ -86,9 +96,11 @@ export function insertPreset(editor: Editor, preset: Preset, at: number) {
   };
   editor.checkpoint();
   const added: string[] = [];
-  for (const saved of preset.clips) {
+  const put = (saved: PresetClip, group: string | undefined) => {
     const { targetName, lights, ...clip } = saved;
     const base: LightClip = { ...structuredClone(clip), id: newId(), start: clip.start + at, end: clip.end + at };
+    if (group === undefined) delete base.group;
+    else base.group = group;
     if (base.target !== undefined && findGroup(groups, base.target) === null) {
       const same = targetName === undefined ? null : byName(targetName, groups);
       if (same !== null) base.target = same.id;
@@ -101,13 +113,30 @@ export function insertPreset(editor: Editor, preset: Preset, at: number) {
           const part: LightClip = { ...structuredClone(base), id: newId(), type, ids };
           if (ids.length === 1) part.scope = 'light';
           project.clips.push(part);
-          added.push(part.id);
+          if (group === undefined) added.push(part.id);
         }
-        continue;
+        return;
       }
     }
     project.clips.push(base);
-    added.push(base.id);
+    if (group === undefined) added.push(base.id);
+  };
+  for (const saved of preset.clips) put(saved, undefined);
+  for (const { effect, targetName, children } of preset.effects ?? []) {
+    const copy: Effect = { ...structuredClone(effect), id: newId('e'), start: effect.start + at, end: effect.end + at };
+    if (copy.target !== undefined && findGroup(groups, copy.target) === null) {
+      const same = targetName === undefined ? null : byName(targetName, groups);
+      if (same !== null) copy.target = same.id;
+      else if (copy.custom === true) {
+        // its group isn't here: its events go onto the same lights, as plain clips
+        for (const child of children) put({ ...child, group: undefined }, undefined);
+        continue;
+      } else delete copy.target;
+    }
+    editor.effects.push(copy);
+    if (copy.custom === true) for (const child of children) put(child, copy.id);
+    else for (const child of editor.previewEffectChildren(copy)) project.clips.push(child);
+    added.push(copy.id);
   }
   for (const event of preset.raw) {
     const copy: RawEvent = { ...structuredClone(event), id: newId('r'), beat: event.beat + at };
@@ -191,7 +220,8 @@ export class PresetPanel {
     name.textContent = preset.name;
     const info = document.createElement('div');
     info.className = 'pr-info';
-    info.textContent = `${formatBeats(preset.length)} · ${String(preset.clips.length + preset.raw.length)} соб.`;
+    const effects = preset.effects?.length ?? 0;
+    info.textContent = `${formatBeats(preset.length)} · ${String(preset.clips.length + preset.raw.length)} соб.${effects > 0 ? ` · ${String(effects)} эфф.` : ''}`;
     text.append(name, info);
     const insert = document.createElement('button');
     insert.textContent = 'Вставить';
@@ -238,12 +268,13 @@ export class PresetPanel {
     ctx.fillStyle = '#0e0f13';
     ctx.fillRect(0, 0, width, height);
     const rowKey = (clip: PresetClip) => clip.targetName ?? (clip.ids === null ? `t${String(clip.type)}` : `t${String(clip.type)}:${clip.ids.join(',')}`);
-    const rows = [...new Set(preset.clips.map(rowKey))];
+    const all = [...preset.clips, ...(preset.effects ?? []).flatMap((item) => item.children)];
+    const rows = [...new Set(all.map(rowKey))];
     const length = Math.max(preset.length, 0.25);
     const rowH = Math.max(3, Math.min(14, (height - 4) / Math.max(1, rows.length)));
     const colors = this.editor.preview.colors;
     const scheme = { left: [...colors.environmentLeft] as [number, number, number], right: [...colors.environmentRight] as [number, number, number], white: [...colors.environmentWhite] as [number, number, number] };
-    for (const clip of preset.clips) {
+    for (const clip of all) {
       const row = rows.indexOf(rowKey(clip));
       const x = 2 + (clip.start / length) * (width - 4);
       const w = Math.max(2, ((clip.end - clip.start) / length) * (width - 4));

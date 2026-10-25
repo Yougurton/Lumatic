@@ -2,7 +2,7 @@ import { Editor } from './editor/editor';
 import { Inspector } from './editor/inspector';
 import { encodeOgg, findBpm } from './editor/audio-tools';
 import { MiniMap } from './editor/minimap';
-import { PresetPanel } from './editor/presets';
+import { Library } from './editor/library';
 import { newMapDialog } from './editor/new-map';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
@@ -15,10 +15,11 @@ const editor = new Editor(preview);
 const timeline = new Timeline(editor, byId('timeline'));
 new Inspector(editor, byId('inspector'));
 new MiniMap(editor, byId<HTMLCanvasElement>('minimap'));
-const presets = new PresetPanel(editor, byId('presets'));
+const library = new Library(editor, byId('library'));
+const presets = library.presets;
 
 // for tests and the console
-(window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, audio: { findBpm, encodeOgg } };
+(window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, library, audio: { findBpm, encodeOgg } };
 
 const status = byId('status');
 const timeLabel = byId('time');
@@ -54,6 +55,7 @@ function refreshToolbar() {
 }
 
 function tick() {
+  editor.tickTrial();
   const seconds = editor.clock?.currentTime() ?? 0;
   timeLabel.textContent = `${formatTime(seconds)} · доля ${editor.playhead().toFixed(3)}`;
   playButton.textContent = editor.isPlaying() ? '❚❚' : '▶';
@@ -166,7 +168,13 @@ window.addEventListener('keydown', (event) => {
   else if (code === 'Space') editor.togglePlay();
   else if (code === 'Delete' || code === 'Backspace') editor.deleteSelection();
   else if (code === 'Escape') {
-    if (editor.selection.size > 0) editor.select([]);
+    if (editor.previewExtra !== null) editor.stopTrial();
+    else if (editor.tool.kind !== 'clip') {
+      editor.tool = { kind: 'clip' };
+      library.render();
+      editor.setStatus('Рисование обычного света');
+    } else if (editor.selection.size > 0 && editor.openEffect === null) editor.select([]);
+    else if (editor.openEffect !== null) editor.enterEffect(null);
     else if (editor.lightSelection.size > 0) editor.selectLights([]);
     else if (editor.focus !== null) editor.enterGroup(editor.focusPath().at(-2)?.id ?? null);
   } else if (code === 'ArrowLeft' || code === 'ArrowRight') editor.seek(editor.snapBeat(editor.playhead()) + (code === 'ArrowLeft' ? -1 : 1) * (editor.snap || 0.25));

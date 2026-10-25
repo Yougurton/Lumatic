@@ -26,6 +26,7 @@ import {
   type StartMode,
 } from './model';
 import { clipRank } from './bake';
+import { childrenSignature, defaultParams, effectItems, generateEffect, KIND_NAMES, type Effect, type EffectKind, type EffectParams } from './effects';
 import { lightGroupName, otherEventName } from './names';
 import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
@@ -49,7 +50,9 @@ export type Row =
 /** A clip as a row shows it: `partial` — it lights only some of the row's lights; `level` — how
  *  far up it sits among the clips of the row (drawn lower the higher it is). */
 export interface ShownClip {
+  /** For an effect: a stand-in clip (its id, place and colours). */
   clip: LightClip;
+  effect?: Effect;
   partial: boolean;
   level: number;
   /** 'own': drawn on this row; 'inner': drawn on a group or light inside it (above it, shown
@@ -94,6 +97,14 @@ export class Editor {
   reveal: string | null = null;
   /** Grows with every change (the rows' clip lists are kept until it does). */
   version = 0;
+  /** The effect gone into: its events shown and editable (null: none). */
+  openEffect: string | null = null;
+  /** What drawing on a row makes: a clip (the brush), or an effect from the library. */
+  tool: { kind: 'clip' } | { kind: 'effect'; name: string; effect: EffectKind; params: Partial<EffectParams> } = { kind: 'clip' };
+  /** The row effects and ring forms from the library go onto (its key). */
+  activeRow: string | null = null;
+  /** Something tried out in the 3D view only (not in the show): played over and over. */
+  previewExtra: { clips: LightClip[]; raw: RawEvent[]; start: number; end: number } | null = null;
   private rowCache = new Map<string, { version: number; clips: ShownClip[] }>();
   snap = 0.25;
   brush: Brush = {
@@ -115,7 +126,7 @@ export class Editor {
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
-  private clipboard: { clips: LightClip[]; raw: RawEvent[] } | null = null;
+  private clipboard: { clips: LightClip[]; raw: RawEvent[]; effects: { effect: Effect; children: LightClip[] }[] } | null = null;
   private rebuildTimer: number | null = null;
   private toSong: (jsonTime: number) => number = (beat) => beat;
 
@@ -225,15 +236,18 @@ export class Editor {
     for (const list of this.lightsByType.values()) list.sort((a, b) => a - b);
     const file = difficultyFile(row);
     const saved = await loadProject(map.folder, file);
-    if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [] };
+    if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [], effects: saved.effects ?? [] };
     else {
       const lastBeat = Math.max(0, ...difficulty.events.map((event) => event.jsonTime), ...difficulty.notes.map((note) => note.jsonTime));
       const { clips, raw } = importEvents(difficulty.events, this.lightsByType, lastBeat + 8, this.songBpm / 60);
-      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [] };
+      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [] };
     }
     this.selection.clear();
     this.lightSelection.clear();
     this.focus = null;
+    this.openEffect = null;
+    this.previewExtra = null;
+    this.activeRow = null;
     this.undoStack = [];
     this.redoStack = [];
     this.dirty = false;
@@ -291,6 +305,16 @@ export class Editor {
     const colors = this.preview.colors;
     const scheme: SchemeColors = { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] };
     return [...bakeLights(project.clips, this.lightsByType, scheme, 60 / this.songBpm, this.groups), ...rawEvents(project.raw)].sort((a, b) => a.beat - b.beat);
+  }
+
+  /** What the 3D view shows: the show, and whatever is being tried out. */
+  bakeForPreview(): OutEvent[] {
+    const project = this.project;
+    const extra = this.previewExtra;
+    if (project === null || extra === null) return this.bake();
+    const colors = this.preview.colors;
+    const scheme: SchemeColors = { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] };
+    return [...bakeLights([...project.clips, ...extra.clips], this.lightsByType, scheme, 60 / this.songBpm, this.groups), ...rawEvents([...project.raw, ...extra.raw])].sort((a, b) => a.beat - b.beat);
   }
 
   async save() {
@@ -412,12 +436,22 @@ export class Editor {
     const cached = this.rowCache.get(row.key);
     if (cached !== undefined && cached.version === this.version) return cached.clips;
     const groups = this.groups;
-    const found: { clip: LightClip; partial: boolean; rank: number; role: ShownClip['role'] }[] = [];
+    const found: { clip: LightClip; partial: boolean; rank: number; role: ShownClip['role']; effect?: Effect }[] = [];
     const rowPriority = row.kind === 'group' ? 0 : row.kind === 'light' ? 9 : Math.min(8, findGroup(groups, row.group.id)?.depth ?? 1);
     const members = row.kind === 'custom' ? groupLights(row.group) : [];
     const memberIds = new Map<number, number[]>();
     for (const light of members) memberIds.set(light.type, [...(memberIds.get(light.type) ?? []), light.id]);
-    for (const clip of project.clips) {
+    const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
+    const proxies = new Map<string, Effect>();
+    const candidates: LightClip[] = [];
+    for (const clip of project.clips) if (clip.group === undefined || !hidden.has(clip.group)) candidates.push(clip);
+    for (const effect of this.effects) {
+      if (effect.id === this.openEffect) continue;
+      const proxy = this.effectProxy(effect);
+      proxies.set(proxy.id, effect);
+      candidates.push(proxy);
+    }
+    for (const clip of candidates) {
       const lights = clipLights(clip, groups);
       let touched = false;
       let partial = false;
@@ -446,12 +480,12 @@ export class Editor {
       if (row.kind === 'group') role = priority === 0 ? 'own' : 'inner';
       else if (row.kind === 'light') role = clip.scope === 'light' || (clip.target === undefined && clip.ids !== null) ? 'own' : 'background';
       else role = clip.target === row.group.id ? 'own' : priority > rowPriority ? 'inner' : 'background';
-      found.push({ clip, partial, rank: clipRank(clip, groups), role });
+      found.push({ clip, partial, rank: clipRank(clip, groups), role, effect: proxies.get(clip.id) });
     }
     const ranks = [...new Set(found.map((item) => item.rank))].sort((a, b) => a - b);
     const clips = found
       .sort((a, b) => a.rank - b.rank || a.clip.start - b.clip.start)
-      .map((item) => ({ clip: item.clip, partial: item.partial, level: ranks.indexOf(item.rank), role: item.role }));
+      .map((item) => ({ clip: item.clip, partial: item.partial, level: ranks.indexOf(item.rank), role: item.role, ...(item.effect === undefined ? {} : { effect: item.effect }) }));
     this.rowCache.set(row.key, { version: this.version, clips });
     return clips;
   }
@@ -717,7 +751,7 @@ export class Editor {
 
   private snapshot() {
     const project = this.project;
-    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [] });
+    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [] });
   }
 
   /** Call before a change (one undo step). */
@@ -731,6 +765,8 @@ export class Editor {
   changed(rebuildNow = false) {
     this.version++;
     this.dirty = true;
+    this.previewExtra = null;
+    this.noteHandEdits();
     this.rebuildPreview(rebuildNow);
     this.emit('clips');
   }
@@ -757,12 +793,14 @@ export class Editor {
   private restore(state: string) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[] };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[] };
     project.clips = data.clips;
     project.raw = data.raw;
+    project.effects = data.effects ?? [];
+    if (this.openEffect !== null && !project.effects.some((effect) => effect.id === this.openEffect)) this.openEffect = null;
     const groupsChanged = JSON.stringify(project.groups ?? []) !== JSON.stringify(data.groups);
     project.groups = data.groups;
-    const ids = new Set([...data.clips.map((clip) => clip.id), ...data.raw.map((event) => event.id)]);
+    const ids = new Set([...data.clips.map((clip) => clip.id), ...data.raw.map((event) => event.id), ...project.effects.map((effect) => effect.id)]);
     for (const id of [...this.selection]) if (!ids.has(id)) this.selection.delete(id);
     if (groupsChanged) {
       this.buildRows();
@@ -791,6 +829,17 @@ export class Editor {
 
   /** A new clip (the brush's) on a row of the timeline: lighting what the row stands for. */
   newClipForRow(row: Row, start: number, end: number): LightClip | null {
+    const clip = this.plainClipForRow(row, start, end);
+    // (drawn inside an effect that is gone into: it becomes one of its events)
+    const open = this.openEffect === null ? undefined : this.effectById(this.openEffect);
+    if (clip !== null && open !== undefined) {
+      clip.group = open.id;
+      clip.layer = open.layer;
+    }
+    return clip;
+  }
+
+  private plainClipForRow(row: Row, start: number, end: number): LightClip | null {
     if (row.kind === 'raw') return null;
     if (row.kind === 'group') return this.newClip(row.type, null, start, end);
     if (row.kind === 'light') return { ...this.newClip(row.type, [row.id], start, end), scope: 'light' };
@@ -860,7 +909,10 @@ export class Editor {
     const project = this.project;
     if (project === null || this.selection.size === 0) return;
     this.checkpoint();
-    project.clips = project.clips.filter((clip) => !this.selection.has(clip.id));
+    const effects = new Set(this.effects.filter((effect) => this.selection.has(effect.id)).map((effect) => effect.id));
+    project.effects = this.effects.filter((effect) => !effects.has(effect.id));
+    if (this.openEffect !== null && effects.has(this.openEffect)) this.openEffect = null;
+    project.clips = project.clips.filter((clip) => !this.selection.has(clip.id) && (clip.group === undefined || !effects.has(clip.group)));
     project.raw = project.raw.filter((event) => !this.selection.has(event.id));
     this.selection.clear();
     this.changed();
@@ -869,7 +921,8 @@ export class Editor {
   selectAll() {
     const project = this.project;
     if (project === null) return;
-    this.select([...project.clips.map((clip) => clip.id), ...project.raw.map((event) => event.id)]);
+    const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
+    this.select([...project.clips.filter((clip) => clip.group === undefined || !hidden.has(clip.group)).map((clip) => clip.id), ...project.raw.map((event) => event.id), ...this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id)]);
   }
 
   copy() {
@@ -877,7 +930,8 @@ export class Editor {
     if (project === null) return;
     const clips = this.selectedClips().map((clip) => cloneClip(clip, { id: clip.id }));
     const raw = project.raw.filter((event) => this.selection.has(event.id)).map((event) => ({ ...event }));
-    if (clips.length + raw.length > 0) this.clipboard = { clips, raw };
+    const effects = this.selectedEffects().map((effect) => ({ effect: structuredClone(effect), children: this.effectChildren(effect.id).map((clip) => cloneClip(clip, { id: clip.id })) }));
+    if (clips.length + raw.length + effects.length > 0) this.clipboard = { clips, raw, effects };
   }
 
   /** Pastes at `at` (the first copied thing lands there). */
@@ -885,7 +939,7 @@ export class Editor {
     const project = this.project;
     const board = this.clipboard;
     if (project === null || board === null) return;
-    const first = Math.min(...board.clips.map((clip) => clip.start), ...board.raw.map((event) => event.beat));
+    const first = Math.min(...board.clips.map((clip) => clip.start), ...board.raw.map((event) => event.beat), ...board.effects.map((item) => item.effect.start));
     const shift = at - first;
     this.checkpoint();
     const pasted: string[] = [];
@@ -899,17 +953,293 @@ export class Editor {
       project.raw.push(copy);
       pasted.push(copy.id);
     }
+    for (const { effect, children } of board.effects) {
+      const copy: Effect = { ...structuredClone(effect), id: newId('e'), start: effect.start + shift, end: effect.end + shift };
+      this.effects.push(copy);
+      for (const child of children) project.clips.push(cloneClip(child, { start: child.start + shift, end: child.end + shift, group: copy.id }));
+      pasted.push(copy.id);
+    }
     this.selection = new Set(pasted);
     this.changed();
   }
 
   duplicateSelection() {
-    const clips = this.selectedClips();
-    if (clips.length === 0) return;
-    const start = Math.min(...clips.map((clip) => clip.start));
-    const end = Math.max(...clips.map((clip) => clip.end));
+    const spans = [...this.selectedClips(), ...this.selectedEffects()];
+    if (spans.length === 0) return;
+    const start = Math.min(...spans.map((clip) => clip.start));
+    const end = Math.max(...spans.map((clip) => clip.end));
     this.copy();
     this.paste(start + (end - start));
+  }
+
+  // ----- effects -------------------------------------------------------------------------------------
+
+  get effects(): Effect[] {
+    const project = this.project;
+    if (project === null) return [];
+    project.effects ??= [];
+    return project.effects;
+  }
+
+  effectById(id: string) {
+    return this.effects.find((effect) => effect.id === id);
+  }
+
+  effectChildren(id: string) {
+    return this.project?.clips.filter((clip) => clip.group === id) ?? [];
+  }
+
+  selectedEffects(): Effect[] {
+    return this.effects.filter((effect) => this.selection.has(effect.id));
+  }
+
+  scheme(): SchemeColors {
+    const colors = this.preview.colors;
+    return { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] };
+  }
+
+  effectItemsOf(effect: Pick<Effect, 'target' | 'type' | 'ids'>) {
+    return effectItems(effect, this.lightsByType, (id) => findGroup(this.groups, id)?.group ?? null);
+  }
+
+  /** The effect's events made anew from its settings (not for one changed by hand). */
+  private regenerate(effect: Effect) {
+    const project = this.project;
+    if (project === null || effect.custom === true) return;
+    project.clips = project.clips.filter((clip) => clip.group !== effect.id);
+    project.clips.push(...generateEffect(effect, this.effectItemsOf(effect), this.scheme()));
+  }
+
+  /** The row an effect would go on → what it runs over (null: not a light row). */
+  private targetOfRow(row: Row): Pick<Effect, 'target' | 'type' | 'ids'> | null {
+    if (row.kind === 'raw') return null;
+    if (row.kind === 'group') return { type: row.type, ids: null };
+    if (row.kind === 'light') return { type: row.type, ids: [row.id] };
+    return { target: row.group.id, type: groupLights(row.group)[0]?.type ?? 0, ids: null };
+  }
+
+  /** An effect (not yet in the show) on a row, from `start` to `end`. */
+  makeEffect(kind: EffectKind, params: Partial<EffectParams>, row: Row, start: number, end: number, name = KIND_NAMES[kind]): Effect | null {
+    const target = this.targetOfRow(row);
+    if (target === null) return null;
+    return {
+      id: newId('e'),
+      name,
+      kind,
+      ...target,
+      start,
+      end: Math.max(end, start + 0.25),
+      layer: this.brush.layer,
+      params: { ...defaultParams(this.brush.color), ...structuredClone(params) },
+    };
+  }
+
+  /** The events an effect would make (not put anywhere). */
+  previewEffectChildren(effect: Effect): LightClip[] {
+    return generateEffect(effect, this.effectItemsOf(effect), this.scheme());
+  }
+
+  addEffect(effect: Effect) {
+    if (this.project === null) return;
+    this.checkpoint();
+    this.effects.push(effect);
+    this.regenerate(effect);
+    this.selection = new Set([effect.id]);
+    this.changed();
+  }
+
+  /** A stand-in clip for drawing an effect on the rows (and picking it there). */
+  effectProxy(effect: Effect): LightClip {
+    const p = effect.params;
+    return {
+      id: effect.id,
+      type: effect.type,
+      ids: effect.ids === null ? null : [...effect.ids],
+      ...(effect.target === undefined ? {} : { target: effect.target }),
+      ...(effect.ids !== null && effect.ids.length === 1 && effect.target === undefined ? { scope: 'light' as const } : {}),
+      start: effect.start,
+      end: effect.end,
+      startMode: 'on',
+      fadeIn: 0.5,
+      endMode: 'stay',
+      color: p.color,
+      endColor: p.color2,
+      layer: effect.layer,
+    };
+  }
+
+  /** Changes the selected effects (one undo step) and makes their events anew. */
+  updateEffects(patch: (effect: Effect) => void) {
+    const effects = this.selectedEffects();
+    if (effects.length === 0) return;
+    this.checkpoint();
+    for (const effect of effects) {
+      patch(effect);
+      this.regenerate(effect);
+    }
+    this.changed();
+  }
+
+  /** Dragging an effect: from where it was (`origin`) by `delta` beats, its events with it. */
+  moveEffect(effect: Effect, origin: { start: number; end: number; children: Map<string, { start: number; end: number }> }, delta: number) {
+    effect.start = origin.start + delta;
+    effect.end = origin.end + delta;
+    for (const clip of this.effectChildren(effect.id)) {
+      const from = origin.children.get(clip.id);
+      if (from === undefined) continue;
+      clip.start = from.start + delta;
+      clip.end = from.end + delta;
+    }
+  }
+
+  /** Stretching an effect: made anew for its new length — or, changed by hand, its events
+   *  stretched along. */
+  resizeEffect(effect: Effect, origin: { start: number; end: number; children: Map<string, { start: number; end: number }> }, start: number, end: number) {
+    effect.start = start;
+    effect.end = Math.max(start + 1 / 16, end);
+    if (effect.custom === true) {
+      const scale = (effect.end - effect.start) / Math.max(1e-6, origin.end - origin.start);
+      for (const clip of this.effectChildren(effect.id)) {
+        const from = origin.children.get(clip.id);
+        if (from === undefined) continue;
+        clip.start = effect.start + (from.start - origin.start) * scale;
+        clip.end = effect.start + (from.end - origin.start) * scale;
+      }
+    } else this.regenerate(effect);
+  }
+
+  /** An effect dragged onto another row: it runs over that now. */
+  retargetEffect(effect: Effect, row: Row) {
+    if (effect.custom === true) return;
+    const target = this.targetOfRow(row);
+    if (target === null) return;
+    delete effect.target;
+    Object.assign(effect, target);
+    this.regenerate(effect);
+  }
+
+  /** Into an effect: its events shown on the rows (and its group gone into). Null: back out. */
+  enterEffect(id: string | null) {
+    const effect = id === null ? undefined : this.effectById(id);
+    this.openEffect = effect?.id ?? null;
+    if (effect !== undefined) {
+      if (effect.target !== undefined) {
+        this.focus = effect.target;
+        this.buildRows();
+      } else if (this.project !== null && !this.project.expanded.includes(effect.type)) {
+        this.project.expanded.push(effect.type);
+        this.buildRows();
+      }
+      this.selection = new Set(this.effectChildren(effect.id).map((clip) => clip.id));
+    } else this.selection.clear();
+    this.version++;
+    this.emit('rows');
+    this.emit('selection');
+  }
+
+  /** Back to what its settings make (hand changes dropped). */
+  resetEffect(id: string) {
+    const effect = this.effectById(id);
+    if (effect === undefined) return;
+    this.checkpoint();
+    effect.custom = false;
+    this.regenerate(effect);
+    this.changed();
+  }
+
+  /** Copies of effects (and their events) right where they are — no undo step of its own (Alt+drag). */
+  cloneEffectsInPlace(effects: readonly Effect[]): string[] {
+    const project = this.project;
+    if (project === null) return [];
+    return effects.map((effect) => {
+      const copy: Effect = { ...structuredClone(effect), id: newId('e') };
+      this.effects.push(copy);
+      for (const child of this.effectChildren(effect.id)) project.clips.push(cloneClip(child, { group: copy.id }));
+      return copy.id;
+    });
+  }
+
+  /** Takes an effect apart: its events stay as ordinary clips. */
+  explodeEffect(id: string) {
+    const project = this.project;
+    const effect = this.effectById(id);
+    if (project === null || effect === undefined) return;
+    this.checkpoint();
+    const children = this.effectChildren(id);
+    for (const clip of children) {
+      delete clip.group;
+      delete clip.slot;
+    }
+    project.effects = this.effects.filter((item) => item.id !== id);
+    if (this.openEffect === id) this.openEffect = null;
+    this.selection = new Set(children.map((clip) => clip.id));
+    this.changed();
+  }
+
+  /** While an effect is gone into: its events changed by hand make it a hand-made one, and a
+   *  hand-made one spans its events. */
+  private noteHandEdits() {
+    const open = this.openEffect === null ? undefined : this.effectById(this.openEffect);
+    if (open !== undefined && open.custom !== true) {
+      const made = generateEffect(open, this.effectItemsOf(open), this.scheme());
+      if (childrenSignature(made) !== childrenSignature(this.effectChildren(open.id).map((clip) => ({ ...clip, id: '' })))) open.custom = true;
+    }
+    for (const effect of this.effects) {
+      if (effect.custom !== true) continue;
+      const children = this.effectChildren(effect.id);
+      if (children.length === 0) continue;
+      effect.start = Math.min(...children.map((clip) => clip.start));
+      effect.end = Math.max(...children.map((clip) => clip.end));
+    }
+  }
+
+  /** Other events put in at once (ring forms…), one undo step. */
+  addRaw(events: Omit<RawEvent, 'id'>[]) {
+    const project = this.project;
+    if (project === null || events.length === 0) return;
+    this.checkpoint();
+    const added = events.map((event) => ({ ...structuredClone(event), id: newId('r') }));
+    project.raw.push(...added);
+    this.selection = new Set(added.map((event) => event.id));
+    this.changed();
+  }
+
+  /** The row the library puts things on: the one picked last, or a sensible one. */
+  libraryRow(): Row | null {
+    const rows = this.rows.filter((row) => row.kind !== 'raw');
+    return rows.find((row) => row.key === this.activeRow) ?? rows.find((row) => row.kind === 'custom') ?? rows.find((row) => row.kind === 'group' && row.type === 1) ?? rows[0] ?? null;
+  }
+
+  setActiveRow(key: string | null) {
+    if (this.activeRow === key) return;
+    this.activeRow = key;
+    this.emit('selection');
+  }
+
+  // ----- trying things out ----------------------------------------------------------------------------
+
+  /** Plays something in the 3D view only, over and over from `start` to `end`. */
+  startTrial(extra: { clips: LightClip[]; raw: RawEvent[]; start: number; end: number }) {
+    this.previewExtra = extra;
+    this.rebuildPreview(true);
+    this.seek(Math.max(0, extra.start - 0.5));
+    if (!this.isPlaying()) this.togglePlay();
+    this.emit('time');
+  }
+
+  stopTrial() {
+    if (this.previewExtra === null) return;
+    this.previewExtra = null;
+    if (this.isPlaying()) this.togglePlay();
+    this.rebuildPreview(true);
+    this.emit('time');
+  }
+
+  /** Called every frame: loops the try-out. */
+  tickTrial() {
+    const extra = this.previewExtra;
+    if (extra === null || !this.isPlaying()) return;
+    if (this.playhead() > extra.end + 1) this.seek(Math.max(0, extra.start - 0.5));
   }
 
   // ----- preview --------------------------------------------------------------------------------------
@@ -919,7 +1249,7 @@ export class Editor {
     const run = () => {
       this.rebuildTimer = null;
       try {
-        this.preview.setEvents(this.bake());
+        this.preview.setEvents(this.bakeForPreview());
       } catch (error) {
         console.error('[chroeditor] preview rebuild failed', error);
       }
