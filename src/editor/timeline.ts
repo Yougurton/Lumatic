@@ -95,12 +95,22 @@ function hzLabel(hz: number) {
   return hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1).replace(/\.0$/u, '')} кГц` : `${String(Math.round(hz))} Гц`;
 }
 
+/** How far before the song's start the timeline goes (px). */
+const LEAD_PX = 14;
+
 export class Timeline {
   private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D;
   private readonly headers: HTMLElement;
-  /** Map beat at the left edge, pixels per beat, rows scrolled by. */
-  viewStart = -1;
+  /** Map beat at the left edge (no further left than a few pixels before the song's start), pixels
+   *  per beat, rows scrolled by. */
+  private start = -1;
+  get viewStart() {
+    return Math.max(this.start, -LEAD_PX / this.pxPerBeat);
+  }
+  set viewStart(beat: number) {
+    this.start = Math.max(beat, -LEAD_PX / this.pxPerBeat);
+  }
   pxPerBeat = 60;
   scrollY = 0;
   /** How tall the rows are (1: normal). */
@@ -1224,9 +1234,11 @@ export class Timeline {
       items.push({ label: 'По сторонам', action: () => editor.laserPreset('sides', 0, null) });
     }
     const replaced = editor.replacedTypes();
-    if (replaced.size > 0) {
+    const removed = editor.removedTypes();
+    if (replaced.size > 0 || removed.length > 0) {
       items.push({ label: 'Скрытые строки', heading: true });
       for (const [type, id] of replaced) items.push({ label: `Вернуть «${lightGroupName(type)}»`, hint: `вместо неё — «${findGroup(editor.groups, id)?.group.name ?? ''}»`, action: () => editor.restoreType(type) });
+      for (const type of removed) items.push({ label: `Вернуть «${lightGroupName(type)}»`, hint: 'удалена', action: () => editor.bringBackType(type) });
     }
     items.push({ label: 'Лампы одной группы по порядку', heading: true });
     for (const type of types) {
@@ -1296,6 +1308,10 @@ export class Timeline {
           ...(editor.ringTypes().includes(row.type)
             ? [null, { label: 'Группа по кольцам', hint: 'одно событие — одно кольцо', action: () => editor.ringPreset(row.type, 'rings') }, { label: 'Группа по линиям', hint: 'одно событие — одна линия', action: () => editor.ringPreset(row.type, 'lines') }]
             : []),
+          null,
+          { label: 'Удалить строку', hint: 'вернуть — в «Шаблонах»', action: () => {
+            if (window.confirm(`Убрать строку «${row.label}» с таймлайна? Её события останутся в карте (видны в группах с её лампами); вернуть строку можно в меню «Шаблоны» → «Скрытые строки».`)) editor.removeType(row.type);
+          } },
         ]);
       });
     } else if (row.kind === 'custom') {

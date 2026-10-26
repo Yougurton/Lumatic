@@ -480,8 +480,9 @@ export class Editor {
     const replaced = this.replacedTypes();
     const lightTypes = new Set<number>([...this.lightsByType.keys(), ...project.clips.filter((clip) => clip.target === undefined).map((clip) => clip.type)]);
     const tops: { key: string; push: () => void }[] = [];
+    const removed = project.removedTypes ?? {};
     for (const type of [...lightTypes].sort((a, b) => a - b)) {
-      if (replaced.has(type)) continue;
+      if (replaced.has(type) || removed[String(type)] !== undefined) continue;
       const lights = this.lightsByType.get(type) ?? [...new Set(project.clips.filter((clip) => clip.type === type).flatMap((clip) => clip.ids ?? []))].sort((a, b) => a - b);
       const expanded = project.expanded.includes(type);
       tops.push({
@@ -574,6 +575,40 @@ export class Editor {
     const next = { ...(project.replacedTypes ?? {}) };
     delete next[String(type)];
     project.replacedTypes = next;
+    this.groupChanged();
+  }
+
+  /** Takes a light group of the environment off the timeline (its events stay; brought back with
+   *  bringBackType). */
+  removeType(type: number) {
+    const project = this.project;
+    if (project === null) return;
+    this.checkpoint();
+    const keys = this.topRowKeys();
+    const at = keys.indexOf(`g${String(type)}`);
+    project.removedTypes = { ...(project.removedTypes ?? {}), [String(type)]: at < 0 ? keys.length : at };
+    project.rowOrder = keys.filter((key) => key !== `g${String(type)}`);
+    project.expanded = project.expanded.filter((item) => item !== type);
+    this.groupChanged();
+  }
+
+  /** The light groups of the environment taken off the timeline. */
+  removedTypes(): number[] {
+    return Object.keys(this.project?.removedTypes ?? {}).map(Number).sort((a, b) => a - b);
+  }
+
+  /** Brings a light group taken off the timeline back to where it was. */
+  bringBackType(type: number) {
+    const project = this.project;
+    const at = project?.removedTypes?.[String(type)];
+    if (project === null || at === undefined) return;
+    this.checkpoint();
+    const keys = this.topRowKeys();
+    keys.splice(Math.min(at, keys.length), 0, `g${String(type)}`);
+    project.rowOrder = keys;
+    const next = { ...(project.removedTypes ?? {}) };
+    delete next[String(type)];
+    project.removedTypes = next;
     this.groupChanged();
   }
 
@@ -1005,7 +1040,7 @@ export class Editor {
 
   private snapshot() {
     const project = this.project;
-    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {} });
+    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {} });
   }
 
   /** Call before a change (one undo step). */
@@ -1047,11 +1082,12 @@ export class Editor {
   private restore(state: string) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string> };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number> };
     project.bookmarks = data.bookmarks ?? [];
-    const rowsChanged = JSON.stringify(project.rowOrder ?? []) !== JSON.stringify(data.rowOrder ?? []) || JSON.stringify(project.replacedTypes ?? {}) !== JSON.stringify(data.replacedTypes ?? {});
+    const rowsChanged = JSON.stringify(project.rowOrder ?? []) !== JSON.stringify(data.rowOrder ?? []) || JSON.stringify(project.replacedTypes ?? {}) !== JSON.stringify(data.replacedTypes ?? {}) || JSON.stringify(project.removedTypes ?? {}) !== JSON.stringify(data.removedTypes ?? {});
     project.rowOrder = data.rowOrder ?? [];
     project.replacedTypes = data.replacedTypes ?? {};
+    project.removedTypes = data.removedTypes ?? {};
     project.clips = data.clips;
     project.raw = data.raw;
     project.effects = data.effects ?? [];

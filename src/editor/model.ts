@@ -114,6 +114,9 @@ export interface Project {
   /** Light groups of the environment whose row a group of the user's with all of their lights
    *  stands in for (event type → that group's id): their row is hidden, their clips shown on it. */
   replacedTypes?: Record<string, string>;
+  /** Light groups of the environment whose row the user took off the timeline (event type → the place
+   *  among the top rows it had, for when it's brought back). */
+  removedTypes?: Record<string, number>;
 }
 
 /** A named place in the song (Beat Saber editors' bookmarks: v2 `_bookmarks`, v3 `bookmarks`). */
