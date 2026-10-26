@@ -176,6 +176,7 @@ window.addEventListener('keydown', (event) => {
   else if (code === 'Delete' || code === 'Backspace') editor.deleteSelection();
   else if (code === 'Escape') {
     if (editor.previewExtra !== null) editor.stopTrial();
+    else if (editor.songRange !== null) editor.setSongRange(null);
     else if (editor.tool.kind !== 'clip') {
       editor.tool = { kind: 'clip' };
       library.render();
@@ -201,8 +202,22 @@ document.addEventListener('change', (event) => {
   if (target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && target.type === 'range')) target.blur();
 });
 
+// leaving with unsaved changes: the desktop window asks (electron/main.ts — it calls these two); a
+// browser has only its own question
+Object.assign(window, {
+  chroeditorUnsaved: () => (editor.dirty && editor.project !== null ? `${editor.map?.parsed.mapMeta.title ?? ''} — ${editor.row?.label ?? ''}: изменения не сохранены.` : null),
+  chroeditorSave: async () => {
+    try {
+      await editor.save();
+      return !editor.dirty;
+    } catch (error) {
+      console.error(error);
+      return false;
+    }
+  },
+});
 window.addEventListener('beforeunload', (event) => {
-  if (editor.dirty) event.preventDefault();
+  if (!isDesktop() && editor.dirty) event.preventDefault();
 });
 
 // the splitter between the 3D view and the timeline

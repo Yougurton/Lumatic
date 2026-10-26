@@ -6,7 +6,8 @@ import { ringSystemName } from './library';
 import { findGroup, newId, type ClipColor, type Rgb } from './model';
 
 /**
- * The editor of a GLS block, as in the game's lighting editor: on the left its boxes (the upper wins
+ * The editor of a GLS block, docked where the timeline is (the 3D view above stays in sight and shows
+ * the block: picking an event puts the song there), as in the game's lighting editor: on the left its boxes (the upper wins
  * where they pick the same element), in the middle the chosen box's filter and spreads, on the right
  * its lane of events (click: a new one, drag: move, Delete: remove) and the chosen event; at the
  * bottom what comes out — a row per element of the group, its light over the block's time.
@@ -36,6 +37,7 @@ export class GlsEditor {
   private eventId: string | null = null;
   private laneDrag: { id: string; startX: number; moved: boolean } | null = null;
   private keyHandler = (event: KeyboardEvent) => this.onKey(event);
+  private resizeHandler = () => this.place();
   private raf = 0;
 
   constructor(private readonly editor: Editor) {
@@ -67,12 +69,11 @@ export class GlsEditor {
     this.boxId = effect.gls?.boxes[0]?.id ?? null;
     this.eventId = null;
     const shade = document.createElement('div');
-    shade.className = 'ce-shade gls-shade';
-    shade.addEventListener('mousedown', (event) => {
-      if (event.target === shade) this.close();
-    });
+    shade.className = 'gls-dock';
     document.body.append(shade);
     this.shade = shade;
+    this.place();
+    window.addEventListener('resize', this.resizeHandler);
     window.addEventListener('keydown', this.keyHandler, true);
     this.render();
     const tick = () => {
@@ -87,8 +88,22 @@ export class GlsEditor {
     this.shade.remove();
     this.shade = null;
     cancelAnimationFrame(this.raf);
+    window.removeEventListener('resize', this.resizeHandler);
     window.removeEventListener('keydown', this.keyHandler, true);
     this.editor.stopTrial();
+  }
+
+  /** Over the timeline (as the ring editor). */
+  private place() {
+    const dock = this.shade;
+    const timeline = document.getElementById('timeline');
+    if (dock === null || timeline === null) return;
+    const rect = timeline.getBoundingClientRect();
+    const height = Math.max(420, rect.height);
+    dock.style.left = `${String(rect.left)}px`;
+    dock.style.top = `${String(Math.min(rect.top, window.innerHeight - height))}px`;
+    dock.style.width = `${String(rect.width)}px`;
+    dock.style.height = `${String(height)}px`;
   }
 
   private onKey(event: KeyboardEvent) {
@@ -558,6 +573,8 @@ export class GlsEditor {
       if (hit !== undefined) {
         this.eventId = hit.item.id;
         origin = hit.item.beat;
+        // (the 3D view shows the block at that event)
+        if (this.editor.previewExtra === null && !this.editor.isPlaying()) this.editor.seek(effect.start + hit.item.beat + 0.02);
         this.laneDrag = { id: hit.item.id, startX: x, moved: false };
         this.drawLane(canvas, effect, box);
         window.addEventListener('mousemove', move);

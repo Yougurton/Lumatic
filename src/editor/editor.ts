@@ -33,7 +33,8 @@ import { lightGroupName, otherEventName } from './names';
 import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
-import { chromaCustomData, cloneRingBlock, poseRingEvents, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
+import { readPreview, writePreview } from './map-settings';
+import { chromaCustomData, cloneRingBlock, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -50,7 +51,7 @@ export type Row =
   | { kind: 'custom'; key: string; group: LightGroup; label: string; expanded: boolean; depth: number; parent: string | null }
   | { kind: 'raw'; key: string; type: number; label: string; depth: number }
   /** The ring poses (blocks of them). */
-  | { kind: 'poses'; key: string; label: string; depth: number };
+  | { kind: 'poses'; key: string; label: string; depth: number; ring: 'rotation' | 'zoom' };
 
 /** A row of lights (a light group, a light, a group of the user's) — clips and effects go there. */
 export type LightRow = Extract<Row, { kind: 'group' | 'light' | 'custom' }>;
@@ -58,6 +59,8 @@ export const isLightRow = (row: Row): row is LightRow => row.kind === 'group' ||
 
 /** The event type ring events turn the rings with. */
 export const RING_EVENT_TYPE = 8;
+/** …and zooms them with. */
+export const ZOOM_EVENT_TYPE = 9;
 
 /** A clip as a row shows it: `partial` — it lights only some of the row's lights; `level` — how
  *  far up it sits among the clips of the row (drawn lower the higher it is). */
@@ -135,6 +138,8 @@ export class Editor {
   spectrogram: Spectrogram | null = null;
   /** The environment's turning ring systems (as it came, before the editor's ring tracks). */
   ringInfo: RingSystemInfo[] = [];
+  /** …and the ones that zoom. */
+  zoomInfo: ZoomSystemInfo[] = [];
   /** The difficulty's own Chroma environment (what the map had). */
   private mapChroma: ChromaEnvironmentData | undefined;
   /** What the 3D view's environment was last loaded with for the ring tracks, and the animations
@@ -142,6 +147,11 @@ export class Editor {
   private ringEnhancementKey = '';
   private ringAnimationKey = '';
   private previewChroma: ChromaEnvironmentData | undefined;
+  /** A stretch of the song picked on the timeline (map beats; start may come after end while it is
+   *  dragged), null: none. */
+  songRange: { start: number; end: number } | null = null;
+  /** The song list's preview as Info.dat has it (seconds of the song). */
+  songPreview: { start: number; duration: number } | null = null;
   /** Opens a ring pose block's editor (set by the app). */
   ringEditorHook: ((id: string) => void) | null = null;
   status = '';
@@ -229,8 +239,42 @@ export class Editor {
     const rows = map.parsed.rows.filter((row) => row.difficulty !== undefined);
     if (rows.length === 0) throw new Error('В папке нет сложностей, которые получилось прочитать');
     this.songBpm = map.parsed.songBpm;
+    this.songRange = null;
+    await this.readSongPreview();
     await this.openDifficulty(rows[0]!);
     await this.loadSong();
+  }
+
+  private infoName() {
+    return this.map?.folder.files.find((name) => name.toLowerCase() === 'info.dat');
+  }
+
+  private async readSongPreview() {
+    const name = this.infoName();
+    this.songPreview = null;
+    if (this.map === null || name === undefined) return;
+    try {
+      this.songPreview = readPreview(await this.map.folder.readText(name));
+    } catch {
+      // (a map without a readable Info.dat has no preview to show)
+    }
+  }
+
+  setSongRange(range: { start: number; end: number } | null) {
+    this.songRange = range;
+    this.emit('time');
+  }
+
+  /** The picked stretch of the song becomes its preview in the song list (Info.dat, at once). */
+  async previewFromRange() {
+    const range = this.songRange;
+    const name = this.infoName();
+    if (range === null || this.map === null || name === undefined) return;
+    const start = this.beatToSeconds(Math.min(range.start, range.end));
+    const end = this.beatToSeconds(Math.max(range.start, range.end));
+    await this.map.folder.writeText(name, writePreview(await this.map.folder.readText(name), start, end - start));
+    await this.readSongPreview();
+    this.setStatus(`Превью песни: с ${start.toFixed(2)} с, ${(end - start).toFixed(2)} с`);
   }
 
   difficulties(): DifficultyRow[] {
@@ -253,6 +297,12 @@ export class Editor {
     this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);
     this.lightInfo = this.preview.lights();
+    this.zoomInfo = this.preview.ringSystems().flatMap((system) => {
+      const position = system.position;
+      if (position === undefined) return [];
+      const initial = position.initialPositions;
+      return [{ name: system.name, rings: system.rings, position, initialStep: initial.length > 1 ? Math.abs(initial[1]! - initial[0]!) : (position.minPositionStep + position.maxPositionStep) / 2 }];
+    });
     this.ringInfo = this.preview.ringSystems().flatMap((system) => (system.rotation === undefined ? [] : [{ name: system.name, rings: system.rings, rotation: system.rotation, seed: system.seed, ringIds: system.ringIds }]));
     this.lightsByType = new Map();
     for (const light of this.lightInfo) {
@@ -344,7 +394,7 @@ export class Editor {
   private bakeWith(clips: readonly LightClip[], raw: readonly RawEvent[]): OutEvent[] {
     const other = rawEvents(raw);
     const rings = other.filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
-    const poses = poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm).map(({ group: _group, ...event }) => event);
+    const poses = [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm)].map(({ group: _group, ...event }) => event);
     // (the poses' ring events before the show's own at the same moment: of two at once, the first wins)
     return [...bakeLights(clips, this.lightsByType, this.scheme(), 60 / this.songBpm, this.groups), ...poses, ...other].sort((a, b) => a.beat - b.beat);
   }
@@ -354,7 +404,7 @@ export class Editor {
     const project = this.project;
     if (project === null) return [];
     const rings = rawEvents(project.raw).filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
-    return poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm);
+    return [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm)];
   }
 
   /** The Chroma environment the ring poses on tracks need: the rings on tracks, their turns. */
@@ -429,7 +479,8 @@ export class Editor {
       if (expanded) for (const id of lights) rows.push({ kind: 'light', key: `l${lightKey(type, id)}`, type, id, label: `ID ${String(id)}`, depth: 1, parent: null });
     }
     for (const group of this.groups) pushGroup(group, 0, null);
-    if (this.ringInfo.length > 0 || this.ringBlocks.length > 0) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0 });
+    if (this.ringInfo.length > 0 || this.ringBlocks.some((block) => block.kind !== 'zoom')) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0, ring: 'rotation' });
+    if (this.zoomInfo.length > 0 || this.ringBlocks.some((block) => block.kind === 'zoom')) rows.push({ kind: 'poses', key: 'zoomposes', label: 'Зум колец', depth: 0, ring: 'zoom' });
     const rawTypes = [...new Set(project.raw.map((event) => event.type))].sort((a, b) => a - b);
     for (const type of [8, 9, 12, 13, 5]) if (!rawTypes.includes(type)) rawTypes.push(type);
     for (const type of rawTypes.sort((a, b) => a - b)) rows.push({ kind: 'raw', key: `r${String(type)}`, type, label: otherEventName(type), depth: 0 });

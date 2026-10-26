@@ -1,5 +1,5 @@
 import { easingFromName } from '../engine/core/easing';
-import { deterministicRingRandom, matchesRingName, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
+import { deterministicRingRandom, matchesRingName, type RingPositionConfig, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
 import type { OutEvent } from './bake';
 import { newId } from './model';
 
@@ -21,6 +21,10 @@ import { newId } from './model';
  *
  * Angles are degrees: Chroma's, a larger one turning a ring counterclockwise as the player sees it
  * (ring events' direction 0 adds to the angle).
+ *
+ * Zoom blocks ('zoom') do the same for how far apart the rings stand: each pose a spacing (Chroma's
+ * zoom event step — the distance from ring to ring), reached over its time (the event's speed).
+ * Zoom events set the spacing outright, so they land exactly anyway.
  */
 
 export type PoseShape = 'same' | 'spiral' | 'wave' | 'alternate' | 'random' | 'manual';
@@ -57,6 +61,8 @@ export interface RingPose {
 
 export interface RingBlock {
   id: string;
+  /** Turning the rings (the default) or spacing them out. */
+  kind?: 'rotation' | 'zoom';
   name: string;
   /** The ring system (its name — Chroma's nameFilter); '' for 'event': every ring system. */
   system: string;
@@ -84,6 +90,17 @@ export const SHAPES: [PoseShape, string][] = [
   ['random', 'Случайно'],
   ['manual', 'Вручную'],
 ];
+
+/** What making zoom poses needs to know about a ring system that zooms. */
+export interface ZoomSystemInfo {
+  name: string;
+  rings: number;
+  position: RingPositionConfig;
+  /** The spacing the rings start with. */
+  initialStep: number;
+}
+
+export const isZoom = (block: RingBlock) => block.kind === 'zoom';
 
 /** The shapes ring events can make. */
 export const EVENT_SHAPES = new Set<PoseShape>(['same', 'spiral']);
@@ -117,6 +134,37 @@ export function newRingBlock(system: string, mode: RingBlock['mode'], start: num
     end: start + length,
     poses: [newPose(0, { shape: 'same', angle: 0, step: 0, duration: Math.min(1, length / 2) }), newPose(Math.min(length, Math.max(1, length / 2)), { shape: 'spiral', angle: 45, step: 15, duration: Math.min(1, length / 2) })],
   };
+}
+
+export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {
+  const length = Math.max(1, end - start);
+  const initial = round(system?.initialStep ?? 2);
+  const tight = round(system?.position.minPositionStep ?? initial / 2);
+  return {
+    id: newId('k'),
+    kind: 'zoom',
+    name: 'Зум колец',
+    system: name,
+    mode: 'event',
+    start,
+    end: start + length,
+    poses: [newPose(0, { step: initial, duration: Math.min(1, length / 2) }), newPose(Math.min(length, Math.max(1, length / 2)), { step: tight, duration: Math.min(1, length / 2) })],
+  };
+}
+
+/** Where each ring of a zooming system stands (its distance ahead) at a spacing. */
+export function zoomPositions(system: ZoomSystemInfo, step: number): number[] {
+  return Array.from({ length: system.rings }, (_, i) => (system.position.positionOffsets[i] ?? 0) + i * step);
+}
+
+/** The zoom events of zoom blocks (each pose: the spacing, the speed that gets there in its time). */
+export function poseZoomEvents(blocks: readonly RingBlock[], systems: readonly ZoomSystemInfo[], eventType: number, secondsPerBeat: number): (OutEvent & { group: string })[] {
+  return timedPoses(blocks.filter(isZoom)).map(({ block, pose, beat }) => {
+    const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
+    const speed = turnSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.05, (1 - 0.01 ** (0.02 / turnSeconds)) / 0.02));
+    const customData: Record<string, unknown> = { step: round(pose.step), speed: round(speed), ...(block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {}) };
+    return { beat, type: eventType, value: 0, floatValue: 1, customData, group: block.id };
+  });
 }
 
 const rand = (seed: number, index: number) => {
@@ -208,7 +256,7 @@ export function ringBase(events: readonly { songBeat: number; customData?: Recor
 export function poseRingEvents(blocks: readonly RingBlock[], others: readonly OutEvent[], systems: readonly RingSystemInfo[], eventType: number, toSong: (beat: number) => number, secondsPerBeat: number): (OutEvent & { group: string })[] {
   const out: (OutEvent & { group: string })[] = [];
   const known = others.map((event) => ({ songBeat: toSong(event.beat), customData: event.customData }));
-  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => item.mode === 'event'))) {
+  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => !isZoom(item) && item.mode === 'event'))) {
     const system = systems.find((item) => item.name === block.system) ?? systems[0];
     if (system === undefined) continue;
     const songBeat = toSong(beat);
@@ -268,7 +316,7 @@ export interface RingAnimation {
 
 /** The systems 'tracks' blocks turn. */
 export function trackedSystems(blocks: readonly RingBlock[]) {
-  return [...new Set(blocks.filter((block) => block.mode === 'tracks').map((block) => block.system))].sort();
+  return [...new Set(blocks.filter((block) => !isZoom(block) && block.mode === 'tracks').map((block) => block.system))].sort();
 }
 
 const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -291,7 +339,7 @@ export function ringAnimations(blocks: readonly RingBlock[], systems: readonly R
   // per ring: its turns in time order, each from where the ring is when it starts
   const lanes = new Map<string, { beat: number; duration: number; from: number; to: number; easing: string }[]>();
   const steps: { track: string; beat: number; pose: RingPose; target: number }[] = [];
-  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => item.mode === 'tracks'))) {
+  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => !isZoom(item) && item.mode === 'tracks'))) {
     const system = systems.find((item) => item.name === block.system);
     if (system === undefined) continue;
     const angles = poseAngles(pose, system.rings, 'tracks');

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
-import { createRingRotationSampler, deterministicRingRandom, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
-import { newPose, poseRingEvents, ringAnimations, type RingBlock, type RingSystemInfo } from '../src/editor/rings';
+import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
+import { newPose, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
 /**
@@ -124,6 +124,30 @@ checks++;
 if (points.length !== 5 || points.at(-1)![2] !== 360) {
   failures++;
   console.log('loop points', JSON.stringify(points));
+}
+
+// zoom poses: the rings stand their pose's spacing apart once its time is over
+const zoomSystem: ZoomSystemInfo = {
+  name: 'SmallTrackLaneRings',
+  rings: 30,
+  position: { positionOffsets: Array(30).fill(14) as number[], initialPositions: Array.from({ length: 30 }, (_, i) => 14 + i * 3.5), minPositionStep: 1, maxPositionStep: 3.5, moveSpeed: 1, name: 'SmallTrackLaneRings' },
+  initialStep: 3.5,
+};
+const zoom = newZoomBlock(zoomSystem, 2, 12);
+zoom.poses[1]!.step = 0.6;
+const zoomEvents = poseZoomEvents([zoom], [zoomSystem], 9, 60 / bpm).map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: 9, value: 0, floatValue: 1, customData: event.customData as BasicEvent['customData'] }));
+const positions = createRingPositionSampler(zoomEvents, bpm, zoomSystem.position);
+for (const pose of zoom.poses) {
+  const at = zoom.start + pose.beat + pose.duration + 0.4;
+  const want = zoomPositions(zoomSystem, pose.step);
+  const got = positions(at);
+  for (let i = 0; i < 30; i += 7) {
+    checks++;
+    if (Math.abs(got[i]! - want[i]!) > 0.05 * Math.max(1, want[i]!)) {
+      failures++;
+      console.log('zoom off', pose.step, i, want[i], got[i]);
+    }
+  }
 }
 
 console.log('checks', checks, 'failures', failures);

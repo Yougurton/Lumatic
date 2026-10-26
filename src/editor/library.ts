@@ -4,7 +4,7 @@ import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectK
 import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
-import { newRingBlock } from './rings';
+import { newRingBlock, newZoomBlock } from './rings';
 
 /**
  * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
@@ -260,6 +260,21 @@ export class Library {
         editor.ringEditorHook?.(block.id);
       });
       this.body.append(poses);
+    }
+    if (this.tab === 'rings' && this.editor.zoomInfo.length > 0) {
+      const zoom = document.createElement('button');
+      zoom.className = 'lib-poses';
+      zoom.textContent = '⇹ Зум колец…';
+      zoom.title = 'Блок зума у курсора: расстояние между кольцами по позам — с предпросмотром';
+      zoom.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        const start = editor.snapBeat(editor.playhead());
+        const block = newZoomBlock(editor.zoomInfo[0], start, start + 4, editor.zoomInfo.length > 1 ? editor.zoomInfo[0]!.name : '');
+        editor.addRingBlock(block);
+        editor.ringEditorHook?.(block.id);
+      });
+      this.body.append(zoom);
     }
     const tip = document.createElement('div');
     tip.className = 'lib-tip';

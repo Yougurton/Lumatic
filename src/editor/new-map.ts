@@ -10,7 +10,7 @@ import { createMapFolder, type MapFolder } from './platform';
  * a metronome over it).
  */
 
-const SHOW_ENVIRONMENTS: [string, string][] = [
+export const SHOW_ENVIRONMENTS: [string, string][] = [
   ['TimbalandEnvironment', 'Timbaland'],
   ['PanicEnvironment', 'Panic'],
   ['OriginsEnvironment', 'Origins'],
@@ -18,7 +18,7 @@ const SHOW_ENVIRONMENTS: [string, string][] = [
 ];
 
 /** The other environments with classic lights (the editor's events), as ChroPaper knows them. */
-const OTHER_ENVIRONMENTS: [string, string][] = environmentCatalog
+export const OTHER_ENVIRONMENTS: [string, string][] = environmentCatalog
   .filter((entry) => !isGLSCapableEnvironment(entry.id) && !SHOW_ENVIRONMENTS.some(([id]) => id === entry.id))
   .map((entry) => [entry.id, entry.title]);
 

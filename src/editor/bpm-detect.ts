@@ -64,7 +64,7 @@ function fft(re: Float32Array, im: Float32Array) {
 }
 
 /** The onset strength, one value per hop. */
-export function onsetEnvelope(channels: readonly Float32Array[], sampleRate: number): { envelope: Float32Array; fps: number; frameOffset: number } {
+export function onsetEnvelope(channels: readonly Float32Array[], sampleRate: number, maxHz = Infinity): { envelope: Float32Array; fps: number; frameOffset: number } {
   const factor = Math.max(1, Math.round(sampleRate / TARGET_RATE));
   const rate = sampleRate / factor;
   const length = Math.floor(channels[0]!.length / factor);
@@ -81,7 +81,7 @@ export function onsetEnvelope(channels: readonly Float32Array[], sampleRate: num
   for (let i = 0; i < FRAME; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / FRAME);
   const re = new Float32Array(FRAME);
   const im = new Float32Array(FRAME);
-  const bins = FRAME / 2;
+  const bins = Math.max(2, Math.min(FRAME / 2, Math.ceil((maxHz / rate) * FRAME) + 1));
   let previous = new Float32Array(bins);
   let current = new Float32Array(bins);
   const flux = new Float32Array(frames);
@@ -235,4 +235,37 @@ export function detectBpm(channels: readonly Float32Array[], sampleRate: number,
   const alternatives = [...new Set([chosen.bpm / 2, chosen.bpm * 2, ...refined.map((item) => item.bpm)].map(round2))]
     .filter((bpm) => bpm !== round2(chosen.bpm) && bpm >= 40 && bpm <= 400);
   return { bpm: round2(chosen.bpm), firstBeat, confidence, alternatives };
+}
+
+/**
+ * Which beat of the bar is the strong one (the downbeat): with the tempo and the beats' place known,
+ * the beats are counted round the bar (`beatsPerBar`) and the count whose beats hit hardest wins —
+ * mostly by the bass (kick drums land on the downbeat), a little by everything. Returns when the
+ * first such beat comes (seconds into the song) and how clearly it stood out (0…1).
+ */
+export function detectDownbeat(channels: readonly Float32Array[], sampleRate: number, bpm: number, firstBeat: number, beatsPerBar: number): { downbeat: number; confidence: number; scores: number[] } {
+  const low = onsetEnvelope(channels, sampleRate, 180);
+  const all = onsetEnvelope(channels, sampleRate);
+  const period = 60 / bpm;
+  const scores = new Array<number>(beatsPerBar).fill(0);
+  const counts = new Array<number>(beatsPerBar).fill(0);
+  // (each beat: the strongest onset within a few ms of it — the grid is only nearly exact)
+  const strength = (envelope: Float32Array, fps: number, offset: number, at: number) => {
+    const centre = (at - offset) * fps;
+    let best = 0;
+    for (let k = Math.floor(centre - fps * 0.03); k <= Math.ceil(centre + fps * 0.03); k++) best = Math.max(best, envelope[k] ?? 0);
+    return best;
+  };
+  const duration = low.envelope.length / low.fps;
+  for (let index = 0, at = firstBeat; at < duration; index++, at += period) {
+    const value = 0.75 * strength(low.envelope, low.fps, low.frameOffset, at) + 0.25 * strength(all.envelope, all.fps, all.frameOffset, at);
+    scores[index % beatsPerBar]! += value;
+    counts[index % beatsPerBar]! += 1;
+  }
+  for (let i = 0; i < beatsPerBar; i++) scores[i] = scores[i]! / Math.max(1, counts[i]!);
+  let best = 0;
+  for (let i = 1; i < beatsPerBar; i++) if (scores[i]! > scores[best]!) best = i;
+  const sorted = [...scores].sort((a, b) => b - a);
+  const confidence = sorted[0]! <= 0 ? 0 : Math.max(0, Math.min(1, (sorted[0]! - (sorted[1] ?? 0)) / sorted[0]! * 3));
+  return { downbeat: firstBeat + best * period, confidence, scores };
 }

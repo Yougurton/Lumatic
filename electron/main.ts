@@ -81,6 +81,42 @@ function createWindow() {
     void shell.openExternal(url);
     return { action: 'deny' };
   });
+  // closing with unsaved changes: save them, drop them, or stay (the page says what it has)
+  let closing = false;
+  window.on('close', (event) => {
+    if (closing) return;
+    event.preventDefault();
+    void (async () => {
+      let unsaved: string | null = null;
+      try {
+        unsaved = (await window.webContents.executeJavaScript('window.chroeditorUnsaved ? window.chroeditorUnsaved() : null')) as string | null;
+      } catch {
+        // (a page that can't answer has nothing to lose)
+      }
+      if (unsaved !== null) {
+        const { response } = await dialog.showMessageBox(window, {
+          type: 'question',
+          title: 'ChroEditor',
+          message: 'Сохранить изменения перед выходом?',
+          detail: unsaved,
+          buttons: ['Сохранить', 'Не сохранять', 'Отмена'],
+          defaultId: 0,
+          cancelId: 2,
+          noLink: true,
+        });
+        if (response === 2) return;
+        if (response === 0) {
+          const saved = (await window.webContents.executeJavaScript('window.chroeditorSave ? window.chroeditorSave() : false').catch(() => false)) as boolean;
+          if (!saved) {
+            await dialog.showMessageBox(window, { type: 'error', title: 'ChroEditor', message: 'Не получилось сохранить — окно остаётся открытым.', buttons: ['OK'] });
+            return;
+          }
+        }
+      }
+      closing = true;
+      window.close();
+    })();
+  });
   const devUrl = process.env.CHROEDITOR_DEV_URL;
   void window.loadURL(devUrl ?? 'app://local/index.html');
 }

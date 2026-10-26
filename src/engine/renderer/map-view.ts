@@ -19,7 +19,7 @@ import type { InfoColorScheme } from '../core/beatmap/info';
 import type { ChromaEnvironmentData } from '../core/chroma-environment';
 import { DEFAULT_COLORS, resolveColorScheme, type ColorScheme, type Rgb } from '../core/colors';
 import { isForcedLightshowMode, type LightshowMode } from '../core/lighting/basic-light';
-import type { RingRotationConfig } from '../core/lighting/ring-motion';
+import type { RingPositionConfig, RingRotationConfig } from '../core/lighting/ring-motion';
 import { sampleNoodlePlayerTrack } from '../core/noodle-runtime';
 import { applyReplayHeightEvents, applyReplayNoteEvents, type MapRenderData } from '../core/placement/map-render-data';
 import type { HitScoreVisualizerConfig } from '../core/replay/hit-score-visualizer';
@@ -315,6 +315,7 @@ export class MapView implements RenderView {
     rotates: boolean;
     zooms: boolean;
     rotation?: RingRotationConfig;
+    position?: RingPositionConfig;
     seed: number;
     ringIds: string[][];
   }[] {
@@ -340,6 +341,7 @@ export class MapView implements RenderView {
       rotates: group.rotationConfig !== undefined,
       zooms: group.positionConfig !== undefined,
       ...(group.rotationConfig === undefined ? {} : { rotation: group.rotationConfig }),
+      ...(group.positionConfig === undefined ? {} : { position: group.positionConfig }),
       seed: group.seed,
       ringIds: (ringObjects[index] ?? []).map((object) => lookupIds.get(object) ?? []),
     }));

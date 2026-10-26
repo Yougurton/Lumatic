@@ -1,6 +1,6 @@
 import { createOggEncoder } from 'wasm-media-encoders';
 
-import { detectBpm } from './bpm-detect';
+import { detectBpm, detectDownbeat } from './bpm-detect';
 
 /**
  * Off the page's thread: the tempo of a song, and the song as Ogg Vorbis (what Beat Saber plays),
@@ -9,10 +9,12 @@ import { detectBpm } from './bpm-detect';
 
 export type AudioRequest =
   | { kind: 'bpm'; channels: Float32Array[]; sampleRate: number }
+  | { kind: 'downbeat'; channels: Float32Array[]; sampleRate: number; bpm: number; firstBeat: number; beatsPerBar: number }
   | { kind: 'ogg'; channels: Float32Array[]; sampleRate: number; silence: number; quality: number };
 
 export type AudioReply =
   | { kind: 'bpm'; result: ReturnType<typeof detectBpm> }
+  | { kind: 'downbeat'; result: ReturnType<typeof detectDownbeat> }
   | { kind: 'progress'; done: number }
   | { kind: 'ogg'; data: Uint8Array }
   | { kind: 'error'; message: string };
@@ -24,6 +26,10 @@ self.onmessage = async (event: MessageEvent<AudioRequest>) => {
   try {
     if (request.kind === 'bpm') {
       post({ kind: 'bpm', result: detectBpm(request.channels, request.sampleRate) });
+      return;
+    }
+    if (request.kind === 'downbeat') {
+      post({ kind: 'downbeat', result: detectDownbeat(request.channels, request.sampleRate, request.bpm, request.firstBeat, request.beatsPerBar) });
       return;
     }
     const encoder = await createOggEncoder();

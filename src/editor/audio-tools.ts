@@ -34,6 +34,13 @@ function run(request: AudioRequest, onProgress?: (done: number) => void): Promis
   });
 }
 
+/** Where the song's strong beats are (see detectDownbeat). */
+export async function findDownbeat(buffer: AudioBuffer, bpm: number, firstBeat: number, beatsPerBar: number) {
+  const reply = await run({ kind: 'downbeat', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, bpm, firstBeat, beatsPerBar });
+  if (reply.kind !== 'downbeat') throw new Error('unexpected reply');
+  return reply.result;
+}
+
 export async function findBpm(buffer: AudioBuffer): Promise<BpmResult> {
   const reply = await run({ kind: 'bpm', channels: channelsOf(buffer), sampleRate: buffer.sampleRate });
   if (reply.kind !== 'bpm') throw new Error('unexpected reply');

@@ -1,10 +1,10 @@
 import { resolveRgb } from './bake';
-import { isLightRow, RING_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
+import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { groupHue, lightGroupName } from './names';
-import { newRingBlock, ringDelay, type RingBlock } from './rings';
+import { isZoom, newRingBlock, newZoomBlock, ringDelay, type RingBlock } from './rings';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
@@ -72,7 +72,8 @@ type Drag =
   | { kind: 'scroll'; grabY: number; scrollY: number }
   | { kind: 'rowZoom'; edge: 'top' | 'bottom'; grabY: number; thumb: number; scale: number; scrollY: number }
   | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number }
-  | { kind: 'spectro'; grabY: number; height: number };
+  | { kind: 'spectro'; grabY: number; height: number }
+  | { kind: 'range'; from: number };
 
 /** The edge between the rows and the spectrogram is grabbed within this many pixels of it. */
 const SPECTRO_GRIP = 4;
@@ -304,7 +305,7 @@ export class Timeline {
     if (item === null) return null;
     const { row, top, height } = item;
     if (row.kind === 'poses') {
-      for (const block of [...this.editor.ringBlocks].reverse()) {
+      for (const block of [...this.blocksOf(row)].reverse()) {
         const x0 = this.beatToX(block.start);
         const x1 = this.beatToX(block.end);
         if (x < x0 - 2 || x > x1 + 2 || y < top + 2 || y > top + height - 2) continue;
@@ -394,7 +395,7 @@ export class Timeline {
     for (const { row, top, height: h } of this.layout()) {
       if (top + h < this.rowsTop || top > this.rowsBottom) continue;
       if (row.kind === 'raw') this.drawRaw(row, top, h);
-      else if (row.kind === 'poses') for (const block of editor.ringBlocks) this.drawRingBlock(block, top, h);
+      else if (row.kind === 'poses') for (const block of this.blocksOf(row)) this.drawRingBlock(block, top, h);
       else for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
     }
     // the clip being drawn
@@ -404,7 +405,7 @@ export class Timeline {
       if (item !== undefined && item.row.kind === 'poses') {
         const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
         ctx.globalAlpha = 0.6;
-        this.drawRingBlock(newRingBlock('', 'event', a, Math.max(b, a + 1)), item.top, item.height);
+        this.drawRingBlock(this.newBlockFor(item.row, a, Math.max(b, a + 1)), item.top, item.height);
         ctx.globalAlpha = 1;
       } else if (item !== undefined && isLightRow(item.row)) {
         const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
@@ -451,6 +452,33 @@ export class Timeline {
     // spectrogram
     this.drawSpectrogram(this.rowsBottom, this.spectroHeight);
 
+    // the song's preview (as Info.dat has it) on the ruler; the picked stretch of the song over all
+    const preview = editor.songPreview;
+    if (preview !== null) {
+      const x0 = this.beatToX(editor.secondsToBeat(preview.start));
+      const x1 = this.beatToX(editor.secondsToBeat(preview.start + preview.duration));
+      if (x1 > GUTTER && x0 < width) {
+        ctx.fillStyle = 'rgba(255,200,80,0.18)';
+        ctx.fillRect(Math.max(GUTTER, x0), RULER_H - 9, x1 - Math.max(GUTTER, x0), 8);
+        ctx.fillStyle = 'rgba(255,205,90,0.9)';
+        ctx.fillRect(x0, RULER_H - 9, Math.max(1, x1 - x0), 2);
+        if (x1 - x0 > 50) {
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.fillText('превью', Math.max(GUTTER + 2, x0 + 3), RULER_H - 11);
+        }
+      }
+    }
+    const range = editor.songRange;
+    if (range !== null) {
+      const x0 = this.beatToX(Math.min(range.start, range.end));
+      const x1 = this.beatToX(Math.max(range.start, range.end));
+      ctx.fillStyle = 'rgba(110,170,255,0.13)';
+      ctx.fillRect(x0, 0, x1 - x0, this.navTop);
+      ctx.fillStyle = 'rgba(140,190,255,0.9)';
+      ctx.fillRect(x0, 0, 1, this.navTop);
+      ctx.fillRect(x1, 0, 1, this.navTop);
+      ctx.fillRect(x0, 0, x1 - x0, 3);
+    }
     // playhead
     const px = this.beatToX(editor.playhead());
     if (px >= GUTTER - 6) {
@@ -701,7 +729,20 @@ export class Timeline {
     ctx.globalAlpha = 1;
   }
 
-  /** A ring pose block: its poses as small rings at their times (a line out to where the turn ends). */
+  /** The blocks a ring poses row shows (turns or zooms). */
+  private blocksOf(row: Extract<Row, { kind: 'poses' }>) {
+    return this.editor.ringBlocks.filter((block) => isZoom(block) === (row.ring === 'zoom'));
+  }
+
+  /** A new block for a ring poses row. */
+  private newBlockFor(row: Extract<Row, { kind: 'poses' }>, start: number, end: number) {
+    const editor = this.editor;
+    if (row.ring === 'zoom') return newZoomBlock(editor.zoomInfo[0], start, end, editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '');
+    return newRingBlock(editor.ringInfo[0]?.name ?? '', 'event', start, end);
+  }
+
+  /** A ring pose block: its poses as small rings at their times (a line out to where the turn ends);
+   *  a zoom block: each pose's spacing as bars that close in or spread out. */
   private drawRingBlock(block: RingBlock, top: number, height: number) {
     const ctx = this.context;
     const x = this.beatToX(block.start);
@@ -710,7 +751,7 @@ export class Timeline {
     const y = top + 3;
     const h = height - 6;
     const selected = this.editor.selection.has(block.id);
-    const hue = block.mode === 'tracks' ? 275 : 300;
+    const hue = isZoom(block) ? 190 : block.mode === 'tracks' ? 275 : 300;
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
@@ -720,9 +761,20 @@ export class Timeline {
     const cy = y + h / 2;
     const r = Math.max(3, Math.min(8, h / 2 - 3));
     const rings = this.editor.ringInfo.find((system) => system.name === block.system)?.rings ?? this.editor.ringInfo[0]?.rings ?? 1;
+    const zoom = isZoom(block);
+    const widest = Math.max(1e-3, ...block.poses.map((pose) => Math.abs(pose.step)));
     for (const pose of block.poses) {
       if (pose.beat > block.end - block.start + 1e-6) continue;
       const px = this.beatToX(block.start + pose.beat);
+      if (zoom) {
+        // (bars a pose's spacing apart: wider — the rings further from each other)
+        const gap = 1.5 + (Math.abs(pose.step) / widest) * 5;
+        ctx.fillStyle = `hsla(${String(hue)} 70% 65% / 0.35)`;
+        ctx.fillRect(px, cy - 1, Math.max(0, pose.duration * this.pxPerBeat), 2);
+        ctx.fillStyle = `hsl(${String(hue)} 75% 72%)`;
+        for (let k = 0; k < 4; k++) ctx.fillRect(px + k * gap, cy - r, 1.5, r * 2);
+        continue;
+      }
       const span = (pose.duration + ringDelay(pose, pose.reverse ? 0 : rings - 1, rings)) * this.pxPerBeat;
       ctx.fillStyle = `hsla(${String(hue)} 70% 65% / 0.35)`;
       ctx.fillRect(px, cy - 1, Math.max(0, span), 2);
@@ -739,7 +791,7 @@ export class Timeline {
     }
     if (w > 60 && h >= 12) {
       ctx.font = '600 10px system-ui, sans-serif';
-      const label = `◎ ${block.name}${block.mode === 'tracks' ? ' · по кольцам' : ''}`;
+      const label = `${isZoom(block) ? '⇹' : '◎'} ${block.name}${!isZoom(block) && block.mode === 'tracks' ? ' · по кольцам' : ''}`;
       const tw = ctx.measureText(label).width;
       const lx = Math.max(x + 3, x + w - tw - 9);
       ctx.fillStyle = 'rgba(10,11,15,0.8)';
@@ -760,11 +812,12 @@ export class Timeline {
     const ctx = this.context;
     const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
-    if (row.type === RING_EVENT_TYPE) {
+    if (row.type === RING_EVENT_TYPE || row.type === ZOOM_EVENT_TYPE) {
       // (the ring events the ring poses make: hollow — they belong to their blocks)
       ctx.strokeStyle = `hsl(${String(hue)} 70% 65%)`;
       ctx.lineWidth = 1.2;
       for (const event of this.editor.poseEvents()) {
+        if (event.type !== row.type) continue;
         const x = this.beatToX(event.beat);
         if (x < -10 || x > this.width + 10) continue;
         const cy = top + height / 2;
@@ -857,6 +910,24 @@ export class Timeline {
       ctx.fillStyle = 'rgba(255,255,255,0.12)';
       ctx.fillRect(this.beatToX(beat), top, 1, height);
     }
+  }
+
+  /** What can be done with the picked stretch of the song. */
+  private rangeMenu(x: number, y: number) {
+    const editor = this.editor;
+    const range = editor.songRange;
+    if (range === null) return;
+    const start = Math.min(range.start, range.end);
+    const end = Math.max(range.start, range.end);
+    const seconds = editor.beatToSeconds(end) - editor.beatToSeconds(start);
+    showMenu(x, y, [
+      { label: `Выделено: ${seconds.toFixed(2)} с`, heading: true },
+      { label: 'Сделать превью песни', hint: 'Info.dat — сразу', action: () => void editor.previewFromRange() },
+      { label: 'Проиграть по кругу', hint: 'Esc — стоп', action: () => editor.startTrial({ clips: [], raw: [], start: start + 0.5, end: end - 1 }) },
+      { label: 'Снять выделение', hint: 'Esc', action: () => editor.setSongRange(null) },
+      null,
+      { label: 'Настройки спектрограммы…', action: () => this.openSpectroPanel(x, y - 200) },
+    ]);
   }
 
   /** The spectrogram's settings: height, frequencies, level floor, contrast. */
@@ -1196,8 +1267,8 @@ export class Timeline {
         ]);
       });
     } else if (row.kind === 'poses') {
-      item.textContent = `◎ ${row.label}`;
-      item.title = 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
+      item.textContent = `${row.ring === 'zoom' ? '⇹' : '◎'} ${row.label}`;
+      item.title = row.ring === 'zoom' ? 'Зум колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор расстояний между кольцами' : 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
     } else {
       item.textContent = row.label;
     }
@@ -1282,7 +1353,16 @@ export class Timeline {
       const rect = canvas.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     };
-    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    canvas.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      if (this.editor.project === null) return;
+      const { x, y } = local(event);
+      if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) return;
+      const beat = this.xToBeat(x);
+      const range = this.editor.songRange;
+      if (range !== null && beat >= Math.min(range.start, range.end) && beat <= Math.max(range.start, range.end)) this.rangeMenu(event.clientX, event.clientY);
+      else if (y >= this.rowsBottom) this.openSpectroPanel(event.clientX, event.clientY - 200);
+    });
     canvas.addEventListener('wheel', (event) => {
       event.preventDefault();
       const { x, y } = local(event);
@@ -1327,8 +1407,14 @@ export class Timeline {
         this.needsDraw = true;
         return;
       }
-      if (y >= this.rowsBottom && y < this.navTop && event.button === 2) {
-        this.openSpectroPanel(event.clientX, event.clientY - 200);
+      const onSong = y < RULER_H || (y >= this.rowsBottom && y < this.navTop);
+      // (right click there: a menu — opened on contextmenu, below, or this click would close it)
+      if (onSong && event.button === 2) return;
+      if (onSong && event.shiftKey && event.button === 0) {
+        // Shift + drag over the ruler or the spectrogram: a stretch of the song
+        const from = this.editor.snapBeat(Math.max(0, beat));
+        this.drag = { kind: 'range', from };
+        this.editor.setSongRange({ start: from, end: from });
         return;
       }
       if (y >= this.navTop) {
@@ -1465,7 +1551,9 @@ export class Timeline {
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
-      if (drag.kind === 'spectro') {
+      if (drag.kind === 'range') {
+        this.editor.setSongRange({ start: drag.from, end: event.altKey ? Math.max(0, beat) : this.editor.snapBeat(Math.max(0, beat)) });
+      } else if (drag.kind === 'spectro') {
         const height = Math.round(drag.height - (y - drag.grabY));
         this.setLook({ height: height < 16 ? 0 : Math.min(this.height - NAV_H - RULER_H - 60, height) });
       } else if (drag.kind === 'rowZoom') {
@@ -1595,11 +1683,16 @@ export class Timeline {
       this.drag = null;
       if (drag === null) return;
       if (drag.kind === 'spectro') this.renderHeaders(true);
+      if (drag.kind === 'range') {
+        const range = this.editor.songRange;
+        if (range !== null && Math.abs(range.end - range.start) * this.pxPerBeat < 3) this.editor.setSongRange(null);
+        else if (range !== null) this.editor.setStatus(`Выделено: доли ${String(round3(Math.min(range.start, range.end)))}–${String(round3(Math.max(range.start, range.end)))}. ПКМ по выделению — превью песни, проиграть по кругу`);
+      }
       if (drag.kind === 'create') {
         const row = drag.row;
         if (row.kind === 'poses') {
           const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
-          const block = newRingBlock(this.editor.ringInfo[0]?.name ?? '', 'event', a, Math.max(b, a + 1));
+          const block = this.newBlockFor(row, a, Math.max(b, a + 1));
           this.editor.addRingBlock(block);
           this.editor.ringEditorHook?.(block.id);
           this.needsDraw = true;
@@ -1632,7 +1725,7 @@ export class Timeline {
           if (row.kind === 'raw') {
             for (const event of this.visibleRaw(row.type)) if (event.beat >= beats[0]! && event.beat <= beats[1]!) picked.push(event.id);
           } else if (row.kind === 'poses') {
-            for (const block of this.editor.ringBlocks) if (block.end > beats[0]! && block.start < beats[1]!) picked.push(block.id);
+            for (const block of this.blocksOf(row)) if (block.end > beats[0]! && block.start < beats[1]!) picked.push(block.id);
           } else for (const { clip, role } of this.clipsOf(row)) if (role !== 'background' && clip.end > beats[0]! && clip.start < beats[1]!) picked.push(clip.id);
         }
         this.editor.select(picked, drag.additive ? 'add' : 'replace');
@@ -1738,3 +1831,5 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 function hitId(hit: { clip: LightClip } | { raw: RawEvent } | { block: RingBlock }) {
   return 'clip' in hit ? hit.clip.id : 'block' in hit ? hit.block.id : hit.raw.id;
 }
+
+const round3 = (value: number) => Math.round(value * 1000) / 1000;

@@ -2,7 +2,7 @@ import type { Editor } from './editor';
 import { button, check, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { ringSystemName } from './library';
 import { newId } from './model';
-import { EASINGS, EVENT_SHAPES, newPose, poseAngles, ringDelay, SHAPES, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay } from './rings';
+import { EASINGS, EVENT_SHAPES, isZoom, newPose, poseAngles, ringDelay, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -12,6 +12,9 @@ import { EASINGS, EVENT_SHAPES, newPose, poseAngles, ringDelay, SHAPES, type Pos
  * picked pose — its shape (an angle per ring), how the rings turn to it. Right: the rings seen down
  * the tunnel, and a bar per ring — dragged, it sets that ring's angle by hand (rings on their own
  * Chroma tracks only: ring events can't turn the rings one by one).
+ *
+ * A zoom block is edited the same way: each pose a spacing between the rings, the rings seen from the
+ * side.
  */
 
 const WAYS: [TurnWay, string][] = [
@@ -53,6 +56,17 @@ export class RingEditor {
 
   private system(block: RingBlock): RingSystemInfo | undefined {
     return this.editor.ringInfo.find((system) => system.name === block.system) ?? this.editor.ringInfo[0];
+  }
+
+  private zoomSystem(block: RingBlock): ZoomSystemInfo | undefined {
+    return this.editor.zoomInfo.find((system) => system.name === block.system) ?? this.editor.zoomInfo[0];
+  }
+
+  /** How long the picked pose takes to be reached (after its own time). */
+  private reached(block: RingBlock, pose: RingPose) {
+    if (isZoom(block)) return pose.duration;
+    const rings = this.system(block)?.rings ?? 1;
+    return pose.duration + Math.max(ringDelay(pose, 0, rings), ringDelay(pose, rings - 1, rings));
   }
 
   open(id: string) {
@@ -170,9 +184,7 @@ export class RingEditor {
     const block = this.block();
     const pose = this.pose();
     if (block === undefined || pose === undefined || this.editor.previewExtra !== null || this.editor.isPlaying()) return;
-    const rings = this.system(block)?.rings ?? 1;
-    const reached = pose.duration + Math.max(ringDelay(pose, 0, rings), ringDelay(pose, rings - 1, rings));
-    this.editor.seek(block.start + pose.beat + reached + 0.05);
+    this.editor.seek(block.start + pose.beat + this.reached(block, pose) + 0.05);
   }
 
   // ----- rendering -------------------------------------------------------------------------------------
@@ -185,7 +197,7 @@ export class RingEditor {
     dock.replaceChildren(this.header(block));
     const body = document.createElement('div');
     body.className = 'gls-body ring-body';
-    body.append(this.laneColumn(block), this.poseColumn(block), this.viewColumn(block));
+    body.append(this.laneColumn(block), isZoom(block) ? this.zoomColumn(block) : this.poseColumn(block), isZoom(block) ? this.zoomView(block) : this.viewColumn(block));
     dock.append(body);
     [...dock.querySelectorAll<HTMLElement>('.gls-col')].forEach((col, index) => (col.scrollTop = scroll[index] ?? 0));
   }
@@ -195,9 +207,23 @@ export class RingEditor {
     head.className = 'gls-head';
     const title = document.createElement('span');
     title.className = 'gls-title';
-    title.textContent = 'Позы колец';
+    title.textContent = isZoom(block) ? 'Зум колец' : 'Позы колец';
     const name = textInput(block.name, (value) => this.change((item) => (item.name = value || item.name)));
     name.className = 'gls-name';
+    const length = labeled('Длина, долей', numberInput(block.end - block.start, 0.25, (value) => this.change((item) => (item.end = item.start + Math.max(0.25, value)))));
+    const play = button(this.editor.previewExtra !== null ? '■ Стоп' : '▶ Проиграть', 'Проиграть блок по кругу в окне просмотра (Пробел)', () => this.play());
+    const done = button('Готово', 'Закрыть (Esc)', () => this.close());
+    done.classList.add('primary');
+    const spacer = document.createElement('span');
+    spacer.className = 'gls-dim';
+    if (isZoom(block)) {
+      const zooms = this.editor.zoomInfo;
+      const choices: [string, string][] = zooms.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]);
+      if (zooms.length > 1) choices.unshift(['', 'Все системы колец']);
+      const current = block.system === '' && zooms.length === 1 ? zooms[0]!.name : block.system;
+      head.append(title, name, labeled('Кольца', select(choices, current, (value) => this.change((item) => (item.system = zooms.length === 1 ? '' : value)))), spacer, length, play, done);
+      return head;
+    }
     const systems = this.editor.ringInfo;
     const options: [string, string][] = systems.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]);
     if (block.mode === 'event' && systems.length > 1) options.unshift(['', 'Все системы колец']);
@@ -210,12 +236,6 @@ export class RingEditor {
     );
     mode.title = 'Событиями колец — обычные события вращения (Chroma): кольца стоят спиралью. Каждое кольцо отдельно — у каждого кольца свой трек Chroma и AnimateTrack: любая форма';
     mode.style.marginBottom = '0';
-    const length = labeled('Длина, долей', numberInput(block.end - block.start, 0.25, (value) => this.change((item) => (item.end = item.start + Math.max(0.25, value)))));
-    const play = button(this.editor.previewExtra !== null ? '■ Стоп' : '▶ Проиграть', 'Проиграть блок по кругу в окне просмотра (Пробел)', () => this.play());
-    const done = button('Готово', 'Закрыть (Esc)', () => this.close());
-    done.classList.add('primary');
-    const spacer = document.createElement('span');
-    spacer.className = 'gls-dim';
     head.append(title, name, system, mode, spacer, length, play, done);
     return head;
   }
@@ -240,10 +260,10 @@ export class RingEditor {
       row.className = `gls-box${pose.id === this.poseId ? ' active' : ''}`;
       const label = document.createElement('div');
       label.className = 'gls-box-name';
-      label.textContent = `${String(index + 1)}. ${SHAPES.find(([shape]) => shape === shapeOf(pose, block))?.[1] ?? ''} · ${String(round(pose.angle))}°${pose.shape === 'spiral' ? ` +${String(round(pose.step))}°` : ''}`;
+      label.textContent = isZoom(block) ? `${String(index + 1)}. Расстояние ${String(round(pose.step))}` : `${String(index + 1)}. ${SHAPES.find(([shape]) => shape === shapeOf(pose, block))?.[1] ?? ''} · ${String(round(pose.angle))}°${pose.shape === 'spiral' ? ` +${String(round(pose.step))}°` : ''}`;
       const info = document.createElement('div');
       info.className = 'gls-dim';
-      info.textContent = `доля ${String(round(pose.beat))} · поворот ${String(round(pose.duration))}${pose.delay > 0 ? ` · волна ${String(round(pose.delay))}` : ''}`;
+      info.textContent = isZoom(block) ? `доля ${String(round(pose.beat))} · переход ${String(round(pose.duration))}` : `доля ${String(round(pose.beat))} · поворот ${String(round(pose.duration))}${pose.delay > 0 ? ` · волна ${String(round(pose.delay))}` : ''}`;
       row.append(label, info);
       row.addEventListener('click', () => {
         this.poseId = pose.id;
@@ -339,6 +359,102 @@ export class RingEditor {
     return col;
   }
 
+  /** A zoom pose: the spacing, how long the rings take to get there. */
+  private zoomColumn(block: RingBlock) {
+    const col = document.createElement('div');
+    col.className = 'gls-col';
+    const pose = this.pose();
+    const system = this.zoomSystem(block);
+    if (pose === undefined) {
+      col.append(heading('Поза'), note('Выберите позу на дорожке или добавьте новую кликом.'));
+      return col;
+    }
+    col.append(heading('Поза'));
+    col.append(labeled('Доля (от начала блока)', numberInput(pose.beat, this.editor.snap || 0.25, (value) => this.changePose((item) => (item.beat = Math.max(0, value))))));
+    col.append(labeled('Расстояние между кольцами', numberInput(pose.step, 0.1, (value) => this.changePose((item) => (item.step = round(value))))));
+    if (system !== undefined) {
+      const quick = document.createElement('div');
+      quick.className = 'gls-swatches';
+      const presets: [string, string, number][] = [
+        ['Сжать', 'Как сжимает обычное событие зума', system.position.minPositionStep],
+        ['Как в начале', 'Расстояние, с которым кольца стоят в начале песни', system.initialStep],
+        ['Растянуть', 'Как растягивает обычное событие зума', system.position.maxPositionStep],
+        ['Вплотную', 'Все кольца в одном месте', 0],
+      ];
+      for (const [label, title, value] of presets) quick.append(button(label, `${title}: ${String(round(value))}`, () => this.changePose((item) => (item.step = round(value)))));
+      quick.append(button('×½', 'Вдвое ближе', () => this.changePose((item) => (item.step = round(item.step / 2)))), button('×2', 'Вдвое дальше', () => this.changePose((item) => (item.step = round(item.step * 2)))));
+      col.append(quick);
+    }
+    col.append(heading('Переход'));
+    col.append(labeled('Время перехода, долей (0 — сразу)', numberInput(pose.duration, 0.25, (value) => this.changePose((item) => (item.duration = Math.max(0, value))))));
+    col.append(note('Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная. Кольца доезжают плавно, с торможением; время перехода задаёт скорость.'));
+    col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
+    return col;
+  }
+
+  /** The rings from the side: where each stands at the picked pose, faint — at the one before. */
+  private zoomView(block: RingBlock) {
+    const col = document.createElement('div');
+    col.className = 'gls-col ring-view';
+    col.append(heading('Кольца сбоку'));
+    const system = this.zoomSystem(block);
+    const pose = this.pose();
+    if (system === undefined) {
+      col.append(note('В этом окружении кольца не приближаются и не отдаляются.'));
+      return col;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.className = 'ring-side';
+    canvas.title = 'Кольца сбоку: слева — платформа, правее — дальше в тоннель';
+    col.append(canvas);
+    col.append(note('Слева — платформа. Яркие черты — где кольца встанут, бледные — где стояли на прошлой позе (или в начале песни).'));
+    if (pose !== undefined) {
+      const before = [...block.poses].filter((item) => item.beat < pose.beat).sort((a, b) => b.beat - a.beat)[0];
+      requestAnimationFrame(() => this.drawSide(canvas, system, pose.step, before?.step ?? system.initialStep));
+    }
+    return col;
+  }
+
+  private drawSide(canvas: HTMLCanvasElement, system: ZoomSystemInfo, step: number, previous: number) {
+    if (!canvas.isConnected || canvas.clientWidth === 0) return;
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(canvas.clientWidth * ratio);
+    canvas.height = Math.round(canvas.clientHeight * ratio);
+    const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    ctx.fillStyle = '#0c0d11';
+    ctx.fillRect(0, 0, width, height);
+    const now = zoomPositions(system, step);
+    const then = zoomPositions(system, previous);
+    const far = Math.max(1, ...now, ...then, ...zoomPositions(system, system.initialStep));
+    const left = 30;
+    const toX = (z: number) => left + (z / far) * (width - left - 16);
+    // the scale
+    ctx.font = '10px system-ui, sans-serif';
+    const tick = far > 200 ? 50 : far > 80 ? 20 : far > 30 ? 10 : 5;
+    for (let z = 0; z <= far; z += tick) {
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(toX(z), 16, 1, height - 30);
+      ctx.fillStyle = '#7d8394';
+      ctx.fillText(String(z), toX(z) + 2, height - 4);
+    }
+    ctx.fillStyle = '#c9cdd8';
+    ctx.fillRect(8, height / 2 - 10, 10, 20);
+    const draw = (positions: number[], style: string, size: number) => {
+      ctx.fillStyle = style;
+      positions.forEach((z, i) => {
+        const h = (height - 40) * size * (1 - (i / Math.max(1, positions.length)) * 0.35);
+        ctx.fillRect(toX(z) - 1, height / 2 - h / 2, 2, h);
+      });
+    };
+    draw(then, 'rgba(127,212,255,0.25)', 0.8);
+    draw(now, '#7fd4ff', 1);
+    ctx.fillStyle = '#c9cdd8';
+    ctx.fillText(`Расстояние ${String(round(step))} · кольца до ${String(round(Math.max(...now)))}`, left, 12);
+  }
+
   private deletePose() {
     const id = this.poseId;
     const block = this.block();
@@ -379,14 +495,23 @@ export class RingEditor {
         ctx.fillText(String(Math.round(beat)), g.toX(beat) + 2, 10);
       }
     }
-    const rings = this.system(block)?.rings ?? 1;
     const cy = g.height / 2 + 6;
+    const widest = Math.max(1e-3, ...block.poses.map((pose) => Math.abs(pose.step)));
     for (const pose of [...block.poses].sort((a, b) => a.beat - b.beat)) {
       const x = g.toX(pose.beat);
-      const span = (pose.duration + Math.max(ringDelay(pose, 0, rings), ringDelay(pose, rings - 1, rings))) * ((g.width - 24) / g.length);
-      ctx.fillStyle = 'rgba(183,140,255,0.25)';
+      const span = this.reached(block, pose) * ((g.width - 24) / g.length);
+      ctx.fillStyle = isZoom(block) ? 'rgba(120,210,255,0.25)' : 'rgba(183,140,255,0.25)';
       ctx.fillRect(x, cy - 2, span, 4);
       const selected = pose.id === this.poseId;
+      if (isZoom(block)) {
+        // (bars a pose's spacing apart)
+        const gap = 2 + (Math.abs(pose.step) / widest) * 6;
+        ctx.fillStyle = selected ? '#ffffff' : '#7fd4ff';
+        for (let k = 0; k < 4; k++) ctx.fillRect(x - 1 + k * gap, cy - 9, selected ? 2 : 1.5, 18);
+        ctx.fillStyle = '#c9cdd8';
+        ctx.fillText(String(round(pose.step)), x + 4 * gap + 2, cy + 20);
+        continue;
+      }
       ctx.strokeStyle = selected ? '#ffffff' : '#b78cff';
       ctx.lineWidth = selected ? 2.5 : 1.5;
       ctx.beginPath();
@@ -465,7 +590,7 @@ export class RingEditor {
       // a new pose here: like the one before it
       const beat = Math.min(g.length, snap(g.toBeat(x)));
       const before = [...block.poses].filter((pose) => pose.beat <= beat).sort((a, b) => b.beat - a.beat)[0];
-      const pose = before === undefined ? newPose(beat) : { ...structuredClone(before), id: newId('p'), beat };
+      const pose = before === undefined ? newPose(beat, isZoom(block) ? { step: round(this.zoomSystem(block)?.initialStep ?? 2) } : {}) : { ...structuredClone(before), id: newId('p'), beat };
       this.poseId = pose.id;
       this.change((item) => item.poses.push(pose));
     });
