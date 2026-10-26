@@ -62,5 +62,8 @@ export function nodeFor(data: EnvironmentObjectData) {
   node.quaternion.fromArray(data.rotation);
   node.scale.fromArray(data.scale);
   node.visible = data.active;
+  // (taken away for good — by the environment or the map's Chroma environment — unlike a light that's
+  // only off: the editor leaves its lights out)
+  if (!data.active) node.userData.inactive = true;
   return node;
 }

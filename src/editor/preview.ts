@@ -1,5 +1,6 @@
 import type { InfoColorScheme } from '../engine/core/beatmap/info';
 import { createDifficulty, type BasicEvent, type BpmEvent } from '../engine/core/beatmap/types';
+import type { NoodleBeatmapData } from '../engine/core/noodle-data';
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
 import type { ChromaEnvironmentData } from '../engine/core/chroma-environment';
 import type { ColorScheme } from '../engine/core/colors';
@@ -56,6 +57,10 @@ export class Preview {
   }
 
   /** The ring systems (big / small rings…). */
+  environmentData() {
+    return this.view.environmentData();
+  }
+
   ringSystems() {
     return this.view.ringSystems();
   }
@@ -69,11 +74,19 @@ export class Preview {
     this.view.setBeatSource(source);
   }
 
+  /** The map's Noodle data the environment needs (its tracks' parents: AssignTrackParent). */
+  private noodle: NoodleBeatmapData | null = null;
+
+  setNoodle(noodle: NoodleBeatmapData | null) {
+    this.noodle = noodle;
+  }
+
   /** The lightshow as events (jsonTime beats). */
   setEvents(events: readonly OutEvent[]) {
     const toSong = createBpmConverter(this.bpmEvents, this.songBpm);
     const difficulty = createDifficulty('3.3.0');
     difficulty.bpmEvents = this.bpmEvents;
+    if (this.noodle !== null) difficulty.noodle = this.noodle;
     difficulty.events = events.map((event): BasicEvent => {
       const customData: Record<string, unknown> = { ...(event.customData ?? {}) };
       if (event.color !== undefined) customData.color = event.color;

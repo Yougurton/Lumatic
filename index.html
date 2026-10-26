@@ -709,6 +709,106 @@
         gap: 8px;
         margin-top: 14px;
       }
+      .env-dialog {
+        width: min(900px, 96vw);
+        max-height: 92vh;
+        display: flex;
+        flex-direction: column;
+      }
+      .env-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .env-tabs button.active {
+        border-color: var(--accent, #6c8cff);
+        color: #fff;
+      }
+      .env-page {
+        overflow: auto;
+        min-height: 0;
+      }
+      .env-note {
+        margin-bottom: 10px;
+      }
+      .env-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 10px;
+      }
+      .env-card {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #15161c;
+      }
+      .env-card.active {
+        border-color: #6c8cff;
+        box-shadow: 0 0 0 1px #6c8cff inset;
+      }
+      .env-card img {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        border-radius: 4px;
+        background: #000;
+      }
+      .env-card-name {
+        color: #fff;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .env-card-text {
+        flex: 1;
+      }
+      .env-card-lights {
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .env-card-lights summary {
+        cursor: pointer;
+      }
+      .env-license {
+        white-space: pre-wrap;
+        font-size: 11px;
+        max-height: 160px;
+        overflow: auto;
+      }
+      .env-parts {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 4px 12px;
+        font-size: 13px;
+      }
+      .env-subtitle {
+        color: #fff;
+        font-weight: 600;
+        margin: 14px 0 6px;
+      }
+      .env-ring {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+        font-size: 13px;
+      }
+      .env-ring-name {
+        min-width: 200px;
+      }
+      .env-ring label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .env-ring input[type='number'] {
+        width: 70px !important;
+      }
       .nm-dialog {
         width: min(640px, 94vw);
       }
@@ -1074,6 +1174,7 @@
         <select id="difficulty" title="Сложность" disabled></select>
         <button id="save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
         <button id="settings" title="Свойства карты: названия, BPM, начало песни" disabled>Свойства</button>
+        <button id="environment" title="Окружение карты: готовые окружения, лишние детали, размер колец и их света" disabled>Окружение</button>
         <span class="sep"></span>
         <button id="undo" title="Отменить (Ctrl+Z)">↶</button>
         <button id="redo" title="Вернуть (Ctrl+Y)">↷</button>

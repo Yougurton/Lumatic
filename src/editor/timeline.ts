@@ -769,7 +769,9 @@ export class Timeline {
   private newBlockFor(row: Extract<Row, { kind: 'poses' }>, start: number, end: number) {
     const editor = this.editor;
     if (row.ring === 'zoom') return newZoomBlock(editor.zoomInfo[0], start, end, editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '');
-    return newRingBlock(editor.ringInfo[0]?.name ?? '', 'event', start, end);
+    // (rings drawn from geometry only turn ring by ring)
+    const system = editor.ringInfo.find((item) => editor.geometryRings.has(item.name))?.name ?? editor.ringInfo[0]?.name ?? '';
+    return newRingBlock(system, editor.geometryRings.has(system) ? 'tracks' : 'event', start, end);
   }
 
   /** A ring pose block: its poses as small rings at their times (a line out to where the turn ends);

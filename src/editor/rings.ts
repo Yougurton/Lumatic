@@ -322,17 +322,19 @@ export function trackedSystems(blocks: readonly RingBlock[]) {
 const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
 /**
- * `firstRing`: where the game puts the rings for this player — the game spawns them at the root of
+ * `geometry`: the systems drawn from Chroma geometry (their rings on their tracks already). `firstRing`:
+ * where the game puts the rings for this player — the game spawns them at the root of
  * its GameCore scene and Chroma finds them by their place there ("GameCore.[509]SmallTrackLaneRing
  * (Clone)"), which hangs on the game's version and mods; the environment data's places are moved so
  * its first ring is there (undefined: as the data has them).
  */
-export function ringEnhancements(blocks: readonly RingBlock[], systems: readonly RingSystemInfo[], firstRing?: number): RingEnhancement[] {
+export function ringEnhancements(blocks: readonly RingBlock[], systems: readonly RingSystemInfo[], firstRing?: number, geometry: ReadonlySet<string> = new Set()): RingEnhancement[] {
   const out: RingEnhancement[] = [];
   const shift = firstRing === undefined ? 0 : firstRing - (dataFirstRing(systems) ?? firstRing);
   for (const name of trackedSystems(blocks)) {
     const system = systems.find((item) => item.name === name);
-    if (system === undefined) continue;
+    // (rings drawn from geometry are on their tracks already)
+    if (system === undefined || geometry.has(name)) continue;
     system.ringIds.forEach((ids, index) => {
       if (ids.length === 0) return;
       const moved = ids.map((id) => id.replace(GAME_CORE_RING, (_, place: string) => `GameCore.[${String(Number(place) + shift)}]`));

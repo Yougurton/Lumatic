@@ -5,6 +5,7 @@ import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import type { OutEvent } from './bake';
 import { newId, type Bookmark, type Project } from './model';
 import { chromaCustomData, TRACK_PREFIX, type RingAnimation, type RingEnhancement } from './rings';
+import { replaceFragment, type EnvironmentFragment } from './environment-mods';
 import type { MapFolder } from './platform';
 
 /**
@@ -128,9 +129,21 @@ function writeBookmarks(root: Record<string, unknown>, bookmarks: readonly Bookm
   else delete root[customKey];
 }
 
-export function writeDifficulty(original: string, events: readonly OutEvent[], rings?: { enhancements: readonly RingEnhancement[]; animations: readonly RingAnimation[] }, bookmarks?: readonly Bookmark[]): string {
+export function writeDifficulty(
+  original: string,
+  events: readonly OutEvent[],
+  rings?: { enhancements: readonly RingEnhancement[]; animations: readonly RingAnimation[] },
+  bookmarks?: readonly Bookmark[],
+  environment?: { previous: EnvironmentFragment | undefined; next: EnvironmentFragment },
+): string {
   const version = difficultyVersion(original);
   const root = JSON.parse(original) as Record<string, unknown>;
+  if (environment !== undefined && version !== '4') {
+    const key = version === '2' ? '_customData' : 'customData';
+    const custom = replaceFragment((typeof root[key] === 'object' && root[key] !== null ? root[key] : {}) as Record<string, unknown>, environment.previous, environment.next, version === '2');
+    if (Object.keys(custom).length > 0) root[key] = custom;
+    else delete root[key];
+  }
   if (bookmarks !== undefined && version !== '4') writeBookmarks(root, bookmarks, version === '2');
   if (rings !== undefined && version !== '4') writeRingChroma(root, rings.enhancements, rings.animations, version === '2');
   const sorted = [...events].sort((a, b) => a.beat - b.beat);
@@ -175,6 +188,53 @@ function writeRingChroma(root: Record<string, unknown>, enhancements: readonly R
   else delete custom[eventsKey];
   if (Object.keys(custom).length > 0) root[customKey] = custom;
   else delete root[customKey];
+}
+
+/**
+ * Info.dat with the difficulty's required mods: `add` put in (and taken from its suggestions), `remove`
+ * (the ones put in before and not needed any more) taken out.
+ */
+export function setRequirements(infoText: string, difficulty: string, add: readonly string[], remove: readonly string[]): string {
+  const info = JSON.parse(infoText) as Record<string, unknown>;
+  const update = (custom: Record<string, unknown>, requirementsKey: string, suggestionsKey: string) => {
+    let requirements = Array.isArray(custom[requirementsKey]) ? (custom[requirementsKey] as string[]) : [];
+    let suggestions = Array.isArray(custom[suggestionsKey]) ? (custom[suggestionsKey] as string[]) : [];
+    requirements = [...requirements.filter((mod) => !remove.includes(mod) || add.includes(mod)), ...add.filter((mod) => !requirements.includes(mod))];
+    suggestions = suggestions.filter((mod) => !add.includes(mod));
+    if (requirements.length > 0) custom[requirementsKey] = requirements;
+    else delete custom[requirementsKey];
+    if (suggestions.length > 0 || custom[suggestionsKey] !== undefined) custom[suggestionsKey] = suggestions;
+  };
+  const sets = (info._difficultyBeatmapSets ?? []) as { _difficultyBeatmaps?: Record<string, unknown>[] }[];
+  for (const set of sets) {
+    for (const entry of set._difficultyBeatmaps ?? []) {
+      if (entry._beatmapFilename !== difficulty) continue;
+      const custom = (entry._customData ?? {}) as Record<string, unknown>;
+      update(custom, '_requirements', '_suggestions');
+      entry._customData = custom;
+    }
+  }
+  for (const entry of (info.difficultyBeatmaps ?? []) as Record<string, unknown>[]) {
+    if (entry.beatmapDataFilename !== difficulty) continue;
+    const custom = (entry.customData ?? {}) as Record<string, unknown>;
+    update(custom, 'requirements', 'suggestions');
+    entry.customData = custom;
+  }
+  return JSON.stringify(info, null, 2);
+}
+
+/** The mods Info.dat says the difficulty requires. */
+export function requirementsOf(infoText: string, difficulty: string): string[] {
+  const info = JSON.parse(infoText) as Record<string, unknown>;
+  for (const set of (info._difficultyBeatmapSets ?? []) as { _difficultyBeatmaps?: Record<string, unknown>[] }[]) {
+    for (const entry of set._difficultyBeatmaps ?? []) {
+      if (entry._beatmapFilename === difficulty) return ((entry._customData as Record<string, unknown> | undefined)?._requirements as string[] | undefined) ?? [];
+    }
+  }
+  for (const entry of (info.difficultyBeatmaps ?? []) as Record<string, unknown>[]) {
+    if (entry.beatmapDataFilename === difficulty) return ((entry.customData as Record<string, unknown> | undefined)?.requirements as string[] | undefined) ?? [];
+  }
+  return [];
 }
 
 /** Info.dat with Chroma suggested for the difficulty (its lights use colours and light IDs). */

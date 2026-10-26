@@ -1,3 +1,4 @@
+import type { EnvironmentFragment, EnvironmentMods } from './environment-mods';
 import type { Effect } from './effects';
 import type { RingBlock } from './rings';
 
@@ -117,6 +118,12 @@ export interface Project {
   /** Light groups of the environment whose row the user took off the timeline (event type → the place
    *  among the top rows it had, for when it's brought back). */
   removedTypes?: Record<string, number>;
+  /** Changes to the environment (written into the difficulty's custom data). */
+  environmentMods?: EnvironmentMods;
+  /** What they wrote last time (taken out again before they're written anew). */
+  writtenEnvironment?: EnvironmentFragment;
+  /** Mods put into the difficulty's requirements for them (taken out when not needed any more). */
+  addedRequirements?: string[];
 }
 
 /** A named place in the song (Beat Saber editors' bookmarks: v2 `_bookmarks`, v3 `bookmarks`). */

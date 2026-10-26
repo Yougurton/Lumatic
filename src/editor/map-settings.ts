@@ -94,6 +94,11 @@ function writeInfo(text: string, fields: InfoFields, place: EnvironmentPlace): s
   return JSON.stringify(info, null, 2);
 }
 
+/** Info.dat with the difficulty's environment set (`allDirections`: a 360°/90° difficulty). */
+export function setInfoEnvironment(text: string, environment: string, file: string, allDirections: boolean): string {
+  return writeInfo(text, { ...readInfo(text, environment), environment }, { file, allDirections });
+}
+
 /** Info.dat with the song list's preview set: from `start` for `duration` seconds of the song. */
 export function writePreview(text: string, start: number, duration: number): string {
   const info = JSON.parse(text) as Record<string, unknown>;

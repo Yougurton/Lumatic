@@ -1,11 +1,16 @@
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
 import type { BeatmapCustomData, BpmEvent } from '../engine/core/beatmap/types';
+import { parseNoodleBeatmap, type NoodleBeatmapData } from '../engine/core/noodle-data';
 import { EMPTY_CHROMA_ENVIRONMENT, parseV3ChromaEnvironment, type ChromaEnvironmentData } from '../engine/core/chroma-environment';
 import { createAudioClock, createSilentClock, type SongClock } from '../engine/core/clock/song-clock';
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import { bakeLights, rawEvents, type OutEvent, type SchemeColors } from './bake';
 import { importEvents } from './import';
-import { difficultyFile, loadMap, loadProject, projectFileName, readBookmarks, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
+import { difficultyFile, loadMap, loadProject, projectFileName, readBookmarks, requirementsOf, setRequirements, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
+import { EMPTY_FRAGMENT, fragmentRequirements, geometrySystems, hasMods, isEmptyFragment, loadPreset, modsFragment, ringSystemParts, type EnvironmentFragment, type EnvironmentMods } from './environment-mods';
+import { setInfoEnvironment } from './map-settings';
+import { loadEnvironmentData } from '../engine/renderer/environment/environment-worker-client';
+import type { EnvironmentData } from '../engine/renderer/environment/types';
 import {
   clipLights,
   clipPriority,
@@ -36,7 +41,7 @@ import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
-import { chromaCustomData, cloneRingBlock, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
+import { chromaCustomData, cloneRingBlock, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -295,6 +300,9 @@ export class Editor {
     this.preview.setTiming(this.songBpm, this.bpmEvents, row.colorScheme);
     this.mapChroma = difficulty.chromaEnvironment;
     this.previewChroma = difficulty.chromaEnvironment;
+    this.mapNoodle = difficulty.noodle;
+    this.ringParentKey = '';
+    this.preview.setNoodle(difficulty.noodle);
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);
@@ -332,6 +340,7 @@ export class Editor {
     this.undoStack = [];
     this.redoStack = [];
     this.dirty = false;
+    await this.findGeometryRings();
     this.buildRows();
     this.rebuildPreview(true);
     this.setStatus(`${map.parsed.mapMeta.title} — ${row.label} (${environment})`);
@@ -415,7 +424,20 @@ export class Editor {
    *  (`forGame`: the rings found where the game puts them for this player — gameFirstRing). */
   ringChroma(forGame = false): { enhancements: RingEnhancement[]; animations: RingAnimation[] } {
     const first = forGame ? this.gameFirstRing : null;
-    return { enhancements: ringEnhancements(this.ringBlocks, this.ringInfo, first ?? undefined), animations: ringAnimations(this.ringBlocks, this.ringInfo) };
+    return { enhancements: ringEnhancements(this.ringBlocks, this.ringInfo, first ?? undefined, this.geometryRings), animations: ringAnimations(this.ringBlocks, this.ringInfo) };
+  }
+
+  /** The ring systems drawn from Chroma geometry (their names). */
+  geometryRings = new Set<string>();
+
+  private async findGeometryRings() {
+    const rings = new Set(geometrySystems(this.project?.environmentMods));
+    if (rings.size === 0) {
+      this.geometryRings = new Set();
+      return;
+    }
+    const source = await this.environmentSource().catch(() => null);
+    this.geometryRings = new Set(source === null ? [] : ringSystemParts(source).filter((system) => rings.has(system.ring)).map((system) => system.system));
   }
 
   /** Where the game spawns its first ring in its GameCore scene for this player (it hangs on the game's
@@ -440,7 +462,49 @@ export class Editor {
     this.dirty = this.dirty || this.ringBlocks.some((block) => block.mode === 'tracks');
   }
 
-  async save() {
+  private sourceEnvironment: { id: string; data: Promise<EnvironmentData> } | null = null;
+
+  /** The environment's own data (as the game has it: before the map's Chroma changes; `id`: another
+   *  environment than the difficulty's). */
+  environmentSource(id = this.row?.environmentId ?? 'DefaultEnvironment'): Promise<EnvironmentData> {
+    if (this.sourceEnvironment?.id !== id) this.sourceEnvironment = { id, data: loadEnvironmentData(id) };
+    return this.sourceEnvironment.data;
+  }
+
+  /** What the environment's changes write into the difficulty. */
+  async environmentFragment(mods = this.project?.environmentMods, environment?: string): Promise<EnvironmentFragment> {
+    if (!hasMods(mods)) return { ...EMPTY_FRAGMENT };
+    const preset = mods?.preset === undefined ? undefined : await loadPreset(mods.preset);
+    return modsFragment(mods, await this.environmentSource(environment).catch(() => null), preset);
+  }
+
+  /**
+   * The environment's changes set (`environment`: the map's environment changed too — a ready-made one
+   * is built on its own): saved, and the map opened again, the 3D view and the lights as they now are.
+   */
+  async setEnvironmentMods(mods: EnvironmentMods, environment?: string) {
+    const map = this.map;
+    const row = this.row;
+    const project = this.project;
+    if (map === null || row === null || project === null) return;
+    this.checkpoint();
+    project.environmentMods = hasMods(mods) ? mods : undefined;
+    this.dirty = true;
+    await this.save(environment);
+    if (environment !== undefined && environment !== row.environmentId) {
+      const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
+      const characteristic = row.infoDifficulty?.characteristic ?? 'Standard';
+      if (infoName !== undefined) await map.folder.writeText(infoName, setInfoEnvironment(await map.folder.readText(infoName), environment, difficultyFile(row), characteristic === '360Degree' || characteristic === '90Degree'));
+    }
+    const key = row.key;
+    await this.open(map.folder);
+    const again = this.difficulties().find((item) => item.key === key);
+    if (again !== undefined && again !== this.row) await this.openDifficulty(again);
+  }
+
+  /** `environment`: the environment the difficulty is about to get (the environment's changes are
+   *  written for it). */
+  async save(environment?: string) {
     const map = this.map;
     const row = this.row;
     const project = this.project;
@@ -448,13 +512,28 @@ export class Editor {
     const file = difficultyFile(row);
     const original = await map.folder.readText(file);
     const events = this.bake();
-    const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks);
+    // the environment's changes: the ones written before out, the ones now in
+    const mods = project.environmentMods;
+    const fragment = await this.environmentFragment(mods, environment);
+    const changes = hasMods(mods) || !isEmptyFragment(project.writtenEnvironment) ? { previous: project.writtenEnvironment, next: fragment } : undefined;
+    const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks, changes);
+    if (changes !== undefined) project.writtenEnvironment = isEmptyFragment(fragment) ? undefined : fragment;
     await map.folder.writeText(file, text);
-    await map.folder.writeText(projectFileName(file), JSON.stringify(project));
-    if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma(true).enhancements.length > 0) {
-      const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
-      if (infoName !== undefined) await map.folder.writeText(infoName, suggestChroma(await map.folder.readText(infoName), file));
+    const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
+    if (infoName !== undefined) {
+      let info = await map.folder.readText(infoName);
+      // (the mods the environment's changes need: required; the ones they needed before and put in, out)
+      const need = fragmentRequirements(mods);
+      const added = project.addedRequirements ?? [];
+      if (need.length > 0 || added.length > 0) {
+        const had = requirementsOf(info, file);
+        info = setRequirements(info, file, need, added.filter((mod) => !need.includes(mod)));
+        project.addedRequirements = need.filter((mod) => added.includes(mod) || !had.includes(mod));
+      }
+      if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma(true).enhancements.length > 0 || hasMods(mods)) info = suggestChroma(info, file);
+      await map.folder.writeText(infoName, info);
     }
+    await map.folder.writeText(projectFileName(file), JSON.stringify(project));
     await map.folder.refresh();
     this.dirty = false;
     this.setStatus(`Сохранено: ${file} (${String(events.length)} событий)`);
@@ -1757,6 +1836,7 @@ export class Editor {
     const row = this.row;
     if (row === null) return;
     const { enhancements, animations } = this.ringChroma();
+    if (this.geometryRings.size > 0) this.syncRingParents(animations);
     const enhancementKey = JSON.stringify(enhancements);
     const animationKey = JSON.stringify(animations);
     if (enhancementKey === this.ringEnhancementKey && animationKey === this.ringAnimationKey) return;
@@ -1785,6 +1865,26 @@ export class Editor {
       this.previewChroma.animations = merged;
       this.preview.view.refreshChromaAnimations();
     }
+  }
+
+  /** The map's Noodle data (as the file has it). */
+  private mapNoodle: NoodleBeatmapData | null = null;
+  private ringParentKey = '';
+
+  /** Rings drawn from geometry turn as Noodle parents: the 3D view's Noodle data with the ring poses'
+   *  turns as they are now (the file's — the poses saved before — out). */
+  private syncRingParents(animations: RingAnimation[]) {
+    const key = JSON.stringify(animations);
+    if (key === this.ringParentKey || this.mapNoodle === null) return;
+    this.ringParentKey = key;
+    const parsed = parseV3ChromaEnvironment(chromaCustomData([], animations, false) as BeatmapCustomData);
+    const ours = parseNoodleBeatmap(parsed, 3).trackEvents.map((event, index) => {
+      const songBpmTime = this.toSong(event.jsonTime);
+      return { ...event, order: 1e6 + index, songBpmTime, durationSongBpmTime: this.toSong(event.jsonTime + event.duration) - songBpmTime };
+    });
+    const base = this.mapNoodle;
+    const trackEvents = [...base.trackEvents.filter((event) => !event.tracks.some((track) => track.startsWith(TRACK_PREFIX))), ...ours].sort((a, b) => a.songBpmTime - b.songBpmTime);
+    this.preview.setNoodle({ ...base, trackEvents });
   }
 
   // ----- trying things out ----------------------------------------------------------------------------

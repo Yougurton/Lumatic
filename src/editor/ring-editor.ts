@@ -273,7 +273,15 @@ export class RingEditor {
       list.append(row);
     });
     col.append(list);
-    if (!isZoom(block) && block.mode === 'tracks') col.append(this.gameRings());
+    if (!isZoom(block) && this.editor.geometryRings.has(block.system)) {
+      col.append(
+        note(
+          block.mode === 'tracks'
+            ? 'Эти кольца построены из геометрии Chroma (Окружение → Детали и кольца): у каждого свой трек, позы работают у всех игроков и в любой версии игры.'
+            : 'Эти кольца построены из геометрии Chroma: события вращения их не поворачивают — включите «Каждое кольцо отдельно».',
+        ),
+      );
+    } else if (!isZoom(block) && block.mode === 'tracks') col.append(this.gameRings());
     return col;
   }
 

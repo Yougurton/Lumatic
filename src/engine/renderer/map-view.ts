@@ -17,6 +17,7 @@ import { HeckBaseProviderRuntime } from '../core/animation/base-provider';
 import { songBpmTimeToSeconds } from '../core/beatmap/bpm';
 import type { InfoColorScheme } from '../core/beatmap/info';
 import type { ChromaEnvironmentData } from '../core/chroma-environment';
+import type { EnvironmentData } from './environment/types';
 import { DEFAULT_COLORS, resolveColorScheme, type ColorScheme, type Rgb } from '../core/colors';
 import { isForcedLightshowMode, type LightshowMode } from '../core/lighting/basic-light';
 import type { RingPositionConfig, RingRotationConfig } from '../core/lighting/ring-motion';
@@ -306,6 +307,11 @@ export class MapView implements RenderView {
   readonly overlayRoot = new Group();
   private overlayAdded = false;
 
+  /** The environment's data as loaded (with what the map's Chroma environment made of it). */
+  environmentData(): EnvironmentData | null {
+    return this.environment?.data ?? null;
+  }
+
   /** The environment's ring systems: their names (what Chroma's nameFilter picks), how many rings,
    *  whether ring events turn them / move them; the ring motion's settings and seed (for working
    *  out where rings stand), and per ring the ids Chroma's environment lookups find it by. */
@@ -373,7 +379,12 @@ export class MapView implements RenderView {
       return null;
     };
     const out = new Map<string, { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; count: number }>();
+    const inactive = (node: Object3D) => {
+      for (let current: Object3D | null = node; current !== null; current = current.parent) if (current.userData.inactive === true) return true;
+      return false;
+    };
     const add = (bindings: EnvironmentLightBinding[], node: Object3D, local: Vector3) => {
+      if (inactive(node)) return;
       const world = node.localToWorld(local.clone());
       const ring = ringOf(node);
       for (const binding of bindings) {
