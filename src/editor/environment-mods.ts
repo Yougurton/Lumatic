@@ -1,9 +1,10 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
+import catalog from './custom-environments.json';
 import { GEOMETRY_RING_MATERIALS, geometryRingFragment } from './geometry-rings';
 
 /**
  * Changes to the environment a map carries in its custom data (Chroma environment enhancements):
- * a ready-made environment (MadChase's, MIT — see public/chase-envs/LICENSE.txt), parts taken away, the
+ * a ready-made environment (MadChase's, Phøenix's, Lonely's — see public/custom-envs/licenses), parts taken away, the
  * rings and their lights made bigger. They're kept in the project and written into the difficulty as
  * one fragment; the fragment written before is taken out again first (told apart by being equal to
  * it), so the map's own entries stay as they are.
@@ -46,9 +47,14 @@ export function isEmptyFragment(fragment: EnvironmentFragment | undefined) {
 
 // ----- ready-made environments ------------------------------------------------------------------------
 
+/** A ready-made environment (made by scripts/custom-environments.py from its author's repository). */
 export interface Preset {
   id: string;
+  /** Whose collection it's from (PRESET_COLLECTIONS). */
+  collection: string;
   name: string;
+  /** Who made it. */
+  author: string;
   /** The game's environment it's built on. */
   environment: string;
   /** What it is. */
@@ -57,30 +63,36 @@ export interface Preset {
   lights: string;
   /** Needs Noodle Extensions too (not only Chroma). */
   noodle: boolean;
+  /** Goes into v2 difficulties too (plain environment entries only). */
+  v2: boolean;
+  /** Has the author's picture. */
+  picture: boolean;
 }
 
-export const PRESET_AUTHOR = 'MadChase';
-export const PRESET_SOURCE = 'https://github.com/MadChase/ChaseEnvs';
+export interface PresetCollection {
+  id: string;
+  name: string;
+  author: string;
+  source: string;
+  license: string;
+}
 
-/** MadChase's environments (MIT: public/chase-envs/LICENSE.txt); the light notes are the author's. */
-export const PRESETS: Preset[] = [
-  { id: 'cage', name: 'Cage', environment: 'KDAEnvironment', summary: 'Куб в клетке, дорожка из летящих блоков.', lights: 'Rotating lasers — маленькие лазеры сверху. Ring neons: куб в центре — ID 101, подсветка под дорожкой — 150–153, лазеры вокруг — 2001–2010.', noodle: true },
-  { id: 'cage-alt', name: 'Cage Alt', environment: 'KDAEnvironment', summary: 'Вариант Cage: куб в клетке, дорожка из летящих блоков.', lights: 'Rotating lasers — ID 11–17 (не вращаются событиями). Back lasers — подсветка снизу, ID 150–153. Ring neons: куб — 101, лазеры вокруг — 2001–2010.', noodle: true },
-  { id: 'collider', name: 'Collider', environment: 'DragonsEnvironment', summary: 'Огромная труба с лазерами по кругу и летающими кубами.', lights: 'Back lasers — все лазеры, ID 101–154. Left rotating lasers — кубы, ID 101–115. Left center lights — заполняющий свет, ID 1000–1129.', noodle: false },
-  { id: 'movin', name: 'Movin', environment: 'KDAEnvironment', summary: 'Большой движущийся треугольник без конца.', lights: 'Big rings — все движущиеся огни, ID 101–364 (внизу: 346, 142–179 и 101–125, остальные — две верхние стороны).', noodle: false },
-  { id: 'cave', name: 'Cave', environment: 'BTSEnvironment', summary: 'Пещера из кубов, вода как облака внизу. Очень тяжёлая (тысячи кубов).', lights: 'Center lights — 5 лазеров на вас, ID 101, 102, 103, 110, 115 слева направо. Left/Right lasers — из воды, ID 1, 7, 13, 19, 25. Back lasers — заливка сзади.', noodle: false },
-  { id: 'believer', name: 'Believer', environment: 'DragonsEnvironment', summary: 'По песне Believer: много светящейся геометрии.', lights: 'Back lasers — заливка без ID. Ring lights: 101–103 большие лазеры (101 центр, 102 лево, 103 право), 104–106 стороны пирамиды, 107–109 шары, 110 — пол (очень яркий). Left/Right lasers — ID 1, 7, 13, 19, 22, 25 от ближних к дальним. Треки шаров: Ballleft, Ballmid, Ballright.', noodle: false },
-  { id: 'galaxy', name: 'Galaxy', environment: 'GagaEnvironment', summary: 'Летящая галактика в небе.', lights: 'Left rotating laser — сияния, ID 101–125; треки Aurora1…Aurora26.', noodle: false },
-  { id: 'moses', name: 'Moses', environment: 'BillieEnvironment', summary: 'Расступающееся море, много отражений и лазеров.', lights: 'Sunbeams и солнце — как в игре (солнце больше, с треком). Left/Right lasers — ID 1–9 от ближних к дальним. Water 1–4 — линии на полу, ID 1–2; Water 3 ID 101 — брызги вдали; Water 4 ID 5–6 — большие лазеры у водопадов.', noodle: false },
-  { id: '360-env', name: '360', environment: 'RocketEnvironment', summary: 'Для 360-карт: 72 лазера вокруг игрока.', lights: 'Всё на Left/Right rotating lasers: ID 1–36 на каждой стороне.', noodle: false },
-];
+export const PRESETS: Preset[] = catalog.environments;
+export const PRESET_COLLECTIONS: PresetCollection[] = catalog.collections;
+
+/** A ready-made environment by its id (the ones before 0.12 had MadChase's names only). */
+export function findPreset(id: string | undefined): Preset | undefined {
+  if (id === undefined) return undefined;
+  return PRESETS.find((item) => item.id === id) ?? PRESETS.find((item) => item.id === `madchase-${id}`);
+}
 
 const presetCache = new Map<string, Promise<EnvironmentFragment & { environmentName: string }>>();
 
 export function loadPreset(id: string) {
+  const preset = findPreset(id);
   let loading = presetCache.get(id);
   if (loading === undefined) {
-    loading = fetch(`chase-envs/${id}.json`).then(async (response) => {
+    loading = fetch(`custom-envs/${preset?.id ?? id}.json`).then(async (response) => {
       if (!response.ok) throw new Error(`Нет окружения ${id}`);
       const data = (await response.json()) as Record<string, unknown>;
       return {
@@ -246,9 +258,18 @@ const V2_KEYS: Record<string, string> = { id: '_id', lookupMethod: '_lookupMetho
 function v2Entry(entry: Record<string, unknown>): Record<string, unknown> | null {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(entry)) {
+    if (key === 'components') {
+      // (v2 has a light ID for an object, nothing else of its components)
+      const components = value as Record<string, Record<string, unknown> | undefined>;
+      const light = components.ILightWithId;
+      if (Object.keys(components).length !== 1 || light === undefined || Object.keys(light).some((name) => name !== 'lightID')) return null;
+      if (light.lightID !== undefined) out._lightID = light.lightID;
+      continue;
+    }
     const v2 = V2_KEYS[key];
     if (v2 === undefined) return null;
-    out[v2] = value;
+    // (v2 positions are in lanes of 0.6 m)
+    out[v2] = key === 'position' || key === 'localPosition' ? (value as number[]).map((item) => Math.round((item / 0.6) * 1e6) / 1e6) : value;
   }
   return out;
 }
@@ -306,7 +327,7 @@ export function replaceFragment(custom: Record<string, unknown>, previous: Envir
 /** The mods a fragment needs the player to have (beyond the plain game). */
 export function fragmentRequirements(mods: EnvironmentMods | undefined): string[] {
   if (mods === undefined) return [];
-  const preset = PRESETS.find((item) => item.id === mods.preset);
+  const preset = findPreset(mods.preset);
   const out = new Set<string>();
   if (preset !== undefined) for (const mod of ['Chroma', ...(preset.noodle ? ['Noodle Extensions'] : [])]) out.add(mod);
   if (geometrySystems(mods).length > 0) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);

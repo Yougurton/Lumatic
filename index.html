@@ -771,6 +771,71 @@
       .env-card-lights summary {
         cursor: pointer;
       }
+      .env-filter {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .env-filter select {
+        width: auto !important;
+      }
+      .env-filter input {
+        flex: 1;
+        min-width: 0;
+        background: #121318;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 6px 8px;
+        font: inherit;
+      }
+      .env-gallery {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .env-dialog .env-gallery .env-grid {
+        overflow: auto;
+        max-height: 62vh;
+        padding-right: 4px;
+      }
+      .env-card img.missing,
+      .env-plate img.missing {
+        visibility: hidden;
+      }
+      .env-credits {
+        margin-top: 10px;
+      }
+      .env-credits details {
+        display: inline;
+      }
+      .env-plate-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+      }
+      .env-plate {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #15161c;
+        font-size: 13px;
+      }
+      .env-plate img {
+        width: 128px;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        border-radius: 4px;
+        background: #000;
+      }
+      .env-plate > div {
+        flex: 1;
+        min-width: 0;
+      }
       .env-license {
         white-space: pre-wrap;
         font-size: 11px;

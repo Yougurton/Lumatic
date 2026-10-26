@@ -108,11 +108,13 @@ async function newMap() {
   } catch {
     // (only a convenience)
   }
-  const folder = await newMapDialog(mapper);
-  if (folder === null) return;
+  const made = await newMapDialog(mapper);
+  if (made === null) return;
   editor.dirty = false;
-  await openFolder(folder);
-  editor.setStatus(`Карта создана: ${folder.name}`);
+  await openFolder(made.folder);
+  // (a ready-made environment: put on the new difficulty as the Environment window does)
+  if (made.preset !== undefined) await editor.setEnvironmentMods({ preset: made.preset });
+  editor.setStatus(`Карта создана: ${made.folder.name}`);
 }
 recentSelect.addEventListener('change', () => {
   const path = recentSelect.value;

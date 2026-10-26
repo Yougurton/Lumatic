@@ -1,9 +1,10 @@
 import type { Editor } from './editor';
-import { environmentParts, fitsV2, modsFragment, PRESET_AUTHOR, PRESET_SOURCE, PRESETS, ringSystemParts, type EnvironmentMods, type RingLook } from './environment-mods';
+import { environmentGallery } from './environment-gallery';
+import { environmentParts, findPreset, fitsV2, modsFragment, ringSystemParts, type EnvironmentMods, type RingLook } from './environment-mods';
 import { difficultyFile, difficultyVersion } from './map-io';
 
 /**
- * "Environment": a ready-made environment for the map (MadChase's, MIT), or the environment as it is
+ * "Environment": a ready-made environment for the map (MadChase's, Phøenix's, Lonely's), or the environment as it is
  * with parts taken away and its rings and their lights made bigger. Applying saves the map and opens
  * it again (the 3D view and the lights as they then are).
  */
@@ -65,64 +66,26 @@ export async function environmentDialog(editor: Editor): Promise<void> {
     const presets = el<HTMLElement>('[data-page="presets"]');
     const note = document.createElement('div');
     note.className = 'nm-dim env-note';
-    note.textContent =
-      version === '3'
-        ? 'Окружение целиком из Chroma (и иногда Noodle Extensions): карта будет их требовать. Окружение карты сменится на то, на котором оно построено. Номера света (light ID) — в описании.'
-        : `Готовые окружения пишутся только в карты v3 (эта сложность — v${version}).`;
+    note.textContent = 'Окружение целиком из Chroma (у некоторых — и Noodle Extensions): карта будет их требовать. Окружение карты сменится на то, на котором оно построено. Номера света (light ID) — в описании у каждого.';
     presets.append(note);
-    const grid = document.createElement('div');
-    grid.className = 'env-grid';
-    for (const preset of PRESETS) {
-      const card = document.createElement('div');
-      card.className = `env-card${mods.preset === preset.id ? ' active' : ''}`;
-      const image = document.createElement('img');
-      image.src = `chase-envs/${preset.id}.jpg`;
-      image.alt = preset.name;
-      const name = document.createElement('div');
-      name.className = 'env-card-name';
-      name.textContent = `${preset.name} · ${preset.environment.replace(/Environment$/u, '')}${preset.noodle ? ' · Noodle' : ''}`;
-      const summary = document.createElement('div');
-      summary.className = 'nm-dim env-card-text';
-      summary.textContent = preset.summary;
-      const lights = document.createElement('details');
-      lights.className = 'env-card-lights';
-      lights.innerHTML = '<summary>Свет</summary>';
-      lights.append(Object.assign(document.createElement('div'), { textContent: preset.lights }));
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.disabled = version !== '3';
-      button.textContent = mods.preset === preset.id ? 'Убрать' : 'Поставить';
-      button.addEventListener('click', () => {
-        if (mods.preset === preset.id) {
-          if (window.confirm(`Убрать окружение «${preset.name}»? Карта будет сохранена.`)) void apply({ ...mods, preset: undefined });
-          return;
-        }
-        const change = preset.environment !== environment ? ` Окружение карты сменится на ${preset.environment}.` : '';
-        if (window.confirm(`Поставить окружение «${preset.name}» (автор — ${PRESET_AUTHOR}, лицензия MIT)?${change} Карта будет сохранена.`)) void apply({ ...mods, preset: preset.id }, preset.environment);
-      });
-      card.append(image, name, summary, lights, button);
-      grid.append(card);
-    }
-    presets.append(grid);
-    const credit = document.createElement('div');
-    credit.className = 'nm-dim env-note';
-    credit.append(`Окружения — ${PRESET_AUTHOR} (`);
-    const link = document.createElement('a');
-    link.href = PRESET_SOURCE;
-    link.target = '_blank';
-    link.rel = 'noreferrer';
-    link.textContent = PRESET_SOURCE.replace(/^https:\/\//u, '');
-    credit.append(link, '), MIT License, © 2025 MadChase.');
-    const license = document.createElement('details');
-    license.innerHTML = '<summary>Текст лицензии</summary>';
-    const text = document.createElement('pre');
-    text.className = 'env-license';
-    license.append(text);
-    license.addEventListener('toggle', () => {
-      if (license.open && text.textContent === '') void fetch('chase-envs/LICENSE.txt').then(async (response) => (text.textContent = await response.text()));
-    });
-    credit.append(license);
-    presets.append(credit);
+    presets.append(
+      environmentGallery({
+        mode: 'apply',
+        current: { environment, preset: mods.preset },
+        standard: [],
+        version,
+        choose: (choice) => {
+          const preset = findPreset(choice.preset);
+          if (preset === undefined) {
+            const current = findPreset(mods.preset);
+            if (window.confirm(`Убрать окружение «${current?.name ?? ''}»? Карта будет сохранена.`)) void apply({ ...mods, preset: undefined });
+            return;
+          }
+          const change = preset.environment !== environment ? ` Окружение карты сменится на ${preset.environment}.` : '';
+          if (window.confirm(`Поставить окружение «${preset.name}» (автор — ${preset.author})?${change} Карта будет сохранена.`)) void apply({ ...mods, preset: preset.id }, preset.environment);
+        },
+      }),
+    );
 
     // ----- parts and rings
     const parts = el<HTMLElement>('[data-page="parts"]');

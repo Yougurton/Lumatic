@@ -1,4 +1,5 @@
 import { environmentCatalog, isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
+import { choiceLabel, environmentGallery, type EnvironmentChoice } from './environment-gallery';
 import { decodeAudio, encodeOgg, findBpm, findDownbeat, playWithClicks } from './audio-tools';
 import type { BpmResult } from './bpm-detect';
 import { createMapFolder, type MapFolder } from './platform';
@@ -184,8 +185,9 @@ export function alignedSilence(wanted: number, firstBeat: number, bpm: number, a
   return Math.max(0, beats * period - firstBeat);
 }
 
-/** Shows the dialog; resolves with the new map's folder (null: cancelled). */
-export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
+/** Shows the dialog; resolves with the new map's folder and the ready-made environment to put on it
+ *  (null: cancelled). */
+export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder; preset?: string } | null> {
   return new Promise((resolve) => {
     const shade = document.createElement('div');
     shade.className = 'ce-shade';
@@ -219,7 +221,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
         </select></label>
         <div class="nm-wide nm-dim" data-id="silence-info"></div>
         <div class="nm-wide" data-id="picker"></div>
-        <label>Окружение<select data-id="env"></select></label>
+        <div class="nm-wide env-plate-wrap"><span class="nm-dim">Окружение</span><div class="env-plate" data-id="env"></div></div>
         <label>Сложность<select data-id="diff"></select></label>
         <label>Подпись сложности<input type="text" data-id="label" value="Lightshow"></label>
         <label>Обложка
@@ -231,15 +233,56 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
     shade.append(box);
     document.body.append(shade);
     const el = <T extends HTMLElement>(id: string) => box.querySelector<T>(`[data-id="${id}"]`)!;
-    const env = el<HTMLSelectElement>('env');
-    const addGroup = (label: string, items: [string, string][]) => {
-      const group = document.createElement('optgroup');
-      group.label = label;
-      for (const [id, name] of items) group.append(Object.assign(document.createElement('option'), { value: id, textContent: name }));
-      env.append(group);
+    // the environment: a plate (picture, name, who made it) and the gallery to pick from
+    const standard = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS];
+    let choice: EnvironmentChoice = { environment: SHOW_ENVIRONMENTS[0]![0] };
+    const plate = el<HTMLElement>('env');
+    const showPlate = () => {
+      const label = choiceLabel(choice, standard);
+      plate.replaceChildren();
+      const image = document.createElement('img');
+      image.src = label.image;
+      image.alt = '';
+      image.addEventListener('error', () => image.classList.add('missing'));
+      const text = document.createElement('div');
+      text.append(Object.assign(document.createElement('div'), { className: 'env-card-name', textContent: label.name }), Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: label.detail }));
+      const change = document.createElement('button');
+      change.type = 'button';
+      change.textContent = 'Выбрать…';
+      change.addEventListener('click', () => {
+        const shade = document.createElement('div');
+        shade.className = 'ce-shade';
+        const picker = document.createElement('div');
+        picker.className = 'ce-dialog env-dialog';
+        picker.append(Object.assign(document.createElement('div'), { className: 'ce-dialog-title', textContent: 'Окружение новой карты' }));
+        const close = () => shade.remove();
+        picker.append(
+          environmentGallery({
+            mode: 'pick',
+            current: choice,
+            standard,
+            version: 'new',
+            choose: (picked) => {
+              choice = picked;
+              showPlate();
+              close();
+            },
+          }),
+        );
+        const buttons = document.createElement('div');
+        buttons.className = 'ce-dialog-buttons';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = 'Отмена';
+        cancel.addEventListener('click', close);
+        buttons.append(cancel);
+        picker.append(buttons);
+        shade.append(picker);
+        document.body.append(shade);
+      });
+      plate.append(image, text, change);
     };
-    addGroup('Шоу-окружения', SHOW_ENVIRONMENTS);
-    addGroup('Остальные', OTHER_ENVIRONMENTS);
+    showPlate();
     const diff = el<HTMLSelectElement>('diff');
     for (const [name] of DIFFICULTIES) diff.append(Object.assign(document.createElement('option'), { value: name, textContent: name === 'ExpertPlus' ? 'Expert+' : name }));
     el<HTMLInputElement>('mapper').value = defaultMapper;
@@ -413,7 +456,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
       });
       input.click();
     });
-    const finish = (result: MapFolder | null) => {
+    const finish = (result: { folder: MapFolder; preset?: string } | null) => {
       stopListening?.();
       picker?.stop();
       shade.remove();
@@ -432,7 +475,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
         mapper: el<HTMLInputElement>('mapper').value.trim(),
         bpm: Number(bpmInput.value),
         silence: silence(),
-        environment: env.value,
+        environment: choice.environment,
         difficulty: diff.value,
         label: el<HTMLInputElement>('label').value.trim(),
         previewStart: picker?.value().start ?? silence() + audio.duration * 0.35,
@@ -463,7 +506,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
           } catch {
             // (only a convenience)
           }
-          finish(folder);
+          finish({ folder, ...(choice.preset === undefined ? {} : { preset: choice.preset }) });
         } catch (error) {
           status.textContent = `Не получилось: ${error instanceof Error ? error.message : String(error)}`;
           busy = false;

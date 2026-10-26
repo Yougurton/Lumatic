@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import type { EnvironmentData } from '../src/engine/renderer/environment/types';
-import { environmentParts, modsFragment, replaceFragment, ringSystemParts, type EnvironmentFragment } from '../src/editor/environment-mods';
+import { environmentParts, findPreset, modsFragment, PRESET_COLLECTIONS, PRESETS, replaceFragment, ringSystemParts, type EnvironmentFragment } from '../src/editor/environment-mods';
 
 /**
  * The environment's changes: what they write finds what it should in the environment (its Chroma ids),
@@ -61,6 +61,23 @@ const v2 = replaceFragment({ _environment: [{ _id: 'Mine', _lookupMethod: 'Exact
 check(JSON.stringify(v2._environment) === '[{"_id":"Mine","_lookupMethod":"Exact","_active":false},{"_id":"B","_lookupMethod":"Contains","_active":false}]', 'v2', v2._environment);
 const emptied = replaceFragment({ environment: before.environment, materials: before.materials, customEvents: before.customEvents }, before, { environment: [], materials: {}, customEvents: [], pointDefinitions: {} }, false);
 check(Object.keys(emptied).length === 0, 'emptied', emptied);
+
+// the ready-made environments: every one's data is there, built on an environment the editor has
+for (const preset of PRESETS) {
+  const data = JSON.parse(readFileSync(new URL(`../public/custom-envs/${preset.id}.json`, import.meta.url), 'utf8')) as { environmentName: string; environment: unknown[] };
+  check(data.environmentName === preset.environment && data.environment.length > 0, 'preset', preset.id);
+  check(existsSync(new URL(`../public/environments/${preset.environment}.json`, import.meta.url)), 'preset environment', preset.id, preset.environment);
+  check(!preset.picture || existsSync(new URL(`../public/custom-envs/${preset.id}.jpg`, import.meta.url)), 'preset picture', preset.id);
+  check(PRESET_COLLECTIONS.some((collection) => collection.id === preset.collection) && preset.author !== '', 'preset credit', preset.id);
+}
+check(findPreset('cage')?.id === 'madchase-cage', 'old ids');
+// v2: positions in lanes, a light ID as v2 has it — and back as they were
+const lonely = JSON.parse(readFileSync(new URL('../public/custom-envs/lonely-panic.json', import.meta.url), 'utf8')) as EnvironmentFragment;
+const written = replaceFragment({}, undefined, { environment: lonely.environment, materials: {}, customEvents: [], pointDefinitions: {} }, true)._environment as Record<string, unknown>[];
+const window = written.find((entry) => entry._id === 'Window')!;
+check(JSON.stringify(window._position) === '[0,40,87]', 'v2 position', window._position);
+const lit = replaceFragment({}, undefined, { environment: [{ id: 'x', lookupMethod: 'Contains', components: { ILightWithId: { lightID: 7 } } }], materials: {}, customEvents: [], pointDefinitions: {} }, true)._environment as Record<string, unknown>[];
+check(lit[0]?._lightID === 7, 'v2 light id', lit);
 
 console.log('checks', checks, 'failures', failures);
 if (failures > 0) process.exit(1);
