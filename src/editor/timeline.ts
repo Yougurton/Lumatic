@@ -1,9 +1,11 @@
 import { resolveRgb } from './bake';
-import type { Editor, Row, ShownClip, SortKey } from './editor';
+import { isLightRow, RING_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
-import { ask, showMenu, type MenuItem } from './menu';
+import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { groupHue, lightGroupName } from './names';
+import { newRingBlock, ringDelay, type RingBlock } from './rings';
+import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
  * The timeline: a ruler, the rows (each light group, opened up into its lights on request, and the
@@ -32,10 +34,9 @@ const GRIP = 7;
 const GROUP_H = 28;
 const LIGHT_H = 20;
 const RAW_H = 22;
-const SPECTRO_H = 110;
 const EDGE_PX = 6;
 
-const baseRowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
+const baseRowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' || row.kind === 'poses' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
 
 /** A colour per user group (from its name). */
 export function customHue(name: string) {
@@ -64,13 +65,32 @@ interface EffectOrigin {
 
 type Drag =
   | { kind: 'create'; row: Row; from: number; to: number }
-  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; effectOrigin: Map<string, EffectOrigin>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
-  | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; effectOrigin: Map<string, EffectOrigin>; anchor: number }
+  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number }>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
+  | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number; poses: Map<string, number> }>; anchor: number }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'seek' }
   | { kind: 'scroll'; grabY: number; scrollY: number }
   | { kind: 'rowZoom'; edge: 'top' | 'bottom'; grabY: number; thumb: number; scale: number; scrollY: number }
-  | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number };
+  | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number }
+  | { kind: 'spectro'; grabY: number; height: number };
+
+/** The edge between the rows and the spectrogram is grabbed within this many pixels of it. */
+const SPECTRO_GRIP = 4;
+const LOOK_KEY = 'chroeditor.spectrogram';
+
+function loadLook(): SpectrogramLook {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOOK_KEY) ?? 'null') as Partial<SpectrogramLook> | null;
+    return { ...DEFAULT_LOOK, ...(saved ?? {}) };
+  } catch {
+    return { ...DEFAULT_LOOK };
+  }
+}
+
+/** Hz as people write it. */
+function hzLabel(hz: number) {
+  return hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1).replace(/\.0$/u, '')} кГц` : `${String(Math.round(hz))} Гц`;
+}
 
 export class Timeline {
   private readonly canvas: HTMLCanvasElement;
@@ -87,6 +107,10 @@ export class Timeline {
   private hover: { x: number; y: number } | null = null;
   private followPlayhead = true;
   private headerKey = '';
+  /** How the spectrogram is shown (kept between sessions). */
+  look: SpectrogramLook = loadLook();
+  /** The look each spectrogram was last painted with. */
+  private painted = new WeakMap<Spectrogram, string>();
 
   constructor(private readonly editor: Editor, root: HTMLElement) {
     this.headers = root.querySelector<HTMLElement>('#track-headers')!;
@@ -139,7 +163,33 @@ export class Timeline {
   }
 
   private get rowsBottom() {
-    return this.height - SPECTRO_H - NAV_H;
+    return this.height - this.spectroHeight - NAV_H;
+  }
+
+  /** The spectrogram's height as drawn: what was asked for, leaving the rows some room. */
+  private get spectroHeight() {
+    return Math.max(0, Math.min(this.look.height, this.height - NAV_H - RULER_H - 60));
+  }
+
+  /** Changes how the spectrogram looks (and keeps it). */
+  setLook(patch: Partial<SpectrogramLook>) {
+    const heightChanged = patch.height !== undefined && patch.height !== this.look.height;
+    this.look = { ...this.look, ...patch };
+    this.look.lowHz = Math.max(DEFAULT_LOOK.lowHz, Math.min(this.look.lowHz, DEFAULT_LOOK.highHz / 1.5));
+    this.look.highHz = Math.min(DEFAULT_LOOK.highHz, Math.max(this.look.highHz, this.look.lowHz * 1.5));
+    try {
+      localStorage.setItem(LOOK_KEY, JSON.stringify(this.look));
+    } catch {
+      // (only a convenience)
+    }
+    // (while its edge is dragged, draw() keeps the heading's height up)
+    if (heightChanged && this.drag?.kind !== 'spectro') this.renderHeaders(true);
+    this.needsDraw = true;
+  }
+
+  /** Over the spectrogram's top edge (its height is dragged there). */
+  private onSpectroEdge(x: number, y: number) {
+    return x >= GUTTER && Math.abs(y - this.rowsBottom) <= SPECTRO_GRIP;
   }
 
   private get navTop() {
@@ -249,10 +299,20 @@ export class Timeline {
   }
 
   /** What's under the mouse in the rows area. */
-  private hit(x: number, y: number): { clip: LightClip; edge: 'start' | 'end' | null; row: Row } | { raw: RawEvent; row: Row } | null {
+  private hit(x: number, y: number): { clip: LightClip; edge: 'start' | 'end' | null; row: Row } | { raw: RawEvent; row: Row } | { block: RingBlock; edge: 'start' | 'end' | null; row: Row } | null {
     const item = this.rowAt(y);
     if (item === null) return null;
     const { row, top, height } = item;
+    if (row.kind === 'poses') {
+      for (const block of [...this.editor.ringBlocks].reverse()) {
+        const x0 = this.beatToX(block.start);
+        const x1 = this.beatToX(block.end);
+        if (x < x0 - 2 || x > x1 + 2 || y < top + 2 || y > top + height - 2) continue;
+        const edge = x1 - x0 > EDGE_PX * 3 ? (x - x0 < EDGE_PX ? 'start' : x1 - x < EDGE_PX ? 'end' : null) : x > x1 - EDGE_PX ? 'end' : null;
+        return { block, edge, row };
+      }
+      return null;
+    }
     if (row.kind === 'raw') {
       const events = this.visibleRaw(row.type);
       const found = events.find((event) => Math.abs(this.beatToX(event.beat) - x) <= 6);
@@ -334,13 +394,19 @@ export class Timeline {
     for (const { row, top, height: h } of this.layout()) {
       if (top + h < this.rowsTop || top > this.rowsBottom) continue;
       if (row.kind === 'raw') this.drawRaw(row, top, h);
+      else if (row.kind === 'poses') for (const block of editor.ringBlocks) this.drawRingBlock(block, top, h);
       else for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
     }
     // the clip being drawn
     const creating = this.drag?.kind === 'create' ? this.drag : null;
     if (creating !== null) {
       const item = this.layout().find((entry) => entry.row.key === creating.row.key);
-      if (item !== undefined && item.row.kind !== 'raw') {
+      if (item !== undefined && item.row.kind === 'poses') {
+        const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
+        ctx.globalAlpha = 0.6;
+        this.drawRingBlock(newRingBlock('', 'event', a, Math.max(b, a + 1)), item.top, item.height);
+        ctx.globalAlpha = 1;
+      } else if (item !== undefined && isLightRow(item.row)) {
         const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
         const end = Math.max(b, a + Math.max(editor.snap, 0.0625));
         const shown = this.clipsOf(item.row);
@@ -383,7 +449,7 @@ export class Timeline {
     ctx.fillRect(0, RULER_H - 1, width, 1);
 
     // spectrogram
-    this.drawSpectrogram(this.rowsBottom, SPECTRO_H);
+    this.drawSpectrogram(this.rowsBottom, this.spectroHeight);
 
     // playhead
     const px = this.beatToX(editor.playhead());
@@ -404,6 +470,8 @@ export class Timeline {
     if (list !== null) {
       list.style.height = `${String(Math.max(0, this.rowsBottom - this.rowsTop))}px`;
       list.scrollTop = this.scrollY;
+      const spectro = this.headers.querySelector<HTMLElement>('.th-spectro');
+      if (spectro !== null) spectro.style.height = `${String(this.spectroHeight)}px`;
     }
   }
 
@@ -633,6 +701,58 @@ export class Timeline {
     ctx.globalAlpha = 1;
   }
 
+  /** A ring pose block: its poses as small rings at their times (a line out to where the turn ends). */
+  private drawRingBlock(block: RingBlock, top: number, height: number) {
+    const ctx = this.context;
+    const x = this.beatToX(block.start);
+    const w = (block.end - block.start) * this.pxPerBeat;
+    if (x > this.width || x + w < GUTTER) return;
+    const y = top + 3;
+    const h = height - 6;
+    const selected = this.editor.selection.has(block.id);
+    const hue = block.mode === 'tracks' ? 275 : 300;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.fillStyle = `hsl(${String(hue)} 35% 17%)`;
+    ctx.fillRect(x, y, w, h);
+    const cy = y + h / 2;
+    const r = Math.max(3, Math.min(8, h / 2 - 3));
+    const rings = this.editor.ringInfo.find((system) => system.name === block.system)?.rings ?? this.editor.ringInfo[0]?.rings ?? 1;
+    for (const pose of block.poses) {
+      if (pose.beat > block.end - block.start + 1e-6) continue;
+      const px = this.beatToX(block.start + pose.beat);
+      const span = (pose.duration + ringDelay(pose, pose.reverse ? 0 : rings - 1, rings)) * this.pxPerBeat;
+      ctx.fillStyle = `hsla(${String(hue)} 70% 65% / 0.35)`;
+      ctx.fillRect(px, cy - 1, Math.max(0, span), 2);
+      ctx.strokeStyle = `hsl(${String(hue)} 75% 72%)`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      const angle = (pose.angle * Math.PI) / 180;
+      ctx.beginPath();
+      ctx.moveTo(px, cy);
+      ctx.lineTo(px - Math.sin(angle) * r, cy - Math.cos(angle) * r);
+      ctx.stroke();
+    }
+    if (w > 60 && h >= 12) {
+      ctx.font = '600 10px system-ui, sans-serif';
+      const label = `◎ ${block.name}${block.mode === 'tracks' ? ' · по кольцам' : ''}`;
+      const tw = ctx.measureText(label).width;
+      const lx = Math.max(x + 3, x + w - tw - 9);
+      ctx.fillStyle = 'rgba(10,11,15,0.8)';
+      ctx.fillRect(lx, y + h - 13, tw + 6, 12);
+      ctx.fillStyle = '#e8ebf2';
+      ctx.fillText(label, lx + 3, y + h - 3);
+    }
+    ctx.restore();
+    ctx.strokeStyle = selected ? '#ffffff' : `hsl(${String(hue)} 60% 60%)`;
+    ctx.lineWidth = selected ? 2 : 1.2;
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), h - 1);
+  }
+
   /** The events of the effect being drawn (for its ghost). */
   private ghostChildren: LightClip[] | null = null;
 
@@ -640,6 +760,23 @@ export class Timeline {
     const ctx = this.context;
     const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
+    if (row.type === RING_EVENT_TYPE) {
+      // (the ring events the ring poses make: hollow — they belong to their blocks)
+      ctx.strokeStyle = `hsl(${String(hue)} 70% 65%)`;
+      ctx.lineWidth = 1.2;
+      for (const event of this.editor.poseEvents()) {
+        const x = this.beatToX(event.beat);
+        if (x < -10 || x > this.width + 10) continue;
+        const cy = top + height / 2;
+        ctx.beginPath();
+        ctx.moveTo(x, cy - 5);
+        ctx.lineTo(x + 4, cy);
+        ctx.lineTo(x, cy + 5);
+        ctx.lineTo(x - 4, cy);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
     for (const event of events) {
       const x = this.beatToX(event.beat);
       if (x < -10 || x > this.width + 10) continue;
@@ -657,10 +794,26 @@ export class Timeline {
 
   private drawSpectrogram(top: number, height: number) {
     const ctx = this.context;
+    if (height <= 0) {
+      ctx.fillStyle = this.drag?.kind === 'spectro' ? '#6f7588' : '#2a2c34';
+      ctx.fillRect(0, top - 1, this.width, 2);
+      return;
+    }
     ctx.fillStyle = '#0b0b10';
     ctx.fillRect(0, top, this.width, height);
     const spectrogram = this.editor.spectrogram;
     if (spectrogram !== null) {
+      const look = this.look;
+      const key = `${String(look.floor)}|${String(look.contrast)}`;
+      if (this.painted.get(spectrogram) !== key) {
+        paintSpectrogram(spectrogram, look);
+        this.painted.set(spectrogram, key);
+      }
+      // the stretch of frequencies asked for: rows of the picture (its top is the highest band)
+      const b0 = Math.max(-0.5, bandOfHz(spectrogram, look.lowHz));
+      const b1 = Math.min(spectrogram.bands - 0.5, bandOfHz(spectrogram, look.highHz));
+      const sy = spectrogram.bands - 0.5 - b1;
+      const sh = Math.max(0.5, b1 - b0);
       // (chunks of 8 px: each drawn with the time it covers — exact also where the BPM changes)
       for (let x = GUTTER; x < this.width; x += 8) {
         const s0 = this.editor.beatToSeconds(this.xToBeat(x));
@@ -672,15 +825,31 @@ export class Timeline {
         const b = Math.min(spectrogram.frames, f1);
         const dx = x + ((a - f0) / (f1 - f0)) * 8;
         const dw = ((b - a) / (f1 - f0)) * 8;
-        ctx.drawImage(spectrogram.image, a, 0, Math.max(0.01, b - a), spectrogram.image.height, dx, top, dw + 0.5, height);
+        ctx.drawImage(spectrogram.image, a, sy, Math.max(0.01, b - a), sh, dx, top, dw + 0.5, height);
+      }
+      // frequencies at the left
+      if (height >= 46) {
+        ctx.font = '10px system-ui, sans-serif';
+        let lastY = Infinity;
+        for (const hz of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+          const band = bandOfHz(spectrogram, hz);
+          if (band <= b0 || band >= b1) continue;
+          const y = top + height - ((band - b0) / (b1 - b0)) * height;
+          if (lastY - y < 16 || y < top + 8) continue;
+          lastY = y;
+          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.fillRect(GUTTER, Math.round(y), 6, 1);
+          ctx.fillStyle = 'rgba(220,225,240,0.55)';
+          ctx.fillText(hzLabel(hz), GUTTER + 8, y + 3);
+        }
       }
     } else {
       ctx.fillStyle = '#4b4f5c';
       ctx.font = '12px system-ui, sans-serif';
-      ctx.fillText(this.editor.clock === null ? '' : 'Спектрограмма считается…', 12, top + height / 2);
+      ctx.fillText(this.editor.clock === null ? '' : 'Спектрограмма считается…', 12, top + Math.min(height / 2 + 4, height - 3));
     }
-    ctx.fillStyle = '#2a2c34';
-    ctx.fillRect(0, top, this.width, 1);
+    ctx.fillStyle = this.drag?.kind === 'spectro' ? '#6f7588' : '#2a2c34';
+    ctx.fillRect(0, top, this.width, this.drag?.kind === 'spectro' ? 2 : 1);
     // bars over it
     const first = Math.floor(this.viewStart);
     const last = Math.ceil(this.viewStart + this.trackWidth / this.pxPerBeat);
@@ -688,6 +857,80 @@ export class Timeline {
       ctx.fillStyle = 'rgba(255,255,255,0.12)';
       ctx.fillRect(this.beatToX(beat), top, 1, height);
     }
+  }
+
+  /** The spectrogram's settings: height, frequencies, level floor, contrast. */
+  openSpectroPanel(x: number, y: number) {
+    const body = document.createElement('div');
+    body.className = 'ce-panel-body';
+    const title = document.createElement('div');
+    title.className = 'ce-menu-heading';
+    title.style.padding = '0';
+    title.textContent = 'Спектрограмма';
+    const presets = document.createElement('div');
+    presets.className = 'ce-panel-buttons';
+    for (const [label, height] of [['Скрыть', 0], ['Низкая', 50], ['Средняя', 110], ['Высокая', 200], ['Очень высокая', 320]] as const) {
+      const button = document.createElement('button');
+      button.textContent = label;
+      button.addEventListener('click', () => {
+        this.setLook({ height });
+        sync();
+      });
+      presets.append(button);
+    }
+    // (frequencies on a log scale: a slider position 0…1000 ↔ 30 Hz…16 kHz)
+    const toHz = (value: number) => DEFAULT_LOOK.lowHz * (DEFAULT_LOOK.highHz / DEFAULT_LOOK.lowHz) ** (value / 1000);
+    const fromHz = (hz: number) => (Math.log(hz / DEFAULT_LOOK.lowHz) / Math.log(DEFAULT_LOOK.highHz / DEFAULT_LOOK.lowHz)) * 1000;
+    const rows: { input: HTMLInputElement; value: HTMLElement; read: () => number; show: () => string }[] = [];
+    const slider = (label: string, min: number, max: number, step: number, read: () => number, show: () => string, write: (value: number) => void, hint: string) => {
+      const row = document.createElement('label');
+      row.className = 'ce-panel-row';
+      row.title = hint;
+      const name = document.createElement('span');
+      name.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      const value = document.createElement('span');
+      value.className = 'ce-panel-value';
+      input.addEventListener('input', () => {
+        write(Number(input.value));
+        sync();
+      });
+      row.append(name, input, value);
+      rows.push({ input, value, read, show });
+      return row;
+    };
+    const look = () => this.look;
+    body.append(
+      title,
+      presets,
+      slider('Высота', 0, 400, 2, () => look().height, () => `${String(Math.round(look().height))} px`, (value) => this.setLook({ height: value }), 'Высоту можно менять и мышью: тяните верхний край спектрограммы'),
+      slider('Частоты от', 0, 1000, 1, () => fromHz(look().lowHz), () => hzLabel(look().lowHz), (value) => this.setLook({ lowHz: Math.min(toHz(value), look().highHz / 1.5) }), 'Нижняя граница показанных частот'),
+      slider('до', 0, 1000, 1, () => fromHz(look().highHz), () => hzLabel(look().highHz), (value) => this.setLook({ highHz: Math.max(toHz(value), look().lowHz * 1.5) }), 'Верхняя граница показанных частот'),
+      slider('Порог', 0, 0.85, 0.01, () => look().floor, () => `${String(Math.round(look().floor * 100))} %`, (value) => this.setLook({ floor: value }), 'Тихое ниже порога остаётся тёмным: удары и вокал виднее'),
+      slider('Контраст', 0.4, 3, 0.05, () => look().contrast, () => look().contrast.toFixed(2), (value) => this.setLook({ contrast: value }), 'Больше — темнее фон и ярче громкие места'),
+    );
+    const reset = document.createElement('div');
+    reset.className = 'ce-panel-buttons';
+    const resetButton = document.createElement('button');
+    resetButton.textContent = 'Как было';
+    resetButton.addEventListener('click', () => {
+      this.setLook({ ...DEFAULT_LOOK });
+      sync();
+    });
+    reset.append(resetButton);
+    body.append(reset);
+    const sync = () => {
+      for (const row of rows) {
+        if (document.activeElement !== row.input) row.input.value = String(row.read());
+        row.value.textContent = row.show();
+      }
+    };
+    sync();
+    showPanel(x, y, body);
   }
 
   // ----- headers -------------------------------------------------------------------------------------
@@ -714,12 +957,42 @@ export class Timeline {
     list.append(tail);
     const spectro = document.createElement('div');
     spectro.className = 'th-spectro';
-    spectro.style.height = `${String(SPECTRO_H)}px`;
-    spectro.textContent = 'Спектрограмма';
+    const spectroHeight = this.spectroHeight;
+    spectro.style.height = `${String(spectroHeight)}px`;
+    spectro.style.display = spectroHeight <= 0 ? 'none' : '';
+    if (spectroHeight >= 22) {
+      const settings = document.createElement('button');
+      settings.textContent = '⚙';
+      settings.title = 'Настройки спектрограммы: высота, частоты, яркость';
+      settings.addEventListener('click', (event) => {
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        this.openSpectroPanel(rect.right + 4, rect.top);
+      });
+      spectro.append(Object.assign(document.createElement('span'), { textContent: 'Спектрограмма' }), settings);
+    }
+    spectro.title = 'Верхний край спектрограммы тянется мышью; ПКМ — настройки';
+    spectro.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      this.openSpectroPanel(event.clientX, event.clientY);
+    });
     const nav = document.createElement('div');
     nav.className = 'th-nav';
     nav.style.height = `${String(NAV_H)}px`;
     nav.textContent = 'Вся песня';
+    if (spectroHeight <= 0) {
+      // (the spectrogram hidden: brought back from here)
+      const show = document.createElement('button');
+      show.className = 'th-tool';
+      show.textContent = '▴ спектр.';
+      show.title = 'Показать спектрограмму (её настройки — ПКМ здесь)';
+      show.style.cssText = 'float:right;margin-top:-3px;padding:0 6px;font-size:11px';
+      show.addEventListener('click', () => this.setLook({ height: DEFAULT_LOOK.height }));
+      nav.append(show);
+    }
+    nav.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      this.openSpectroPanel(event.clientX, event.clientY - 220);
+    });
     nav.title = 'Обзор песни: тяните рамку, чтобы листать, её края — чтобы менять масштаб; клик — перейти туда. Красная черта — курсор';
     box.append(list, spectro, nav);
     this.needsDraw = true;
@@ -922,6 +1195,9 @@ export class Timeline {
           ...(addTo.length > 0 ? [null, { label: 'Добавить в группу', heading: true }, ...addTo] : []),
         ]);
       });
+    } else if (row.kind === 'poses') {
+      item.textContent = `◎ ${row.label}`;
+      item.title = 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
     } else {
       item.textContent = row.label;
     }
@@ -1046,6 +1322,15 @@ export class Timeline {
         this.needsDraw = true;
         return;
       }
+      if (this.onSpectroEdge(x, y) && event.button === 0) {
+        this.drag = { kind: 'spectro', grabY: y, height: this.spectroHeight };
+        this.needsDraw = true;
+        return;
+      }
+      if (y >= this.rowsBottom && y < this.navTop && event.button === 2) {
+        this.openSpectroPanel(event.clientX, event.clientY - 200);
+        return;
+      }
       if (y >= this.navTop) {
         // the song overview: drag the view (its ends: zoom), click elsewhere: go there
         const nav = this.nav();
@@ -1073,11 +1358,11 @@ export class Timeline {
       }
       const hit = this.hit(x, y);
       const under = this.rowAt(y);
-      if (under !== null && under.row.kind !== 'raw') this.editor.setActiveRow(under.row.key);
+      if (under !== null && isLightRow(under.row)) this.editor.setActiveRow(under.row.key);
       if (event.button === 2) {
         // right click: delete what's under it
         if (hit !== null) {
-          this.editor.select(['clip' in hit ? hit.clip.id : hit.raw.id]);
+          this.editor.select([hitId(hit)]);
           this.editor.deleteSelection();
         }
         return;
@@ -1103,14 +1388,15 @@ export class Timeline {
         this.needsDraw = true;
         return;
       }
-      const id = 'clip' in hit ? hit.clip.id : hit.raw.id;
+      const id = hitId(hit);
       if (event.shiftKey || event.ctrlKey || event.metaKey) this.editor.select([id], 'toggle');
       else if (!this.editor.selection.has(id)) this.editor.select([id]);
-      if ('clip' in hit && hit.edge !== null) {
+      const edged = 'clip' in hit ? { edge: hit.edge, start: hit.clip.start, end: hit.clip.end } : 'block' in hit ? { edge: hit.edge, start: hit.block.start, end: hit.block.end } : null;
+      if (edged !== null && edged.edge !== null) {
         const origin = new Map<string, { start: number; end: number }>();
         for (const clip of this.editor.selectedClips()) origin.set(clip.id, { start: clip.start, end: clip.end });
         this.editor.checkpoint();
-        this.drag = { kind: 'resize', edge: hit.edge, origin, effectOrigin: this.effectOrigins(), anchor: hit.edge === 'start' ? hit.clip.start : hit.clip.end };
+        this.drag = { kind: 'resize', edge: edged.edge, origin, effectOrigin: this.effectOrigins(), blockOrigin: this.blockOrigins(true), anchor: edged.edge === 'start' ? edged.start : edged.end };
         return;
       }
       this.editor.checkpoint();
@@ -1120,21 +1406,26 @@ export class Timeline {
         const copies = this.editor.selectedClips().map((clip) => cloneClip(clip));
         const rawCopies = project.raw.filter((event) => this.editor.selection.has(event.id)).map((event) => ({ ...event, id: newId('r') }));
         const effectCopies = this.editor.cloneEffectsInPlace(this.editor.selectedEffects());
+        const blockCopies = this.editor.cloneRingBlocksInPlace(this.editor.selectedRingBlocks());
         project.clips.push(...copies);
         project.raw.push(...rawCopies);
-        this.editor.selection = new Set([...copies.map((clip) => clip.id), ...rawCopies.map((event) => event.id), ...effectCopies]);
+        this.editor.selection = new Set([...copies.map((clip) => clip.id), ...rawCopies.map((event) => event.id), ...effectCopies, ...blockCopies]);
       }
       const origin = new Map<string, LightClip>();
       for (const clip of this.editor.selectedClips()) origin.set(clip.id, cloneClip(clip, { id: clip.id }));
       const rawOrigin = new Map<string, number>();
       for (const raw of this.editor.project.raw) if (this.editor.selection.has(raw.id)) rawOrigin.set(raw.id, raw.beat);
-      const grabbed = 'clip' in hit ? hit.clip.start : hit.raw.beat;
-      this.drag = { kind: 'move', origin, rawOrigin, effectOrigin: this.effectOrigins(), grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key };
+      const grabbed = 'clip' in hit ? hit.clip.start : 'block' in hit ? hit.block.start : hit.raw.beat;
+      this.drag = { kind: 'move', origin, rawOrigin, effectOrigin: this.effectOrigins(), blockOrigin: this.blockOrigins(false), grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key };
     });
 
     canvas.addEventListener('dblclick', (event) => {
       const { x, y } = local(event);
       const hit = this.hit(x, y);
+      if (hit !== null && 'block' in hit) {
+        this.editor.ringEditorHook?.(hit.block.id);
+        return;
+      }
       if (hit === null || !('clip' in hit)) return;
       const effect = this.editor.effectById(hit.clip.id);
       if (effect === undefined) return;
@@ -1154,7 +1445,8 @@ export class Timeline {
       if (drag === null) {
         let cursor = 'default';
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height) {
-          if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
+          if (this.onSpectroEdge(x, y)) cursor = 'ns-resize';
+          else if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
             const bar = this.vbar();
             cursor = (y >= bar.thumbTop && y < bar.thumbTop + GRIP) || (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) ? 'ns-resize' : 'default';
           } else if (y >= this.navTop) {
@@ -1164,7 +1456,7 @@ export class Timeline {
             cursor = Math.abs(x - x0) <= 5 || Math.abs(x - x1) <= 5 ? 'ew-resize' : x > x0 && x < x1 ? 'grab' : 'pointer';
           } else {
             const hit = this.hit(x, y);
-            cursor = hit !== null && 'clip' in hit && hit.edge !== null ? 'ew-resize' : hit !== null ? 'grab' : 'default';
+            cursor = hit !== null && !('raw' in hit) && hit.edge !== null ? 'ew-resize' : hit !== null ? 'grab' : 'default';
           }
         }
         canvas.style.cursor = cursor;
@@ -1173,7 +1465,10 @@ export class Timeline {
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
-      if (drag.kind === 'rowZoom') {
+      if (drag.kind === 'spectro') {
+        const height = Math.round(drag.height - (y - drag.grabY));
+        this.setLook({ height: height < 16 ? 0 : Math.min(this.height - NAV_H - RULER_H - 60, height) });
+      } else if (drag.kind === 'rowZoom') {
         // the thumb's length follows the grip; the rows grow or shrink to match it
         const length = Math.max(20, drag.thumb + (drag.edge === 'bottom' ? y - drag.grabY : drag.grabY - y));
         this.zoomRows(drag.scale * (drag.thumb / length), drag.edge === 'bottom' ? this.rowsTop : this.rowsBottom);
@@ -1218,6 +1513,16 @@ export class Timeline {
           if (drag.edge === 'start') clip.start = Math.min(origin.end - min, origin.start + delta);
           else clip.end = Math.max(origin.start + min, origin.end + delta);
         }
+        for (const [id, origin] of drag.blockOrigin) {
+          // (a ring pose block: its poses stay where they are in the song)
+          const block = this.editor.ringBlockById(id);
+          if (block === undefined) continue;
+          const min = Math.max(this.editor.snap, 0.25);
+          if (drag.edge === 'start') {
+            block.start = Math.min(origin.end - min, origin.start + delta);
+            for (const pose of block.poses) pose.beat = Math.max(0, (origin.poses.get(pose.id) ?? pose.beat) - (block.start - origin.start));
+          } else block.end = Math.max(origin.start + min, origin.end + delta);
+        }
         this.editor.changed();
       } else {
         const delta = (event.shiftKey ? this.xToBeat(x) : snap(drag.anchor + (beat - drag.grabBeat))) - drag.anchor;
@@ -1236,12 +1541,18 @@ export class Timeline {
           const effect = this.editor.effectById(id);
           if (effect !== undefined) this.editor.moveEffect(effect, origin, delta);
         }
+        for (const [id, origin] of drag.blockOrigin) {
+          const block = this.editor.ringBlockById(id);
+          if (block === undefined) continue;
+          block.start = origin.start + delta;
+          block.end = origin.end + delta;
+        }
         // one effect dragged onto another row: it runs over that row's lights now
         if (drag.effectOrigin.size === 1 && drag.origin.size === 0 && drag.rawOrigin.size === 0) {
           const target = this.rowAt(y)?.row;
           const [[id, origin]] = [...drag.effectOrigin];
           const effect = this.editor.effectById(id!);
-          if (effect !== undefined && origin !== undefined && target !== undefined && target.kind !== 'raw') {
+          if (effect !== undefined && origin !== undefined && target !== undefined && isLightRow(target)) {
             if (target.key === drag.rowKey) {
               if (effect.target !== origin.target.target || effect.type !== origin.target.type) {
                 delete effect.target;
@@ -1259,7 +1570,7 @@ export class Timeline {
           const target = this.rowAt(y)?.row;
           const [[id, origin]] = [...drag.origin];
           const clip = this.editor.clipById(id!);
-          if (clip !== undefined && origin !== undefined && target !== undefined && target.kind !== 'raw') {
+          if (clip !== undefined && origin !== undefined && target !== undefined && isLightRow(target)) {
             if (target.key === drag.rowKey) {
               clip.type = origin.type;
               clip.ids = origin.ids === null ? null : [...origin.ids];
@@ -1283,9 +1594,18 @@ export class Timeline {
       const drag = this.drag;
       this.drag = null;
       if (drag === null) return;
+      if (drag.kind === 'spectro') this.renderHeaders(true);
       if (drag.kind === 'create') {
         const row = drag.row;
-        if (row.kind === 'raw') return;
+        if (row.kind === 'poses') {
+          const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
+          const block = newRingBlock(this.editor.ringInfo[0]?.name ?? '', 'event', a, Math.max(b, a + 1));
+          this.editor.addRingBlock(block);
+          this.editor.ringEditorHook?.(block.id);
+          this.needsDraw = true;
+          return;
+        }
+        if (!isLightRow(row)) return;
         const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
         const end = b - a < 1e-6 ? a + Math.max(this.editor.snap, 0.25) : b;
         const tool = this.editor.tool;
@@ -1311,6 +1631,8 @@ export class Timeline {
           if (top + height < ys[0]! || top > ys[1]!) continue;
           if (row.kind === 'raw') {
             for (const event of this.visibleRaw(row.type)) if (event.beat >= beats[0]! && event.beat <= beats[1]!) picked.push(event.id);
+          } else if (row.kind === 'poses') {
+            for (const block of this.editor.ringBlocks) if (block.end > beats[0]! && block.start < beats[1]!) picked.push(block.id);
           } else for (const { clip, role } of this.clipsOf(row)) if (role !== 'background' && clip.end > beats[0]! && clip.start < beats[1]!) picked.push(clip.id);
         }
         this.editor.select(picked, drag.additive ? 'add' : 'replace');
@@ -1342,6 +1664,13 @@ export class Timeline {
         target: { ...(effect.target === undefined ? {} : { target: effect.target }), type: effect.type, ids: effect.ids === null ? null : [...effect.ids] },
       });
     }
+    return out;
+  }
+
+  /** Where the selected ring pose blocks are now — before a drag (`poses`: their poses too). */
+  private blockOrigins(poses: boolean) {
+    const out = new Map<string, { start: number; end: number; poses: Map<string, number> }>();
+    for (const block of this.editor.selectedRingBlocks()) out.set(block.id, { start: block.start, end: block.end, poses: new Map(poses ? block.poses.map((pose) => [pose.id, pose.beat]) : []) });
     return out;
   }
 
@@ -1403,4 +1732,9 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, radius);
   ctx.arcTo(x, y, x + w, y, radius);
   ctx.fill();
+}
+
+/** The id of what a click hit. */
+function hitId(hit: { clip: LightClip } | { raw: RawEvent } | { block: RingBlock }) {
+  return 'clip' in hit ? hit.clip.id : 'block' in hit ? hit.block.id : hit.raw.id;
 }

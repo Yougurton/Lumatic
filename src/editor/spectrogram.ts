@@ -5,15 +5,45 @@
  */
 
 export interface Spectrogram {
-  /** One column per frame (frame = hop / sampleRate seconds). */
+  /** One column per frame (frame = hop / sampleRate seconds), low notes at the bottom. */
   image: HTMLCanvasElement;
   secondsPerFrame: number;
   frames: number;
+  /** The levels the picture is painted from (0…255, `bands` per column, lowest band first). */
+  values: Uint8Array;
+  bands: number;
+  /** The frequencies the bands span (Hz). */
+  lowHz: number;
+  highHz: number;
+}
+
+/** How the spectrogram is shown: its height (px), the stretch of frequencies, the level below which
+ *  it stays dark (0…1) and the contrast (a power on the level: above 1 darker, below 1 brighter). */
+export interface SpectrogramLook {
+  height: number;
+  lowHz: number;
+  highHz: number;
+  floor: number;
+  contrast: number;
+}
+
+export const DEFAULT_LOOK: SpectrogramLook = { height: 110, lowHz: 30, highHz: 16000, floor: 0, contrast: 1 };
+
+const hz2mel = (f: number) => 2595 * Math.log10(1 + f / 700);
+const mel2hz = (m: number) => 700 * (10 ** (m / 2595) - 1);
+
+/** Where a frequency sits among the bands (0: the lowest band's middle; fractional). */
+export function bandOfHz(spectrogram: Spectrogram, hz: number) {
+  const lo = hz2mel(spectrogram.lowHz);
+  const hi = hz2mel(spectrogram.highHz);
+  return ((hz2mel(Math.max(1, hz)) - lo) / (hi - lo)) * (spectrogram.bands + 1) - 1;
 }
 
 const BANDS = 96;
 const FFT_SIZE = 2048;
 const HOP = 512;
+const LOW_HZ = 30;
+const HIGH_HZ = 16000;
 
 /** Inline worker code (no bundler worker setup needed): STFT → mel bands → dB → 0…255. */
 const workerSource = `
@@ -46,7 +76,7 @@ self.onmessage = (event) => {
   const frames = Math.max(1, Math.floor((samples.length - FFT) / HOP) + 1);
   const hz2mel = (f) => 2595 * Math.log10(1 + f / 700);
   const mel2hz = (m) => 700 * (Math.pow(10, m / 2595) - 1);
-  const lo = hz2mel(30), hi = hz2mel(Math.min(16000, sampleRate / 2));
+  const lo = hz2mel(${LOW_HZ}), hi = hz2mel(Math.min(${HIGH_HZ}, sampleRate / 2));
   const edges = [];
   for (let b = 0; b <= BANDS + 1; b++) edges.push(Math.round(mel2hz(lo + (hi - lo) * b / (BANDS + 1)) / sampleRate * FFT));
   const window = new Float32Array(FFT);
@@ -123,31 +153,46 @@ export function computeSpectrogram(buffer: AudioBuffer, onProgress?: (progress: 
       const frames = event.data.frames ?? 0;
       const bands = event.data.bands ?? BANDS;
       const values = event.data.data;
-      const lut = Array.from({ length: 256 }, (_, i) => ramp(i / 255));
-      // (columns in tiles: a canvas can't be wider than ~16k pixels everywhere)
-      const image = document.createElement('canvas');
-      image.width = Math.min(frames, 16000);
-      image.height = bands;
-      const scale = frames / image.width;
-      const context = image.getContext('2d')!;
-      const pixels = context.createImageData(image.width, bands);
-      for (let x = 0; x < image.width; x++) {
+      // (columns brought down to what a canvas can be wide everywhere: ~16k pixels)
+      const width = Math.min(frames, 16000);
+      const scale = frames / width;
+      const columns = new Uint8Array(width * bands);
+      for (let x = 0; x < width; x++) {
         const f0 = Math.floor(x * scale);
         const f1 = Math.max(f0 + 1, Math.floor((x + 1) * scale));
         for (let b = 0; b < bands; b++) {
           let peak = 0;
           for (let f = f0; f < f1 && f < frames; f++) peak = Math.max(peak, values[f * bands + b]!);
-          const [r, g, bl] = lut[peak]!;
-          const p = ((bands - 1 - b) * image.width + x) * 4;
-          pixels.data[p] = r;
-          pixels.data[p + 1] = g;
-          pixels.data[p + 2] = bl;
-          pixels.data[p + 3] = 255;
+          columns[x * bands + b] = peak;
         }
       }
-      context.putImageData(pixels, 0, 0);
-      resolve({ image, secondsPerFrame: (HOP / buffer.sampleRate) * scale, frames: image.width });
+      const image = document.createElement('canvas');
+      image.width = width;
+      image.height = bands;
+      const spectrogram: Spectrogram = { image, secondsPerFrame: (HOP / buffer.sampleRate) * scale, frames: width, values: columns, bands, lowHz: LOW_HZ, highHz: Math.min(HIGH_HZ, buffer.sampleRate / 2) };
+      paintSpectrogram(spectrogram, DEFAULT_LOOK);
+      resolve(spectrogram);
     };
     worker.postMessage({ samples, sampleRate: buffer.sampleRate }, [samples.buffer]);
   });
+}
+
+/** Paints the picture anew for a look (its level floor and contrast). */
+export function paintSpectrogram(spectrogram: Spectrogram, look: Pick<SpectrogramLook, 'floor' | 'contrast'>) {
+  const { image, bands, values } = spectrogram;
+  const floor = Math.min(0.95, Math.max(0, look.floor));
+  const lut = Array.from({ length: 256 }, (_, i) => ramp(Math.max(0, Math.min(1, (i / 255 - floor) / (1 - floor))) ** look.contrast));
+  const context = image.getContext('2d')!;
+  const pixels = context.createImageData(image.width, bands);
+  for (let x = 0; x < image.width; x++) {
+    for (let b = 0; b < bands; b++) {
+      const [r, g, bl] = lut[values[x * bands + b]!]!;
+      const p = ((bands - 1 - b) * image.width + x) * 4;
+      pixels.data[p] = r;
+      pixels.data[p + 1] = g;
+      pixels.data[p + 2] = bl;
+      pixels.data[p + 3] = 255;
+    }
+  }
+  context.putImageData(pixels, 0, 0);
 }

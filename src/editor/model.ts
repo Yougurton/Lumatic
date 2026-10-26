@@ -1,4 +1,5 @@
 import type { Effect } from './effects';
+import type { RingBlock } from './rings';
 
 /**
  * The editor's own picture of a lightshow (what the project file keeps): light clips on the
@@ -103,6 +104,8 @@ export interface Project {
   expandedGroups?: string[];
   /** Effects (their events are clips with `group` = the effect's id). */
   effects?: Effect[];
+  /** Ring pose blocks. */
+  ringBlocks?: RingBlock[];
 }
 
 let counter = 0;

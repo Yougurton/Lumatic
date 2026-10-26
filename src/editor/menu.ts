@@ -63,6 +63,19 @@ export function showMenu(x: number, y: number, items: (MenuItem | null)[]) {
   open = menu;
 }
 
+/** A small panel of controls by a point (closes like a menu: a click outside it, Esc). */
+export function showPanel(x: number, y: number, content: HTMLElement) {
+  closeMenu();
+  const panel = document.createElement('div');
+  panel.className = 'ce-menu ce-panel';
+  panel.append(content);
+  document.body.append(panel);
+  const rect = panel.getBoundingClientRect();
+  panel.style.left = `${String(Math.max(4, Math.min(x, window.innerWidth - rect.width - 4)))}px`;
+  panel.style.top = `${String(Math.max(4, Math.min(y, window.innerHeight - rect.height - 4)))}px`;
+  open = panel;
+}
+
 /** Asks for one line of text (null: cancelled). */
 export function ask(title: string, value = ''): Promise<string | null> {
   closeMenu();

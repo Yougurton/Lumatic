@@ -1,10 +1,3 @@
-import {
-  AdditiveBlending,
-  CanvasTexture,
-  Sprite,
-  SpriteMaterial,
-} from 'three';
-
 import type { InfoColorScheme } from '../engine/core/beatmap/info';
 import { createDifficulty, type BasicEvent, type BpmEvent } from '../engine/core/beatmap/types';
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
@@ -19,8 +12,7 @@ import type { OutEvent } from './bake';
 /**
  * The 3D view: ChroPaper's renderer showing the environment with the lightshow as it is being
  * edited (lights only — the notes would only get in the way). Every edit rebuilds the light
- * timelines (the cheap path ChroPaper's live lightshow uses). Also the editor's own things in the
- * scene: the green glow on a lamp picked in the timeline.
+ * timelines (the cheap path ChroPaper's live lightshow uses).
  */
 
 export interface LightInfo {
@@ -36,8 +28,6 @@ export class Preview {
   private songBpm = 120;
   private bpmEvents: BpmEvent[] = [];
   private colorScheme: InfoColorScheme | undefined;
-  private glow: { sprite: Sprite; startedAt: number } | null = null;
-  private glowTexture: CanvasTexture | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.lifecycle.attach(canvas);
@@ -108,51 +98,4 @@ export class Preview {
     });
     this.view.updateLightshow(data, this.colorScheme);
   }
-
-  /** A green glow on a lamp, fading out (a light picked in the timeline). */
-  highlight(position: [number, number, number] | null) {
-    if (this.glow !== null) {
-      this.view.overlayRoot.remove(this.glow.sprite);
-      this.glow.sprite.material.dispose();
-      this.glow = null;
-    }
-    if (position === null) return;
-    this.glowTexture ??= glowTexture();
-    const material = new SpriteMaterial({ map: this.glowTexture, color: 0x33ff77, transparent: true, blending: AdditiveBlending, depthTest: false, depthWrite: false });
-    const sprite = new Sprite(material);
-    sprite.position.set(...position);
-    sprite.scale.set(3, 3, 1);
-    sprite.renderOrder = 10_000;
-    sprite.matrixAutoUpdate = true;
-    sprite.updateMatrixWorld(true);
-    this.view.overlayRoot.add(sprite);
-    this.view.overlayRoot.updateMatrixWorld(true);
-    this.glow = { sprite, startedAt: performance.now() };
-    const step = () => {
-      const glow = this.glow;
-      if (glow === null || glow.sprite !== sprite) return;
-      const t = (performance.now() - glow.startedAt) / 1600;
-      material.opacity = Math.max(0, 1 - t);
-      const scale = 3 + t * 2;
-      sprite.scale.set(scale, scale, 1);
-      sprite.updateMatrixWorld(true);
-      if (t < 1) requestAnimationFrame(step);
-      else this.highlight(null);
-    };
-    requestAnimationFrame(step);
-  }
-}
-
-function glowTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext('2d')!;
-  const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
-  gradient.addColorStop(0, 'rgba(255,255,255,1)');
-  gradient.addColorStop(0.3, 'rgba(255,255,255,0.6)');
-  gradient.addColorStop(1, 'rgba(255,255,255,0)');
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 64, 64);
-  return new CanvasTexture(canvas);
 }

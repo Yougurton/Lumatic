@@ -19,6 +19,7 @@ import type { InfoColorScheme } from '../core/beatmap/info';
 import type { ChromaEnvironmentData } from '../core/chroma-environment';
 import { DEFAULT_COLORS, resolveColorScheme, type ColorScheme, type Rgb } from '../core/colors';
 import { isForcedLightshowMode, type LightshowMode } from '../core/lighting/basic-light';
+import type { RingRotationConfig } from '../core/lighting/ring-motion';
 import { sampleNoodlePlayerTrack } from '../core/noodle-runtime';
 import { applyReplayHeightEvents, applyReplayNoteEvents, type MapRenderData } from '../core/placement/map-render-data';
 import type { HitScoreVisualizerConfig } from '../core/replay/hit-score-visualizer';
@@ -35,6 +36,7 @@ import {
   environmentLoadFailure,
   type EnvironmentLoadFailure,
 } from './environment/environment-error';
+import { environmentLookupIds } from './environment/chroma-environment';
 import { loadEnvironment } from './environment/environment-loader';
 import type { EnvironmentLightBinding, LoadedEnvironment } from './environment/environment-runtime';
 import { EnvironmentLightRuntime } from './map/environment-light-runtime';
@@ -305,16 +307,48 @@ export class MapView implements RenderView {
   private overlayAdded = false;
 
   /** The environment's ring systems: their names (what Chroma's nameFilter picks), how many rings,
-   *  whether ring events turn them / move them. */
-  ringSystems(): { name: string; rings: number; rotates: boolean; zooms: boolean }[] {
+   *  whether ring events turn them / move them; the ring motion's settings and seed (for working
+   *  out where rings stand), and per ring the ids Chroma's environment lookups find it by. */
+  ringSystems(): {
+    name: string;
+    rings: number;
+    rotates: boolean;
+    zooms: boolean;
+    rotation?: RingRotationConfig;
+    seed: number;
+    ringIds: string[][];
+  }[] {
     const environment = this.environment;
     if (environment === null) return [];
-    return environment.ringGroups.map((group) => ({
+    const data = environment.data;
+    const lookupIds = environmentLookupIds(data);
+    // (the rings' objects, in the order buildRingGroups takes them)
+    const ringObjects: number[][] = [];
+    data.objects.forEach((object) => {
+      for (const manager of object.components?.TrackLaneRingsManager ?? []) {
+        if (!manager.enabled) continue;
+        const rings = manager.Rings.flatMap((reference) => {
+          const ring = data.objects[reference.obj]?.components?.TrackLaneRing?.[reference.componentIndex ?? 0];
+          return ring === undefined || !ring.enabled ? [] : [reference.obj];
+        });
+        if (rings.length > 0) ringObjects.push(rings);
+      }
+    });
+    return environment.ringGroups.map((group, index) => ({
       name: group.rotationConfig?.name ?? group.positionConfig?.name ?? '',
       rings: group.rings.length,
       rotates: group.rotationConfig !== undefined,
       zooms: group.positionConfig !== undefined,
+      ...(group.rotationConfig === undefined ? {} : { rotation: group.rotationConfig }),
+      seed: group.seed,
+      ringIds: (ringObjects[index] ?? []).map((object) => lookupIds.get(object) ?? []),
     }));
+  }
+
+  /** The environment's Chroma track animations were changed in place (the editor's ring poses):
+   *  played from now on without loading the environment again. */
+  refreshChromaAnimations() {
+    this.environmentLights.refreshChromaTracks();
   }
 
   /** The environment's lights as events address them: per event type, each light ID, where it is

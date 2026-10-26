@@ -160,6 +160,11 @@ export class EnvironmentLightRuntime {
     this.rebuildRuntime();
   }
 
+  /** For the editor: the environment's Chroma track animations changed (in place). */
+  refreshChromaTracks() {
+    if (this.environment !== null) this.chromaTracks.rebuild(this.environment);
+  }
+
   setMap(data: MapRenderData, colors: ColorScheme) {
     this.data = data;
     this.colors = colors;

@@ -1,5 +1,6 @@
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
-import type { BpmEvent } from '../engine/core/beatmap/types';
+import type { BeatmapCustomData, BpmEvent } from '../engine/core/beatmap/types';
+import { EMPTY_CHROMA_ENVIRONMENT, parseV3ChromaEnvironment, type ChromaEnvironmentData } from '../engine/core/chroma-environment';
 import { createAudioClock, createSilentClock, type SongClock } from '../engine/core/clock/song-clock';
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import { bakeLights, rawEvents, type OutEvent, type SchemeColors } from './bake';
@@ -25,13 +26,14 @@ import {
   type RawEvent,
   type StartMode,
 } from './model';
-import { clipRank } from './bake';
+import { clipRank, resolveRgb } from './bake';
 import { buildEffect, childrenSignature, defaultParams, effectItems, KIND_NAMES, type Effect, type EffectExtras, type EffectKind, type EffectParams } from './effects';
 import { defaultGls } from './gls';
 import { lightGroupName, otherEventName } from './names';
 import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
+import { chromaCustomData, cloneRingBlock, poseRingEvents, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -46,7 +48,16 @@ export type Row =
   | { kind: 'light'; key: string; type: number; id: number; label: string; depth: number; parent: string | null }
   /** One of the user's groups (or subgroups). */
   | { kind: 'custom'; key: string; group: LightGroup; label: string; expanded: boolean; depth: number; parent: string | null }
-  | { kind: 'raw'; key: string; type: number; label: string; depth: number };
+  | { kind: 'raw'; key: string; type: number; label: string; depth: number }
+  /** The ring poses (blocks of them). */
+  | { kind: 'poses'; key: string; label: string; depth: number };
+
+/** A row of lights (a light group, a light, a group of the user's) — clips and effects go there. */
+export type LightRow = Extract<Row, { kind: 'group' | 'light' | 'custom' }>;
+export const isLightRow = (row: Row): row is LightRow => row.kind === 'group' || row.kind === 'light' || row.kind === 'custom';
+
+/** The event type ring events turn the rings with. */
+export const RING_EVENT_TYPE = 8;
 
 /** A clip as a row shows it: `partial` — it lights only some of the row's lights; `level` — how
  *  far up it sits among the clips of the row (drawn lower the higher it is). */
@@ -122,12 +133,23 @@ export class Editor {
   duration = 60;
   clock: SongClock | null = null;
   spectrogram: Spectrogram | null = null;
+  /** The environment's turning ring systems (as it came, before the editor's ring tracks). */
+  ringInfo: RingSystemInfo[] = [];
+  /** The difficulty's own Chroma environment (what the map had). */
+  private mapChroma: ChromaEnvironmentData | undefined;
+  /** What the 3D view's environment was last loaded with for the ring tracks, and the animations
+   *  it plays. */
+  private ringEnhancementKey = '';
+  private ringAnimationKey = '';
+  private previewChroma: ChromaEnvironmentData | undefined;
+  /** Opens a ring pose block's editor (set by the app). */
+  ringEditorHook: ((id: string) => void) | null = null;
   status = '';
   dirty = false;
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
-  private clipboard: { clips: LightClip[]; raw: RawEvent[]; effects: { effect: Effect; children: LightClip[]; raw: RawEvent[] }[] } | null = null;
+  private clipboard: { clips: LightClip[]; raw: RawEvent[]; effects: { effect: Effect; children: LightClip[]; raw: RawEvent[] }[]; ringBlocks: RingBlock[] } | null = null;
   private rebuildTimer: number | null = null;
   private toSong: (jsonTime: number) => number = (beat) => beat;
 
@@ -225,8 +247,13 @@ export class Editor {
     const environment = row.environmentId ?? 'DefaultEnvironment';
     this.setStatus(`Загружаю окружение ${environment}…`);
     this.preview.setTiming(this.songBpm, this.bpmEvents, row.colorScheme);
+    this.mapChroma = difficulty.chromaEnvironment;
+    this.previewChroma = difficulty.chromaEnvironment;
+    this.ringEnhancementKey = '';
+    this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);
     this.lightInfo = this.preview.lights();
+    this.ringInfo = this.preview.ringSystems().flatMap((system) => (system.rotation === undefined ? [] : [{ name: system.name, rings: system.rings, rotation: system.rotation, seed: system.seed, ringIds: system.ringIds }]));
     this.lightsByType = new Map();
     for (const light of this.lightInfo) {
       if (!isLightType(light.type)) continue;
@@ -237,11 +264,11 @@ export class Editor {
     for (const list of this.lightsByType.values()) list.sort((a, b) => a - b);
     const file = difficultyFile(row);
     const saved = await loadProject(map.folder, file);
-    if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [], effects: saved.effects ?? [] };
+    if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [], effects: saved.effects ?? [], ringBlocks: saved.ringBlocks ?? [] };
     else {
       const lastBeat = Math.max(0, ...difficulty.events.map((event) => event.jsonTime), ...difficulty.notes.map((note) => note.jsonTime));
       const { clips, raw } = importEvents(difficulty.events, this.lightsByType, lastBeat + 8, this.songBpm / 60);
-      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [] };
+      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [] };
     }
     this.selection.clear();
     this.lightSelection.clear();
@@ -303,9 +330,7 @@ export class Editor {
   bake(): OutEvent[] {
     const project = this.project;
     if (project === null) return [];
-    const colors = this.preview.colors;
-    const scheme: SchemeColors = { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] };
-    return [...bakeLights(project.clips, this.lightsByType, scheme, 60 / this.songBpm, this.groups), ...rawEvents(project.raw)].sort((a, b) => a.beat - b.beat);
+    return this.bakeWith(project.clips, project.raw);
   }
 
   /** What the 3D view shows: the show, and whatever is being tried out. */
@@ -313,9 +338,28 @@ export class Editor {
     const project = this.project;
     const extra = this.previewExtra;
     if (project === null || extra === null) return this.bake();
-    const colors = this.preview.colors;
-    const scheme: SchemeColors = { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] };
-    return [...bakeLights([...project.clips, ...extra.clips], this.lightsByType, scheme, 60 / this.songBpm, this.groups), ...rawEvents([...project.raw, ...extra.raw])].sort((a, b) => a.beat - b.beat);
+    return this.bakeWith([...project.clips, ...extra.clips], [...project.raw, ...extra.raw]);
+  }
+
+  private bakeWith(clips: readonly LightClip[], raw: readonly RawEvent[]): OutEvent[] {
+    const other = rawEvents(raw);
+    const rings = other.filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
+    const poses = poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm).map(({ group: _group, ...event }) => event);
+    // (the poses' ring events before the show's own at the same moment: of two at once, the first wins)
+    return [...bakeLights(clips, this.lightsByType, this.scheme(), 60 / this.songBpm, this.groups), ...poses, ...other].sort((a, b) => a.beat - b.beat);
+  }
+
+  /** The ring poses' ring events (for drawing them on the rings' row). */
+  poseEvents() {
+    const project = this.project;
+    if (project === null) return [];
+    const rings = rawEvents(project.raw).filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
+    return poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm);
+  }
+
+  /** The Chroma environment the ring poses on tracks need: the rings on tracks, their turns. */
+  ringChroma(): { enhancements: RingEnhancement[]; animations: RingAnimation[] } {
+    return { enhancements: ringEnhancements(this.ringBlocks, this.ringInfo), animations: ringAnimations(this.ringBlocks, this.ringInfo) };
   }
 
   async save() {
@@ -326,10 +370,10 @@ export class Editor {
     const file = difficultyFile(row);
     const original = await map.folder.readText(file);
     const events = this.bake();
-    const text = writeDifficulty(original, events);
+    const text = writeDifficulty(original, events, this.ringChroma());
     await map.folder.writeText(file, text);
     await map.folder.writeText(projectFileName(file), JSON.stringify(project));
-    if (events.some((event) => event.color !== undefined || event.lightIds !== undefined)) {
+    if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma().enhancements.length > 0) {
       const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
       if (infoName !== undefined) await map.folder.writeText(infoName, suggestChroma(await map.folder.readText(infoName), file));
     }
@@ -385,6 +429,7 @@ export class Editor {
       if (expanded) for (const id of lights) rows.push({ kind: 'light', key: `l${lightKey(type, id)}`, type, id, label: `ID ${String(id)}`, depth: 1, parent: null });
     }
     for (const group of this.groups) pushGroup(group, 0, null);
+    if (this.ringInfo.length > 0 || this.ringBlocks.length > 0) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0 });
     const rawTypes = [...new Set(project.raw.map((event) => event.type))].sort((a, b) => a - b);
     for (const type of [8, 9, 12, 13, 5]) if (!rawTypes.includes(type)) rawTypes.push(type);
     for (const type of rawTypes.sort((a, b) => a - b)) rows.push({ kind: 'raw', key: `r${String(type)}`, type, label: otherEventName(type), depth: 0 });
@@ -433,7 +478,7 @@ export class Editor {
   /** The clips a row shows: every clip lighting any of its lights, lowest rank first. */
   rowClips(row: Row): ShownClip[] {
     const project = this.project;
-    if (project === null || row.kind === 'raw') return [];
+    if (project === null || !isLightRow(row)) return [];
     const cached = this.rowCache.get(row.key);
     if (cached !== undefined && cached.version === this.version) return cached.clips;
     const groups = this.groups;
@@ -493,8 +538,7 @@ export class Editor {
 
   pickLight(type: number, id: number) {
     this.pickedLight = { type, id };
-    const light = this.lightInfo.find((item) => item.type === type && item.lightId === id);
-    this.preview.highlight(light?.position ?? null);
+    if (!this.lightSelection.has(lightKey(type, id))) this.flashLights([{ kind: 'light', type, id }]);
     this.emit('selection');
   }
 
@@ -506,6 +550,7 @@ export class Editor {
       if (mode === 'toggle' && this.lightSelection.has(key)) this.lightSelection.delete(key);
       else this.lightSelection.add(key);
     }
+    this.flashLights(this.selectedLights());
     this.emit('lights');
   }
 
@@ -804,7 +849,7 @@ export class Editor {
 
   private snapshot() {
     const project = this.project;
-    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [] });
+    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [] });
   }
 
   /** Call before a change (one undo step). */
@@ -846,16 +891,18 @@ export class Editor {
   private restore(state: string) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[] };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[] };
     project.clips = data.clips;
     project.raw = data.raw;
     project.effects = data.effects ?? [];
+    const hadPoses = (project.ringBlocks ?? []).length > 0;
+    project.ringBlocks = data.ringBlocks ?? [];
     if (this.openEffect !== null && !project.effects.some((effect) => effect.id === this.openEffect)) this.openEffect = null;
     const groupsChanged = JSON.stringify(project.groups ?? []) !== JSON.stringify(data.groups);
     project.groups = data.groups;
-    const ids = new Set([...data.clips.map((clip) => clip.id), ...data.raw.map((event) => event.id), ...project.effects.map((effect) => effect.id)]);
+    const ids = new Set([...data.clips.map((clip) => clip.id), ...data.raw.map((event) => event.id), ...project.effects.map((effect) => effect.id), ...project.ringBlocks.map((block) => block.id)]);
     for (const id of [...this.selection]) if (!ids.has(id)) this.selection.delete(id);
-    if (groupsChanged) {
+    if (groupsChanged || hadPoses !== project.ringBlocks.length > 0) {
       this.buildRows();
       this.emit('rows');
     }
@@ -893,7 +940,7 @@ export class Editor {
   }
 
   private plainClipForRow(row: Row, start: number, end: number): LightClip | null {
-    if (row.kind === 'raw') return null;
+    if (!isLightRow(row)) return null;
     if (row.kind === 'group') return this.newClip(row.type, null, start, end);
     if (row.kind === 'light') return { ...this.newClip(row.type, [row.id], start, end), scope: 'light' };
     const first = groupLights(row.group)[0];
@@ -902,7 +949,7 @@ export class Editor {
 
   /** Puts a clip onto another row (what it lights becomes what that row stands for). */
   retarget(clip: LightClip, row: Row) {
-    if (row.kind === 'raw') return;
+    if (!isLightRow(row)) return;
     delete clip.target;
     delete clip.scope;
     if (row.kind === 'group') {
@@ -967,6 +1014,7 @@ export class Editor {
     if (this.openEffect !== null && effects.has(this.openEffect)) this.openEffect = null;
     project.clips = project.clips.filter((clip) => !this.selection.has(clip.id) && (clip.group === undefined || !effects.has(clip.group)));
     project.raw = project.raw.filter((event) => !this.selection.has(event.id) && (event.group === undefined || !effects.has(event.group)));
+    project.ringBlocks = this.ringBlocks.filter((block) => !this.selection.has(block.id));
     this.selection.clear();
     this.changed();
   }
@@ -975,7 +1023,7 @@ export class Editor {
     const project = this.project;
     if (project === null) return;
     const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
-    this.select([...project.clips.filter((clip) => clip.group === undefined || !hidden.has(clip.group)).map((clip) => clip.id), ...project.raw.filter((event) => event.group === undefined || !hidden.has(event.group)).map((event) => event.id), ...this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id)]);
+    this.select([...project.clips.filter((clip) => clip.group === undefined || !hidden.has(clip.group)).map((clip) => clip.id), ...project.raw.filter((event) => event.group === undefined || !hidden.has(event.group)).map((event) => event.id), ...this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id), ...this.ringBlocks.map((block) => block.id)]);
   }
 
   copy() {
@@ -984,7 +1032,8 @@ export class Editor {
     const clips = this.selectedClips().map((clip) => cloneClip(clip, { id: clip.id }));
     const raw = project.raw.filter((event) => this.selection.has(event.id)).map((event) => ({ ...event }));
     const effects = this.selectedEffects().map((effect) => ({ effect: structuredClone(effect), children: this.effectChildren(effect.id).map((clip) => cloneClip(clip, { id: clip.id })), raw: this.effectRaw(effect.id).map((event) => structuredClone(event)) }));
-    if (clips.length + raw.length + effects.length > 0) this.clipboard = { clips, raw, effects };
+    const ringBlocks = this.selectedRingBlocks().map((block) => structuredClone(block));
+    if (clips.length + raw.length + effects.length + ringBlocks.length > 0) this.clipboard = { clips, raw, effects, ringBlocks };
   }
 
   /** Pastes at `at` (the first copied thing lands there). */
@@ -992,7 +1041,7 @@ export class Editor {
     const project = this.project;
     const board = this.clipboard;
     if (project === null || board === null) return;
-    const first = Math.min(...board.clips.map((clip) => clip.start), ...board.raw.map((event) => event.beat), ...board.effects.map((item) => item.effect.start));
+    const first = Math.min(...board.clips.map((clip) => clip.start), ...board.raw.map((event) => event.beat), ...board.effects.map((item) => item.effect.start), ...board.ringBlocks.map((block) => block.start));
     const shift = at - first;
     this.checkpoint();
     const pasted: string[] = [];
@@ -1013,12 +1062,17 @@ export class Editor {
       for (const event of raw) project.raw.push({ ...structuredClone(event), id: newId('r'), beat: event.beat + shift, group: copy.id });
       pasted.push(copy.id);
     }
+    for (const block of board.ringBlocks) {
+      const copy = cloneRingBlock(block, { start: block.start + shift, end: block.end + shift });
+      this.ringBlocks.push(copy);
+      pasted.push(copy.id);
+    }
     this.selection = new Set(pasted);
     this.changed();
   }
 
   duplicateSelection() {
-    const spans = [...this.selectedClips(), ...this.selectedEffects()];
+    const spans = [...this.selectedClips(), ...this.selectedEffects(), ...this.selectedRingBlocks()];
     if (spans.length === 0) return;
     const start = Math.min(...spans.map((clip) => clip.start));
     const end = Math.max(...spans.map((clip) => clip.end));
@@ -1088,7 +1142,7 @@ export class Editor {
 
   /** The row an effect would go on → what it runs over (null: not a light row). */
   private targetOfRow(row: Row): Pick<Effect, 'target' | 'type' | 'ids'> | null {
-    if (row.kind === 'raw') return null;
+    if (!isLightRow(row)) return null;
     if (row.kind === 'group') return { type: row.type, ids: null };
     if (row.kind === 'light') return { type: row.type, ids: [row.id] };
     return { target: row.group.id, type: groupLights(row.group)[0]?.type ?? 0, ids: null };
@@ -1307,7 +1361,7 @@ export class Editor {
 
   /** The row the library puts things on: the one picked last, or a sensible one. */
   libraryRow(): Row | null {
-    const rows = this.rows.filter((row) => row.kind !== 'raw');
+    const rows = this.rows.filter(isLightRow);
     return rows.find((row) => row.key === this.activeRow) ?? rows.find((row) => row.kind === 'custom') ?? rows.find((row) => row.kind === 'group' && row.type === 1) ?? rows[0] ?? null;
   }
 
@@ -1315,6 +1369,85 @@ export class Editor {
     if (this.activeRow === key) return;
     this.activeRow = key;
     this.emit('selection');
+  }
+
+  // ----- ring poses -----------------------------------------------------------------------------------
+
+  get ringBlocks(): RingBlock[] {
+    const project = this.project;
+    if (project === null) return [];
+    project.ringBlocks ??= [];
+    return project.ringBlocks;
+  }
+
+  ringBlockById(id: string) {
+    return this.ringBlocks.find((block) => block.id === id);
+  }
+
+  selectedRingBlocks(): RingBlock[] {
+    return this.ringBlocks.filter((block) => this.selection.has(block.id));
+  }
+
+  addRingBlock(block: RingBlock) {
+    if (this.project === null) return;
+    this.checkpoint();
+    this.ringBlocks.push(block);
+    this.selection = new Set([block.id]);
+    this.changed();
+  }
+
+  /** Changes one ring pose block (one undo step). */
+  updateRingBlock(id: string, patch: (block: RingBlock) => void) {
+    const block = this.ringBlockById(id);
+    if (block === undefined) return;
+    this.checkpoint();
+    patch(block);
+    this.changed();
+  }
+
+  /** Copies of ring blocks right where they are — no undo step of its own (Alt+drag). */
+  cloneRingBlocksInPlace(blocks: readonly RingBlock[]): string[] {
+    return blocks.map((block) => {
+      const copy = cloneRingBlock(block);
+      this.ringBlocks.push(copy);
+      return copy.id;
+    });
+  }
+
+  /** The 3D view's environment for the ring tracks: loaded again when which rings are on tracks
+   *  changes, its animations swapped in place otherwise. */
+  private syncRingTracks() {
+    const row = this.row;
+    if (row === null) return;
+    const { enhancements, animations } = this.ringChroma();
+    const enhancementKey = JSON.stringify(enhancements);
+    const animationKey = JSON.stringify(animations);
+    if (enhancementKey === this.ringEnhancementKey && animationKey === this.ringAnimationKey) return;
+    const reload = enhancementKey !== this.ringEnhancementKey;
+    this.ringEnhancementKey = enhancementKey;
+    this.ringAnimationKey = animationKey;
+    const base = this.mapChroma ?? { ...structuredClone(EMPTY_CHROMA_ENVIRONMENT), version: 3 as const };
+    if (enhancements.length === 0) {
+      if (this.previewChroma !== this.mapChroma) {
+        this.previewChroma = this.mapChroma;
+        void this.preview.setEnvironment(row.environmentId ?? 'DefaultEnvironment', this.mapChroma);
+      }
+      return;
+    }
+    // (read back with ChroPaper's own parser: the view plays exactly what gets written)
+    const ours = parseV3ChromaEnvironment(chromaCustomData(enhancements, animations, false) as BeatmapCustomData).chromaEnvironment;
+    for (const animation of ours.animations) {
+      animation.songBpmTime = this.toSong(animation.jsonTime);
+      animation.durationSongBpmTime = this.toSong(animation.jsonTime + animation.duration) - animation.songBpmTime;
+    }
+    const merged = [...base.animations, ...ours.animations].sort((a, b) => a.songBpmTime - b.songBpmTime);
+    if (reload || this.previewChroma === undefined || this.previewChroma === this.mapChroma) {
+      this.previewChroma = { ...base, enhancements: [...base.enhancements, ...ours.enhancements], animations: merged };
+      void this.preview.setEnvironment(row.environmentId ?? 'DefaultEnvironment', this.previewChroma);
+    } else {
+      this.previewChroma.animations = merged;
+      this.preview.view.refreshChromaAnimations();
+    }
   }
 
   // ----- trying things out ----------------------------------------------------------------------------
@@ -1350,7 +1483,8 @@ export class Editor {
     const run = () => {
       this.rebuildTimer = null;
       try {
-        this.preview.setEvents(this.bakeForPreview());
+        this.syncRingTracks();
+        this.preview.setEvents([...this.previewEvents(), ...this.flashEvents()]);
       } catch (error) {
         console.error('[chroeditor] preview rebuild failed', error);
       }
@@ -1358,7 +1492,59 @@ export class Editor {
     if (now) run();
     else this.rebuildTimer = window.setTimeout(run, 40);
   }
+
+  /** What the 3D view shows (kept until the show or what's tried out changes). */
+  private previewEvents(): OutEvent[] {
+    const cached = this.previewCache;
+    if (cached !== null && cached.version === this.version && cached.extra === this.previewExtra && cached.project === this.project) return cached.events;
+    const events = this.bakeForPreview();
+    this.previewCache = { version: this.version, extra: this.previewExtra, project: this.project, events };
+    return events;
+  }
+
+  private previewCache: { version: number; extra: Editor['previewExtra']; project: Project | null; events: OutEvent[] } | null = null;
+
+  // ----- picked lights flash in the 3D view ------------------------------------------------------------
+
+  /** Lights just picked (rows, groups, the mini map): they flash and fade out in the 3D view where the
+   *  song is — whether it plays or not. Only the view sees it: nothing goes into the show. */
+  private flash: { lights: LightRef[]; startedAt: number } | null = null;
+  private flashFrame = 0;
+
+  flashLights(lights: readonly LightRef[]) {
+    if (this.project === null || lights.length === 0) return;
+    this.flash = { lights: [...lights], startedAt: performance.now() };
+    if (this.flashFrame === 0) this.flashFrame = requestAnimationFrame(this.flashStep);
+  }
+
+  /** (each frame of a flash: the view gets the show with the flash where the song is now) */
+  private readonly flashStep = () => {
+    this.flashFrame = 0;
+    if (this.flash === null) return;
+    if (performance.now() - this.flash.startedAt >= FLASH_MS) this.flash = null;
+    this.rebuildPreview(true);
+    if (this.flash !== null) this.flashFrame = requestAnimationFrame(this.flashStep);
+  };
+
+  /** The flash as it is now: the picked lights lit in the brush's colour at the song's place, dimming
+   *  from frame to frame (a light event at exactly that moment covers whatever the show does there). */
+  private flashEvents(): OutEvent[] {
+    const flash = this.flash;
+    if (flash === null) return [];
+    const t = Math.min(1, (performance.now() - flash.startedAt) / FLASH_MS);
+    const brightness = 1.2 * (1 - t) ** 2;
+    const [r, g, b] = resolveRgb(this.brush.color, this.scheme());
+    // (a hair before the song's place: worked back from seconds, the beat can come out a rounding
+    // error past the view's own, and an event after it isn't lit yet)
+    const beat = this.playhead() - 1e-6;
+    const byType = new Map<number, number[]>();
+    for (const light of flash.lights) byType.set(light.type, [...(byType.get(light.type) ?? []), light.id]);
+    return [...byType].map(([type, ids]) => ({ beat, type, value: 1, floatValue: brightness, color: [r, g, b, 1], lightIds: ids }));
+  }
 }
+
+/** How long a picked light's flash takes to fade out. */
+const FLASH_MS = 1100;
 
 /** The angle of a point around a centre, going clockwise from the top (0…2π). */
 function angleOf(dx: number, dy: number) {

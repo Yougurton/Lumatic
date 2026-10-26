@@ -265,6 +265,7 @@ export class ChromaTrackRuntime {
   private readonly parentMatrixInverse = new Matrix4();
   private readonly noodleBasis = new Matrix4().makeScale(1, 1, -1);
   private transformTargets: TransformTarget[] = [];
+  private readonly baseTransforms = new WeakMap<Object3D, { position: Vector3; rotation: Quaternion; scale: Vector3 }>();
   private materialTargets: MaterialTarget[] = [];
   private tubeTargets: TubeTarget[] = [];
   private fogTracks: string[] = [];
@@ -325,13 +326,16 @@ export class ChromaTrackRuntime {
     for (const [track, targets] of environment.chromaTracks ?? []) {
       for (const target of targets) addTargetTrack(transformTracks, track, target);
     }
-    this.transformTargets = [...transformTracks].map(([target, tracks]) => ({
-      target,
-      tracks,
-      position: target.position.clone(),
-      rotation: target.quaternion.clone(),
-      scale: target.scale.clone(),
-    }));
+    this.transformTargets = [...transformTracks].map(([target, tracks]) => {
+      // (rebuilt with the animations changed — the editor — a target may stand where they had it:
+      // its own transform is the one it had when first seen)
+      let base = this.baseTransforms.get(target);
+      if (base === undefined) {
+        base = { position: target.position.clone(), rotation: target.quaternion.clone(), scale: target.scale.clone() };
+        this.baseTransforms.set(target, base);
+      }
+      return { target, tracks, position: base.position.clone(), rotation: base.rotation.clone(), scale: base.scale.clone() };
+    });
     this.transformTargets.sort((left, right) => targetDepth(left.target) - targetDepth(right.target));
 
     const materialTracks = new Map<ShaderMaterial, string[]>();

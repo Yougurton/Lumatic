@@ -4,6 +4,7 @@ import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectK
 import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
+import { newRingBlock } from './rings';
 
 /**
  * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
@@ -60,7 +61,7 @@ const RINGS: RingCard[] = [
   { name: 'Поворот 90°', hint: 'Все кольца разом поворачиваются на 90°', type: 8, data: { rotation: 90, step: 0, prop: 50, speed: 2, direction: 0 } },
   { name: 'Поворот волной', hint: 'Поворот на 90° бежит от ближних колец к дальним', type: 8, data: { rotation: 90, step: 0, prop: 1, speed: 1, direction: 0 } },
   { name: 'Закрутка', hint: 'Пол-оборота со спиралью, волной', type: 8, data: { rotation: 180, step: 15, prop: 2, speed: 1, direction: 0 } },
-  { name: 'Обратно', hint: 'Поворот на 90° против часовой', type: 8, data: { rotation: 90, step: 0, prop: 50, speed: 2, direction: 1 } },
+  { name: 'Обратно', hint: 'Поворот на 90° в другую сторону (по часовой)', type: 8, data: { rotation: 90, step: 0, prop: 50, speed: 2, direction: 1 } },
   { name: 'Сжать', hint: 'Кольца сдвигаются ближе друг к другу', type: 9, data: { step: 0.5, speed: 2 } },
   { name: 'Растянуть', hint: 'Кольца расходятся дальше друг от друга', type: 9, data: { step: 4, speed: 2 } },
 ];
@@ -144,7 +145,8 @@ function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | n
     const size = Math.min(width, height * 1.6) * 0.42 * scale;
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(angle);
+    // (a growing angle turns the rings counterclockwise as the player sees them)
+    ctx.rotate(-angle);
     const hue = 270 - k * 12;
     ctx.strokeStyle = `hsl(${String(hue)} 80% ${String(70 - k * 5)}%)`;
     ctx.lineWidth = Math.max(1, 3 * scale);
@@ -243,6 +245,22 @@ export class Library {
     grid.className = 'lib-grid';
     if (this.tab === 'effects') for (const card of EFFECTS) grid.append(this.effectCard(card));
     else for (const card of RINGS) grid.append(this.ringCard(card));
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
+      // the exact poses: a block of them at the cursor, its editor opened
+      const poses = document.createElement('button');
+      poses.className = 'lib-poses';
+      poses.textContent = '◎ Точные позы колец…';
+      poses.title = 'Блок поз у курсора: угол каждого кольца, спирали, волны, ручная раскладка — с предпросмотром';
+      poses.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        const start = editor.snapBeat(editor.playhead());
+        const block = newRingBlock(editor.ringInfo[0]!.name, 'event', start, start + 4);
+        editor.addRingBlock(block);
+        editor.ringEditorHook?.(block.id);
+      });
+      this.body.append(poses);
+    }
     const tip = document.createElement('div');
     tip.className = 'lib-tip';
     tip.textContent =

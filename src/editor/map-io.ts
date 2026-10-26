@@ -4,6 +4,7 @@ import { parseMapPackage, type ParsedMapPackage } from '../engine/mapfile/parse-
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import type { OutEvent } from './bake';
 import type { Project } from './model';
+import { chromaCustomData, TRACK_PREFIX, type RingAnimation, type RingEnhancement } from './rings';
 import type { MapFolder } from './platform';
 
 /**
@@ -94,9 +95,10 @@ function v3Event(event: OutEvent) {
 
 /** The difficulty's text with its events replaced (v2: `_events`; v3: `basicBeatmapEvents` and the
  *  boost events). v4 isn't written yet. */
-export function writeDifficulty(original: string, events: readonly OutEvent[]): string {
+export function writeDifficulty(original: string, events: readonly OutEvent[], rings?: { enhancements: readonly RingEnhancement[]; animations: readonly RingAnimation[] }): string {
   const version = difficultyVersion(original);
   const root = JSON.parse(original) as Record<string, unknown>;
+  if (rings !== undefined && version !== '4') writeRingChroma(root, rings.enhancements, rings.animations, version === '2');
   const sorted = [...events].sort((a, b) => a.beat - b.beat);
   if (version === '2') {
     root._events = sorted.map(v2Event);
@@ -107,6 +109,38 @@ export function writeDifficulty(original: string, events: readonly OutEvent[]): 
     throw new Error('v4 maps can be opened, but saving them is not supported yet');
   }
   return JSON.stringify(root);
+}
+
+/**
+ * The ring poses on Chroma tracks into a difficulty's custom data: the rings' environment entries and
+ * their AnimateTrack events in place of the ones written before (told apart by their tracks' names);
+ * everything else the map has there stays as it was.
+ */
+function writeRingChroma(root: Record<string, unknown>, enhancements: readonly RingEnhancement[], animations: readonly RingAnimation[], v2: boolean) {
+  const customKey = v2 ? '_customData' : 'customData';
+  const environmentKey = v2 ? '_environment' : 'environment';
+  const eventsKey = v2 ? '_customEvents' : 'customEvents';
+  const custom = (typeof root[customKey] === 'object' && root[customKey] !== null ? root[customKey] : {}) as Record<string, unknown>;
+  const ours = (track: unknown) => (Array.isArray(track) ? track : [track]).some((name) => typeof name === 'string' && name.startsWith(TRACK_PREFIX));
+  const made = chromaCustomData(enhancements, animations, v2);
+  const environment = [
+    ...(Array.isArray(custom[environmentKey]) ? (custom[environmentKey] as Record<string, unknown>[]) : []).filter((entry) => !ours(entry[v2 ? '_track' : 'track'])),
+    ...made[environmentKey]!,
+  ];
+  const time = (event: Record<string, unknown>) => Number(event[v2 ? '_time' : 'b'] ?? 0);
+  const customEvents = [
+    ...(Array.isArray(custom[eventsKey]) ? (custom[eventsKey] as Record<string, unknown>[]) : []).filter((event) => {
+      const data = event[v2 ? '_data' : 'd'] as Record<string, unknown> | undefined;
+      return !(event[v2 ? '_type' : 't'] === 'AnimateTrack' && ours(data?.[v2 ? '_track' : 'track']));
+    }),
+    ...(made[eventsKey] as Record<string, unknown>[]),
+  ].sort((a, b) => time(a) - time(b));
+  if (environment.length > 0) custom[environmentKey] = environment;
+  else delete custom[environmentKey];
+  if (customEvents.length > 0) custom[eventsKey] = customEvents;
+  else delete custom[eventsKey];
+  if (Object.keys(custom).length > 0) root[customKey] = custom;
+  else delete root[customKey];
 }
 
 /** Info.dat with Chroma suggested for the difficulty (its lights use colours and light IDs). */
@@ -194,5 +228,8 @@ export function transformProjectBeats(project: Project, beat: (b: number) => num
       return { ...effect, start: beat(effect.start), end: beat(effect.end), params, ...(gls === undefined ? {} : { gls }) };
     })
     .filter((effect) => effect.end > 0);
+  copy.ringBlocks = (copy.ringBlocks ?? [])
+    .map((block) => ({ ...block, start: beat(block.start), end: beat(block.end), poses: block.poses.map((pose) => ({ ...pose, beat: length(pose.beat), duration: length(pose.duration), delay: length(pose.delay) })) }))
+    .filter((block) => block.end > 0);
   return copy;
 }

@@ -401,7 +401,8 @@ export class GlsEditor {
     for (const angle of [0, 45, 90, 135, 180, 270]) quick.append(button(`${String(angle)}°`, `Поворот на ${String(angle)}°`, () => set((item) => (item.angle = angle))));
     panel.append(quick);
     panel.append(labeled('Целых оборотов', numberInput(event.loops, 1, (value) => set((item) => (item.loops = Math.max(0, Math.round(value)))))));
-    panel.append(toggle([['cw', 'По часовой'], ['ccw', 'Против']], event.direction, (value) => set((item) => (item.direction = value))));
+    // ('cw' is Chroma's direction 0 — which turns the rings counterclockwise as the player sees them)
+    panel.append(toggle([['cw', 'Против часовой'], ['ccw', 'По часовой']], event.direction, (value) => set((item) => (item.direction = value))));
     panel.append(labeled('Сглаживание', select(EASINGS, event.easing, (value) => set((item) => (item.easing = value)))));
     panel.append(button('Удалить событие', 'Delete', () => this.deleteEvent()));
     return panel;
@@ -498,13 +499,14 @@ export class GlsEditor {
         ctx.beginPath();
         ctx.arc(x, cy, 10, 0, Math.PI * 2);
         ctx.stroke();
-        const angle = ((event.angle + event.loops * 360) * Math.PI) / 180 * (event.direction === 'cw' ? 1 : -1);
+        // (drawn as the player sees it: Chroma's direction 0 — 'cw' here — turns them counterclockwise)
+        const angle = ((event.angle + event.loops * 360) * Math.PI) / 180 * (event.direction === 'cw' ? -1 : 1);
         ctx.beginPath();
         ctx.moveTo(x, cy);
         ctx.lineTo(x + Math.sin(angle) * 10, cy - Math.cos(angle) * 10);
         ctx.stroke();
         ctx.fillStyle = '#c9cdd8';
-        ctx.fillText(`${event.direction === 'cw' ? '↻' : '↺'}${String(event.angle + event.loops * 360)}°`, x + 13, cy + 4);
+        ctx.fillText(`${event.direction === 'cw' ? '↺' : '↻'}${String(event.angle + event.loops * 360)}°`, x + 13, cy + 4);
       }
     }
   }
@@ -691,14 +693,14 @@ function swap<T>(list: T[], a: number, b: number) {
   [list[a], list[b]] = [list[b]!, list[a]!];
 }
 
-function heading(text: string) {
+export function heading(text: string) {
   const element = document.createElement('div');
   element.className = 'gls-heading';
   element.textContent = text;
   return element;
 }
 
-function button(label: string, title: string, action: () => void, disabled = false) {
+export function button(label: string, title: string, action: () => void, disabled = false) {
   const element = document.createElement('button');
   element.type = 'button';
   element.textContent = label;
@@ -708,7 +710,7 @@ function button(label: string, title: string, action: () => void, disabled = fal
   return element;
 }
 
-function labeled(label: string, control: HTMLElement) {
+export function labeled(label: string, control: HTMLElement) {
   const wrap = document.createElement('label');
   wrap.className = 'gls-field';
   const text = document.createElement('span');
@@ -717,7 +719,7 @@ function labeled(label: string, control: HTMLElement) {
   return wrap;
 }
 
-function numberInput(value: number, step: number, change: (value: number) => void) {
+export function numberInput(value: number, step: number, change: (value: number) => void) {
   const input = document.createElement('input');
   input.type = 'number';
   input.step = String(step);
@@ -732,7 +734,7 @@ function numberInput(value: number, step: number, change: (value: number) => voi
   return input;
 }
 
-function textInput(value: string, change: (value: string) => void) {
+export function textInput(value: string, change: (value: string) => void) {
   const input = document.createElement('input');
   input.type = 'text';
   input.value = value;
@@ -743,7 +745,7 @@ function textInput(value: string, change: (value: string) => void) {
   return input;
 }
 
-function select<T extends string>(options: [T, string][], current: T, change: (value: T) => void) {
+export function select<T extends string>(options: [T, string][], current: T, change: (value: T) => void) {
   const element = document.createElement('select');
   for (const [value, label] of options) element.append(Object.assign(document.createElement('option'), { value, textContent: label }));
   element.value = current;
@@ -751,7 +753,7 @@ function select<T extends string>(options: [T, string][], current: T, change: (v
   return element;
 }
 
-function toggle<T extends string>(options: [T, string][], current: T, change: (value: T) => void) {
+export function toggle<T extends string>(options: [T, string][], current: T, change: (value: T) => void) {
   const row = document.createElement('div');
   row.className = 'ins-buttons gls-toggle';
   for (const [value, label] of options) {
@@ -762,7 +764,7 @@ function toggle<T extends string>(options: [T, string][], current: T, change: (v
   return row;
 }
 
-function check(label: string, checked: boolean, change: (on: boolean) => void) {
+export function check(label: string, checked: boolean, change: (on: boolean) => void) {
   const wrap = document.createElement('label');
   wrap.className = 'ins-check';
   const box = document.createElement('input');

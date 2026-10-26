@@ -3,6 +3,7 @@ import { Inspector } from './editor/inspector';
 import { encodeOgg, findBpm } from './editor/audio-tools';
 import { MiniMap } from './editor/minimap';
 import { GlsEditor } from './editor/gls-editor';
+import { RingEditor } from './editor/ring-editor';
 import { Library } from './editor/library';
 import { mapSettingsDialog } from './editor/map-settings';
 import { newMapDialog } from './editor/new-map';
@@ -20,6 +21,7 @@ new MiniMap(editor, byId<HTMLCanvasElement>('minimap'));
 const library = new Library(editor, byId('library'));
 const presets = library.presets;
 new GlsEditor(editor);
+new RingEditor(editor);
 
 // for tests and the console
 (window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, library, audio: { findBpm, encodeOgg } };

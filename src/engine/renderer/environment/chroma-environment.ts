@@ -923,12 +923,16 @@ function wrapTrackedObject(
   const trackNames = enhancementTracks(enhancement);
   if (target === undefined || trackNames.length === 0) return targetIndex;
   const wrapperIndex = data.objects.length;
+  // (a ring's own turn is an offset on top of what its track sets — Chroma's TrackLaneRingOffset —
+  // and until the track turns it that offset is none: the ring's resting pose in the data is only
+  // where the ring motion had it)
+  const ring = target.components?.TrackLaneRing !== undefined;
   const wrapper: EnvironmentObjectData = {
     name: `${trackWrapperPrefix}${trackNames.join('_')}`,
     parent: target.parent,
     active: true,
     position: [...target.position],
-    rotation: [...target.rotation],
+    rotation: ring ? [...identityRotation] : [...target.rotation],
     scale: [...target.scale],
   };
   data.objects.push(wrapper);
@@ -939,6 +943,20 @@ function wrapTrackedObject(
   applyTransform(data, wrapperIndex, enhancement, version);
   for (const track of trackNames) addTrack(tracks, track, wrapperIndex);
   return wrapperIndex;
+}
+
+/** For the editor: the ids Chroma's environment lookups find each object by (its ChromaIDMarker
+ *  ids, and for the rings the ids they get when the game spawns them). */
+export function environmentLookupIds(data: EnvironmentData): Map<number, string[]> {
+  const lookups = data.objects.flatMap((object, index) =>
+    (object.components?.ChromaIDMarker ?? []).flatMap((marker) =>
+      marker.enabled ? [{ id: marker.ChromaID, index }] : [],
+    ),
+  );
+  addRuntimeRingLookups(data, lookups);
+  const out = new Map<number, string[]>();
+  for (const lookup of lookups) out.set(lookup.index, [...(out.get(lookup.index) ?? []), lookup.id]);
+  return out;
 }
 
 export function buildChromaEnvironmentVariant(
