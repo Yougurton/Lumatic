@@ -106,6 +106,23 @@ export interface Project {
   effects?: Effect[];
   /** Ring pose blocks. */
   ringBlocks?: RingBlock[];
+  /** Bookmarks (written into the difficulty as the editors' bookmarks). */
+  bookmarks?: Bookmark[];
+  /** The order of the top rows of lights ("g<type>" — a light group of the environment, "u<id>" — a
+   *  group of the user's); rows not in it keep their own order after these. */
+  rowOrder?: string[];
+  /** Light groups of the environment whose row a group of the user's with all of their lights
+   *  stands in for (event type → that group's id): their row is hidden, their clips shown on it. */
+  replacedTypes?: Record<string, string>;
+}
+
+/** A named place in the song (Beat Saber editors' bookmarks: v2 `_bookmarks`, v3 `bookmarks`). */
+export interface Bookmark {
+  id: string;
+  beat: number;
+  name: string;
+  /** RGB 0…1. */
+  color: Rgb;
 }
 
 let counter = 0;

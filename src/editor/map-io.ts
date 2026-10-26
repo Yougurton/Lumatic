@@ -3,7 +3,7 @@ import { parseDifficulty } from '../engine/core/beatmap/parse';
 import { parseMapPackage, type ParsedMapPackage } from '../engine/mapfile/parse-map-package';
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import type { OutEvent } from './bake';
-import type { Project } from './model';
+import { newId, type Bookmark, type Project } from './model';
 import { chromaCustomData, TRACK_PREFIX, type RingAnimation, type RingEnhancement } from './rings';
 import type { MapFolder } from './platform';
 
@@ -95,9 +95,43 @@ function v3Event(event: OutEvent) {
 
 /** The difficulty's text with its events replaced (v2: `_events`; v3: `basicBeatmapEvents` and the
  *  boost events). v4 isn't written yet. */
-export function writeDifficulty(original: string, events: readonly OutEvent[], rings?: { enhancements: readonly RingEnhancement[]; animations: readonly RingAnimation[] }): string {
+/** A difficulty's bookmarks (v2 `_customData._bookmarks`, v3 `customData.bookmarks`). */
+export function readBookmarks(text: string): Bookmark[] {
+  try {
+    const root = JSON.parse(text) as Record<string, unknown>;
+    const v2 = difficultyVersion(text) === '2';
+    const custom = (root[v2 ? '_customData' : 'customData'] ?? {}) as Record<string, unknown>;
+    const list = custom[v2 ? '_bookmarks' : 'bookmarks'];
+    if (!Array.isArray(list)) return [];
+    return (list as Record<string, unknown>[]).map((item, index) => {
+      const color = (item[v2 ? '_color' : 'c'] ?? null) as number[] | null;
+      return {
+        id: newId('m'),
+        beat: Number(item[v2 ? '_time' : 'b'] ?? 0),
+        name: String(item[v2 ? '_name' : 'n'] ?? `Метка ${String(index + 1)}`),
+        color: Array.isArray(color) && color.length >= 3 ? [Number(color[0]), Number(color[1]), Number(color[2])] : [0.35, 0.75, 1],
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writeBookmarks(root: Record<string, unknown>, bookmarks: readonly Bookmark[], v2: boolean) {
+  const customKey = v2 ? '_customData' : 'customData';
+  const key = v2 ? '_bookmarks' : 'bookmarks';
+  const custom = (typeof root[customKey] === 'object' && root[customKey] !== null ? root[customKey] : {}) as Record<string, unknown>;
+  const sorted = [...bookmarks].sort((a, b) => a.beat - b.beat);
+  if (sorted.length === 0) delete custom[key];
+  else custom[key] = sorted.map((item) => (v2 ? { _time: item.beat, _name: item.name, _color: [...item.color, 1] } : { b: item.beat, n: item.name, c: [...item.color, 1] }));
+  if (Object.keys(custom).length > 0) root[customKey] = custom;
+  else delete root[customKey];
+}
+
+export function writeDifficulty(original: string, events: readonly OutEvent[], rings?: { enhancements: readonly RingEnhancement[]; animations: readonly RingAnimation[] }, bookmarks?: readonly Bookmark[]): string {
   const version = difficultyVersion(original);
   const root = JSON.parse(original) as Record<string, unknown>;
+  if (bookmarks !== undefined && version !== '4') writeBookmarks(root, bookmarks, version === '2');
   if (rings !== undefined && version !== '4') writeRingChroma(root, rings.enhancements, rings.animations, version === '2');
   const sorted = [...events].sort((a, b) => a.beat - b.beat);
   if (version === '2') {
@@ -228,6 +262,7 @@ export function transformProjectBeats(project: Project, beat: (b: number) => num
       return { ...effect, start: beat(effect.start), end: beat(effect.end), params, ...(gls === undefined ? {} : { gls }) };
     })
     .filter((effect) => effect.end > 0);
+  copy.bookmarks = (copy.bookmarks ?? []).map((item) => ({ ...item, beat: beat(item.beat) })).filter((item) => item.beat >= -1e-6);
   copy.ringBlocks = (copy.ringBlocks ?? [])
     .map((block) => ({ ...block, start: beat(block.start), end: beat(block.end), poses: block.poses.map((pose) => ({ ...pose, beat: length(pose.beat), duration: length(pose.duration), delay: length(pose.delay) })) }))
     .filter((block) => block.end > 0);

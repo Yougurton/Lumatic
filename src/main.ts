@@ -136,6 +136,8 @@ byId<HTMLSelectElement>('snap').addEventListener('change', (event) => {
   timeline.redraw();
 });
 byId('zoom-in').addEventListener('click', () => timeline.zoom(1.5));
+byId<HTMLSelectElement>('speed').addEventListener('change', (event) => editor.setRate(Number((event.target as HTMLSelectElement).value)));
+byId('bookmark').addEventListener('click', () => void timeline.addBookmarkHere());
 byId('zoom-out').addEventListener('click', () => timeline.zoom(1 / 1.5));
 byId('zoom-fit').addEventListener('click', () => timeline.fit());
 
@@ -169,10 +171,15 @@ window.addEventListener('keydown', (event) => {
   } else if (ctrl && code === 'KeyV') editor.paste(editor.snapBeat(editor.playhead()));
   else if (ctrl && code === 'KeyD') editor.duplicateSelection();
   else if (ctrl && code === 'KeyA') editor.selectAll();
+  else if (ctrl && (code === 'ArrowLeft' || code === 'ArrowRight')) {
+    const bookmark = editor.nextBookmark(code === 'ArrowLeft' ? -1 : 1);
+    if (bookmark !== undefined) editor.seek(bookmark.beat);
+  }
   else if (ctrl && code === 'KeyG') void timeline.groupSelected();
   else if (ctrl && event.shiftKey && code === 'KeyP') void presets.saveSelection();
   else if (ctrl) return;
   else if (code === 'Space') editor.togglePlay();
+  else if (code === 'KeyB') void timeline.addBookmarkHere();
   else if (code === 'Delete' || code === 'Backspace') editor.deleteSelection();
   else if (code === 'Escape') {
     if (editor.previewExtra !== null) editor.stopTrial();

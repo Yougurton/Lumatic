@@ -15,7 +15,8 @@ import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type Spectr
  * above it. A clip for only some lights of a group shows striped on the group's row.
  *
  * Mouse: drag on an empty spot of a row to draw a clip; drag a clip to move it, its edges to
- * resize; Shift/Ctrl+drag on an empty spot selects a box; Alt+drag copies; right click deletes.
+ * resize; Shift/Ctrl+drag on an empty spot selects a box; Alt+drag copies; right click deletes (on
+ * something picked: a menu — mirror, copy…).
  * Wheel: through time; Alt/Shift+wheel (or the wheel over the row names): through the rows;
  * Ctrl+wheel: zoom.
  *
@@ -73,7 +74,8 @@ type Drag =
   | { kind: 'rowZoom'; edge: 'top' | 'bottom'; grabY: number; thumb: number; scale: number; scrollY: number }
   | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number }
   | { kind: 'spectro'; grabY: number; height: number }
-  | { kind: 'range'; from: number };
+  | { kind: 'range'; from: number }
+  | { kind: 'bookmark'; id: string; grab: number; origin: number; moved: boolean };
 
 /** The edge between the rows and the spectrogram is grabbed within this many pixels of it. */
 const SPECTRO_GRIP = 4;
@@ -479,6 +481,20 @@ export class Timeline {
       ctx.fillRect(x1, 0, 1, this.navTop);
       ctx.fillRect(x0, 0, x1 - x0, 3);
     }
+    // bookmarks: a line down the rows, a flag with the name on the ruler
+    ctx.font = '600 10px system-ui, sans-serif';
+    for (const flag of this.bookmarkFlags()) {
+      const css = `rgb(${flag.bookmark.color.map((v) => Math.round(v * 255)).join(',')})`;
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = css;
+      for (let y = RULER_H; y < this.navTop; y += 6) ctx.fillRect(flag.x, y, 1, 3);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = css;
+      ctx.fillRect(flag.x, 0, 2, RULER_H);
+      ctx.fillRect(flag.x, 0, flag.w, 14);
+      ctx.fillStyle = '#0d0e12';
+      ctx.fillText(flag.label, flag.x + 4, 10.5);
+    }
     // playhead
     const px = this.beatToX(editor.playhead());
     if (px >= GUTTER - 6) {
@@ -558,6 +574,11 @@ export class Timeline {
       ctx.globalAlpha = 0.55;
       ctx.drawImage(spectrogram.image, 0, 0, spectrogram.frames, spectrogram.image.height, x0, top + 2, Math.max(1, x1 - x0), NAV_H - 3);
       ctx.globalAlpha = 1;
+    }
+    // bookmarks
+    for (const bookmark of this.editor.bookmarks) {
+      ctx.fillStyle = `rgb(${bookmark.color.map((v) => Math.round(v * 255)).join(',')})`;
+      ctx.fillRect(Math.round(nav.toX(bookmark.beat)), top + 2, 2, NAV_H - 4);
     }
     // the view
     const vx0 = Math.max(GUTTER, nav.x0);
@@ -912,6 +933,77 @@ export class Timeline {
     }
   }
 
+  /** Where the bookmarks' flags are on the ruler (name cut to fit). */
+  private bookmarkFlags() {
+    const ctx = this.context;
+    ctx.font = '600 10px system-ui, sans-serif';
+    return [...this.editor.bookmarks]
+      .sort((a, b) => a.beat - b.beat)
+      .map((bookmark) => {
+        let label = bookmark.name;
+        while (label.length > 1 && ctx.measureText(label).width > 110) label = label.slice(0, -1);
+        if (label !== bookmark.name) label += '…';
+        return { bookmark, x: Math.round(this.beatToX(bookmark.beat)), w: ctx.measureText(label).width + 8, label };
+      })
+      .filter((flag) => flag.x + flag.w > GUTTER && flag.x < this.width);
+  }
+
+  /** The bookmark whose flag is under a point of the ruler. */
+  private bookmarkAt(x: number, y: number) {
+    if (y > 15) return null;
+    return [...this.bookmarkFlags()].reverse().find((flag) => x >= flag.x - 3 && x <= flag.x + flag.w)?.bookmark ?? null;
+  }
+
+  /** A bookmark at the song's place (asks its name). */
+  async addBookmarkHere() {
+    const editor = this.editor;
+    if (editor.project === null) return;
+    const name = await ask('Название метки', `Метка ${String(editor.bookmarks.length + 1)}`);
+    if (name !== null) editor.addBookmark(editor.snapBeat(editor.playhead()), name);
+  }
+
+  private bookmarkMenu(x: number, y: number, id: string) {
+    const editor = this.editor;
+    const bookmark = editor.bookmarks.find((item) => item.id === id);
+    if (bookmark === undefined) return;
+    const colors: [string, [number, number, number]][] = [
+      ['Голубая', [0.35, 0.75, 1]],
+      ['Оранжевая', [1, 0.55, 0.3]],
+      ['Зелёная', [0.5, 1, 0.5]],
+      ['Розовая', [1, 0.4, 0.75]],
+      ['Жёлтая', [1, 0.9, 0.35]],
+      ['Сиреневая', [0.7, 0.55, 1]],
+    ];
+    showMenu(x, y, [
+      { label: bookmark.name, heading: true },
+      { label: 'Переименовать…', hint: 'двойной клик', action: () => void ask('Название метки', bookmark.name).then((name) => name !== null && editor.updateBookmark(id, (item) => (item.name = name))) },
+      { label: 'Удалить метку', action: () => editor.deleteBookmark(id) },
+      null,
+      { label: 'Цвет', heading: true },
+      ...colors.map(([label, color]) => ({ label, action: () => editor.updateBookmark(id, (item) => (item.color = [...color])) })),
+    ]);
+  }
+
+  /** What can be done with what is picked: mirrored, copied, deleted. */
+  private selectionMenu(x: number, y: number) {
+    const editor = this.editor;
+    const count = editor.selection.size;
+    const clips = editor.selectedClips().length;
+    const lanes = editor.selectionLanes();
+    showMenu(x, y, [
+      { label: `Выделено: ${String(count)}`, heading: true },
+      { label: 'Зеркально по строкам', hint: 'первая строка ↔ последняя', disabled: lanes < 2, action: () => {
+        const moved = editor.mirrorAcrossRows();
+        editor.setStatus(`Отзеркалено по строкам: ${String(moved)} событий`);
+      } },
+      { label: 'Зеркально во времени', hint: 'начало ↔ конец', disabled: clips + editor.selectedRaw().length === 0, action: () => editor.mirrorInTime() },
+      null,
+      { label: 'Копировать', hint: 'Ctrl+C', action: () => editor.copy() },
+      { label: 'Дублировать', hint: 'Ctrl+D', action: () => editor.duplicateSelection() },
+      { label: `Удалить (${String(count)})`, hint: 'Delete', action: () => editor.deleteSelection() },
+    ]);
+  }
+
   /** What can be done with the picked stretch of the song. */
   private rangeMenu(x: number, y: number) {
     const editor = this.editor;
@@ -1131,6 +1223,11 @@ export class Timeline {
       items.push({ label: 'Зеркальными парами', hint: 'левая и правая половины', action: () => editor.laserPreset('pairs', 0, null) });
       items.push({ label: 'По сторонам', action: () => editor.laserPreset('sides', 0, null) });
     }
+    const replaced = editor.replacedTypes();
+    if (replaced.size > 0) {
+      items.push({ label: 'Скрытые строки', heading: true });
+      for (const [type, id] of replaced) items.push({ label: `Вернуть «${lightGroupName(type)}»`, hint: `вместо неё — «${findGroup(editor.groups, id)?.group.name ?? ''}»`, action: () => editor.restoreType(type) });
+    }
     items.push({ label: 'Лампы одной группы по порядку', heading: true });
     for (const type of types) {
       items.push({ label: `${lightGroupName(type)}: слева направо`, action: () => editor.orderedPreset(type, 'x') });
@@ -1187,7 +1284,9 @@ export class Timeline {
         text(row.lights.length > 0 ? String(row.lights.length) : '', 'th-count'),
       );
       item.title = 'Клик — выбрать все его лампы, ПКМ — действия';
-      item.addEventListener('click', () => editor.selectLights(editor.rowLights(row).map((light) => lightKey(light.type, light.id))));
+      item.addEventListener('click', () => {
+        if (!this.headerDragged) editor.selectLights(editor.rowLights(row).map((light) => lightKey(light.type, light.id)));
+      });
       item.addEventListener('contextmenu', (event) => {
         event.preventDefault();
         showMenu(event.clientX, event.clientY, [
@@ -1219,7 +1318,9 @@ export class Timeline {
       );
       if (editor.focus !== group.id) item.append(enter);
       item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выбрать его лампы, двойной — войти, ПКМ — действия`;
-      item.addEventListener('click', () => editor.selectLights(lights.map((light) => lightKey(light.type, light.id)), 'replace', row.parent));
+      item.addEventListener('click', () => {
+        if (!this.headerDragged) editor.selectLights(lights.map((light) => lightKey(light.type, light.id)), 'replace', row.parent);
+      });
       item.addEventListener('dblclick', () => editor.enterGroup(group.id));
       item.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -1272,8 +1373,10 @@ export class Timeline {
     } else {
       item.textContent = row.label;
     }
-    // the lights and subgroups of a user's group: dragged into another order
-    if ((row.kind === 'light' || row.kind === 'custom') && row.parent !== null) {
+    // the lights and subgroups of a user's group, and the top rows of lights: dragged into another order
+    const top = editor.focus === null && row.depth === 0 && (row.kind === 'group' || row.kind === 'custom');
+    if (top) item.classList.add('th-draggable');
+    if (((row.kind === 'light' || row.kind === 'custom') && row.parent !== null) || top) {
       item.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
         this.headerDrag = { row, startY: event.clientY, active: false };
@@ -1283,21 +1386,25 @@ export class Timeline {
     return item;
   }
 
-  private headerDrag: { row: Extract<Row, { kind: 'light' | 'custom' }>; startY: number; active: boolean } | null = null;
+  private headerDrag: { row: Extract<Row, { kind: 'light' | 'custom' | 'group' }>; startY: number; active: boolean } | null = null;
   private headerDragged = false;
   private lastLightRow: string | null = null;
 
   /** Where a dragged row would go: the gap among its siblings nearest the mouse. */
-  private headerDropTarget(clientY: number): { parent: string; from: number; to: number; y: number } | null {
+  private headerDropTarget(clientY: number): { parent: string; from: number; to: number; y: number; top?: boolean } | null {
     const drag = this.headerDrag;
-    if (drag === null || drag.row.parent === null) return null;
-    const parent = findGroup(this.editor.groups, drag.row.parent)?.group;
+    if (drag === null) return null;
+    if (drag.row.depth === 0 && (drag.row.kind === 'group' || (drag.row.kind === 'custom' && drag.row.parent === null))) return this.topDropTarget(clientY, drag.row.key);
+    const dragged = drag.row;
+    if (dragged.kind === 'group' || dragged.parent === null) return null;
+    const parentId = dragged.parent;
+    const parent = findGroup(this.editor.groups, parentId)?.group;
     if (parent === undefined) return null;
     const indexOf = (row: Row) => parent.items.findIndex((item) => (row.kind === 'custom' ? item.kind === 'group' && item.id === row.group.id : row.kind === 'light' && item.kind === 'light' && item.type === row.type && item.id === row.id));
-    const from = indexOf(drag.row);
+    const from = indexOf(dragged);
     const list = this.headers.querySelector<HTMLElement>('.th-rows');
     if (from < 0 || list === null) return null;
-    const siblings = this.editor.rows.filter((row) => (row.kind === 'light' || row.kind === 'custom') && row.parent === drag.row.parent);
+    const siblings = this.editor.rows.filter((row) => (row.kind === 'light' || row.kind === 'custom') && row.parent === parentId);
     const listRect = list.getBoundingClientRect();
     let best: { to: number; y: number; d: number } | null = null;
     for (const row of siblings) {
@@ -1319,7 +1426,35 @@ export class Timeline {
         if (best === null || d < best.d) best = { to, y: edge - listRect.top, d };
       }
     }
-    return best === null ? null : { parent: drag.row.parent, from, to: best.to, y: best.y };
+    return best === null ? null : { parent: parentId, from, to: best.to, y: best.y };
+  }
+
+  /** Where a dragged top row would go: the gap among the top rows nearest the mouse (a top row with
+   *  everything opened up under it counts as one). */
+  private topDropTarget(clientY: number, key: string): { parent: string; from: number; to: number; y: number; top: true } | null {
+    const list = this.headers.querySelector<HTMLElement>('.th-rows');
+    const keys = this.editor.topRowKeys();
+    const from = keys.indexOf(key);
+    if (list === null || from < 0) return null;
+    const listRect = list.getBoundingClientRect();
+    const rows = this.editor.rows;
+    let best: { to: number; y: number; d: number } | null = null;
+    keys.forEach((topKey, index) => {
+      const element = list.querySelector<HTMLElement>(`[data-key="${CSS.escape(topKey)}"]`);
+      if (element === null) return;
+      const rect = element.getBoundingClientRect();
+      let bottom = rect.bottom;
+      const at = rows.findIndex((row) => row.key === topKey);
+      for (let i = at + 1; i < rows.length && rows[i]!.depth > 0; i++) {
+        const inner = list.querySelector<HTMLElement>(`[data-key="${CSS.escape(rows[i]!.key)}"]`);
+        if (inner !== null) bottom = inner.getBoundingClientRect().bottom;
+      }
+      for (const [edge, to] of [[rect.top, index], [bottom, index + 1]] as const) {
+        const d = Math.abs(clientY - edge);
+        if (best === null || d < best.d) best = { to, y: edge - listRect.top, d };
+      }
+    });
+    return best === null ? null : { parent: '', from, to: (best as { to: number }).to, y: (best as { y: number }).y, top: true };
   }
 
   private groupMenu(x: number, y: number, row: Extract<Row, { kind: 'custom' }>) {
@@ -1338,6 +1473,7 @@ export class Timeline {
       { label: `Убрать выбранные лампы`, action: () => editor.removeLightsFromGroup(group.id, picked), disabled: picked.length === 0 },
       { label: 'Подгруппа из выбранных', hint: 'Ctrl+G', action: () => void this.groupSelected(), disabled: picked.length === 0 },
       null,
+      ...[...editor.replacedTypes()].filter(([, id]) => id === group.id).map(([type]) => ({ label: `Вернуть строку «${lightGroupName(type)}»`, hint: 'группа стоит вместо неё', action: () => editor.restoreType(type) })),
       ...(row.parent !== null ? [{ label: 'Разгруппировать', hint: 'лампы — в группу выше', action: () => editor.deleteGroup(group.id, true) }] : []),
       { label: 'Удалить группу', hint: 'события останутся на лампах', action: () => {
         if (window.confirm(`Удалить группу «${group.name}»? Её события останутся на тех же лампах.`)) editor.deleteGroup(group.id, false);
@@ -1357,8 +1493,17 @@ export class Timeline {
       event.preventDefault();
       if (this.editor.project === null) return;
       const { x, y } = local(event);
-      if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) return;
+      if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) {
+        const hit = this.hit(x, y);
+        if (hit !== null && this.editor.selection.has(hitId(hit))) this.selectionMenu(event.clientX, event.clientY);
+        return;
+      }
       const beat = this.xToBeat(x);
+      const flag = y < RULER_H ? this.bookmarkAt(x, y) : null;
+      if (flag !== null) {
+        this.bookmarkMenu(event.clientX, event.clientY, flag.id);
+        return;
+      }
       const range = this.editor.songRange;
       if (range !== null && beat >= Math.min(range.start, range.end) && beat <= Math.max(range.start, range.end)) this.rangeMenu(event.clientX, event.clientY);
       else if (y >= this.rowsBottom) this.openSpectroPanel(event.clientX, event.clientY - 200);
@@ -1410,6 +1555,12 @@ export class Timeline {
       const onSong = y < RULER_H || (y >= this.rowsBottom && y < this.navTop);
       // (right click there: a menu — opened on contextmenu, below, or this click would close it)
       if (onSong && event.button === 2) return;
+      const flag = y < RULER_H && event.button === 0 ? this.bookmarkAt(x, y) : null;
+      if (flag !== null) {
+        this.editor.checkpoint();
+        this.drag = { kind: 'bookmark', id: flag.id, grab: beat, origin: flag.beat, moved: false };
+        return;
+      }
       if (onSong && event.shiftKey && event.button === 0) {
         // Shift + drag over the ruler or the spectrogram: a stretch of the song
         const from = this.editor.snapBeat(Math.max(0, beat));
@@ -1446,7 +1597,9 @@ export class Timeline {
       const under = this.rowAt(y);
       if (under !== null && isLightRow(under.row)) this.editor.setActiveRow(under.row.key);
       if (event.button === 2) {
-        // right click: delete what's under it
+        // right click: on something picked — a menu (opened on contextmenu: a menu opened here would
+        // close at once); on anything else — deleted
+        if (hit !== null && this.editor.selection.has(hitId(hit))) return;
         if (hit !== null) {
           this.editor.select([hitId(hit)]);
           this.editor.deleteSelection();
@@ -1507,6 +1660,11 @@ export class Timeline {
 
     canvas.addEventListener('dblclick', (event) => {
       const { x, y } = local(event);
+      const flag = y < RULER_H ? this.bookmarkAt(x, y) : null;
+      if (flag !== null) {
+        void ask('Название метки', flag.name).then((name) => name !== null && this.editor.updateBookmark(flag.id, (item) => (item.name = name)));
+        return;
+      }
       const hit = this.hit(x, y);
       if (hit !== null && 'block' in hit) {
         this.editor.ringEditorHook?.(hit.block.id);
@@ -1532,6 +1690,7 @@ export class Timeline {
         let cursor = 'default';
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height) {
           if (this.onSpectroEdge(x, y)) cursor = 'ns-resize';
+          else if (y < RULER_H && this.bookmarkAt(x, y) !== null) cursor = 'grab';
           else if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
             const bar = this.vbar();
             cursor = (y >= bar.thumbTop && y < bar.thumbTop + GRIP) || (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) ? 'ns-resize' : 'default';
@@ -1551,7 +1710,11 @@ export class Timeline {
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
-      if (drag.kind === 'range') {
+      if (drag.kind === 'bookmark') {
+        if (Math.abs(beat - drag.grab) * this.pxPerBeat > 3) drag.moved = true;
+        const to = event.altKey ? drag.origin + beat - drag.grab : this.editor.snapBeat(drag.origin + beat - drag.grab);
+        if (drag.moved) this.editor.updateBookmark(drag.id, (item) => (item.beat = Math.max(0, to)), false);
+      } else if (drag.kind === 'range') {
         this.editor.setSongRange({ start: drag.from, end: event.altKey ? Math.max(0, beat) : this.editor.snapBeat(Math.max(0, beat)) });
       } else if (drag.kind === 'spectro') {
         const height = Math.round(drag.height - (y - drag.grabY));
@@ -1683,6 +1846,11 @@ export class Timeline {
       this.drag = null;
       if (drag === null) return;
       if (drag.kind === 'spectro') this.renderHeaders(true);
+      if (drag.kind === 'bookmark' && !drag.moved) {
+        // (a click on a flag: the song goes there)
+        this.editor.undoDiscard();
+        this.editor.seek(drag.origin);
+      }
       if (drag.kind === 'range') {
         const range = this.editor.songRange;
         if (range !== null && Math.abs(range.end - range.start) * this.pxPerBeat < 3) this.editor.setSongRange(null);
@@ -1790,7 +1958,8 @@ export class Timeline {
     const target = drag.active ? this.headerDropTarget(clientY) : null;
     this.headerDrag = null;
     this.headers.querySelector('.th-drop')?.remove();
-    if (target !== null) this.editor.moveGroupItem(target.parent, target.from, target.to);
+    if (target !== null && target.top === true) this.editor.moveTopRow(drag.row.key, target.to);
+    else if (target !== null) this.editor.moveGroupItem(target.parent, target.from, target.to);
     // (the click that ends a drag doesn't pick the light)
     window.setTimeout(() => (this.headerDragged = false), 0);
   }

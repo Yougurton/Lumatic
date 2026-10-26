@@ -5,7 +5,7 @@ import { createAudioClock, createSilentClock, type SongClock } from '../engine/c
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import { bakeLights, rawEvents, type OutEvent, type SchemeColors } from './bake';
 import { importEvents } from './import';
-import { difficultyFile, loadMap, loadProject, projectFileName, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
+import { difficultyFile, loadMap, loadProject, projectFileName, readBookmarks, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
 import {
   clipLights,
   clipPriority,
@@ -16,7 +16,9 @@ import {
   lightKey,
   newId,
   parentOf,
+  type Bookmark,
   type ClipColor,
+  type Rgb,
   type EndMode,
   type GroupItem,
   type LightClip,
@@ -314,11 +316,12 @@ export class Editor {
     for (const list of this.lightsByType.values()) list.sort((a, b) => a - b);
     const file = difficultyFile(row);
     const saved = await loadProject(map.folder, file);
-    if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [], effects: saved.effects ?? [], ringBlocks: saved.ringBlocks ?? [] };
+    const fileBookmarks = readBookmarks(await map.folder.readText(file).catch(() => ''));
+    if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [], effects: saved.effects ?? [], ringBlocks: saved.ringBlocks ?? [], bookmarks: saved.bookmarks ?? fileBookmarks };
     else {
       const lastBeat = Math.max(0, ...difficulty.events.map((event) => event.jsonTime), ...difficulty.notes.map((note) => note.jsonTime));
       const { clips, raw } = importEvents(difficulty.events, this.lightsByType, lastBeat + 8, this.songBpm / 60);
-      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [] };
+      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [], bookmarks: fileBookmarks };
     }
     this.selection.clear();
     this.lightSelection.clear();
@@ -356,6 +359,7 @@ export class Editor {
     if (this.clock === null) this.clock = createSilentClock(this.beatToSeconds(this.endBeatOfProject()) + 10, this.songBpm);
     if (map.parsed.mapMeta.songTimeOffset !== 0) this.clock.setAudioOffset(map.parsed.mapMeta.songTimeOffset);
     this.duration = this.clock.duration;
+    if (this.rate !== 1) this.clock.setRate(this.rate);
     const clock = this.clock;
     this.preview.setBeatSource(() => clock.currentBeat());
     this.emit('all');
@@ -420,7 +424,7 @@ export class Editor {
     const file = difficultyFile(row);
     const original = await map.folder.readText(file);
     const events = this.bake();
-    const text = writeDifficulty(original, events, this.ringChroma());
+    const text = writeDifficulty(original, events, this.ringChroma(), this.bookmarks);
     await map.folder.writeText(file, text);
     await map.folder.writeText(projectFileName(file), JSON.stringify(project));
     if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma().enhancements.length > 0) {
@@ -471,20 +475,106 @@ export class Editor {
       this.rows = rows;
       return;
     }
+    // the top rows of lights — the environment's light groups (but those a group of the user's stands
+    // in for) and the user's groups — in the order the user put them
+    const replaced = this.replacedTypes();
     const lightTypes = new Set<number>([...this.lightsByType.keys(), ...project.clips.filter((clip) => clip.target === undefined).map((clip) => clip.type)]);
+    const tops: { key: string; push: () => void }[] = [];
     for (const type of [...lightTypes].sort((a, b) => a - b)) {
+      if (replaced.has(type)) continue;
       const lights = this.lightsByType.get(type) ?? [...new Set(project.clips.filter((clip) => clip.type === type).flatMap((clip) => clip.ids ?? []))].sort((a, b) => a - b);
       const expanded = project.expanded.includes(type);
-      rows.push({ kind: 'group', key: `g${String(type)}`, type, label: groupLabel(type), expanded, lights, depth: 0 });
-      if (expanded) for (const id of lights) rows.push({ kind: 'light', key: `l${lightKey(type, id)}`, type, id, label: `ID ${String(id)}`, depth: 1, parent: null });
+      tops.push({
+        key: `g${String(type)}`,
+        push: () => {
+          rows.push({ kind: 'group', key: `g${String(type)}`, type, label: groupLabel(type), expanded, lights, depth: 0 });
+          if (expanded) for (const id of lights) rows.push({ kind: 'light', key: `l${lightKey(type, id)}`, type, id, label: `ID ${String(id)}`, depth: 1, parent: null });
+        },
+      });
     }
-    for (const group of this.groups) pushGroup(group, 0, null);
+    for (const group of this.groups) tops.push({ key: `u${group.id}`, push: () => pushGroup(group, 0, null) });
+    const order = project.rowOrder ?? [];
+    const rank = (key: string) => {
+      const at = order.indexOf(key);
+      return at < 0 ? Number.POSITIVE_INFINITY : at;
+    };
+    tops.map((top, index) => ({ top, index })).sort((a, b) => rank(a.top.key) - rank(b.top.key) || a.index - b.index).forEach(({ top }) => top.push());
     if (this.ringInfo.length > 0 || this.ringBlocks.some((block) => block.kind !== 'zoom')) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0, ring: 'rotation' });
     if (this.zoomInfo.length > 0 || this.ringBlocks.some((block) => block.kind === 'zoom')) rows.push({ kind: 'poses', key: 'zoomposes', label: 'Зум колец', depth: 0, ring: 'zoom' });
     const rawTypes = [...new Set(project.raw.map((event) => event.type))].sort((a, b) => a - b);
     for (const type of [8, 9, 12, 13, 5]) if (!rawTypes.includes(type)) rawTypes.push(type);
     for (const type of rawTypes.sort((a, b) => a - b)) rows.push({ kind: 'raw', key: `r${String(type)}`, type, label: otherEventName(type), depth: 0 });
     this.rows = rows;
+  }
+
+  /** The environment's light groups a group of the user's stands in for (type → group). */
+  replacedTypes(): Map<number, string> {
+    const out = new Map<number, string>();
+    for (const [type, id] of Object.entries(this.project?.replacedTypes ?? {})) if (findGroup(this.groups, id) !== null) out.set(Number(type), id);
+    return out;
+  }
+
+  /** The keys of the top rows of lights as they stand now. */
+  topRowKeys(): string[] {
+    return this.focus === null ? this.rows.filter((row) => row.depth === 0 && (row.kind === 'group' || row.kind === 'custom')).map((row) => row.key) : [];
+  }
+
+  /** A top row moved to another place among the top rows (`to`: the index it goes before). */
+  moveTopRow(key: string, to: number) {
+    const project = this.project;
+    if (project === null) return;
+    const keys = this.topRowKeys();
+    const from = keys.indexOf(key);
+    if (from < 0 || to === from || to === from + 1) return;
+    this.checkpoint();
+    keys.splice(from, 1);
+    keys.splice(to > from ? to - 1 : to, 0, key);
+    project.rowOrder = keys;
+    this.groupChanged();
+  }
+
+  /**
+   * A new top group with every light of one or more of the environment's light groups (and nothing
+   * else) stands in for their rows: they're hidden, the group takes the first one's place, their
+   * clips show on it. (Brought back with restoreType.)
+   */
+  private replaceCoveredTypes(group: LightGroup) {
+    const project = this.project;
+    if (project === null) return;
+    const lights = groupLights(group);
+    const byType = new Map<number, Set<number>>();
+    for (const light of lights) byType.set(light.type, (byType.get(light.type) ?? new Set()).add(light.id));
+    const covered = [...byType].filter(([type, ids]) => {
+      const all = this.lightsByType.get(type) ?? [];
+      return all.length > 0 && all.every((id) => ids.has(id));
+    });
+    if (covered.length === 0 || covered.length !== byType.size) return;
+    const keys = this.topRowKeys().filter((key) => key !== `u${group.id}`);
+    const first = Math.min(...covered.map(([type]) => keys.indexOf(`g${String(type)}`)).filter((at) => at >= 0));
+    project.replacedTypes = { ...(project.replacedTypes ?? {}) };
+    for (const [type] of covered) project.replacedTypes[String(type)] = group.id;
+    const hidden = new Set(covered.map(([type]) => `g${String(type)}`));
+    const rest = keys.filter((key) => !hidden.has(key));
+    const at = Number.isFinite(first) ? keys.slice(0, first).filter((key) => !hidden.has(key)).length : rest.length;
+    rest.splice(at, 0, `u${group.id}`);
+    project.rowOrder = rest;
+    project.expanded = project.expanded.filter((type) => !covered.some(([covering]) => covering === type));
+  }
+
+  /** Brings back a light group's own row (it goes back just before the group that stood in for it). */
+  restoreType(type: number) {
+    const project = this.project;
+    const id = project?.replacedTypes?.[String(type)];
+    if (project === null || id === undefined) return;
+    this.checkpoint();
+    const keys = this.topRowKeys();
+    const at = keys.indexOf(`u${id}`);
+    keys.splice(at < 0 ? keys.length : at, 0, `g${String(type)}`);
+    project.rowOrder = keys;
+    const next = { ...(project.replacedTypes ?? {}) };
+    delete next[String(type)];
+    project.replacedTypes = next;
+    this.groupChanged();
   }
 
   toggleExpanded(type: number) {
@@ -539,6 +629,7 @@ export class Editor {
     const memberIds = new Map<number, number[]>();
     for (const light of members) memberIds.set(light.type, [...(memberIds.get(light.type) ?? []), light.id]);
     const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
+    const replaced = this.replacedTypes();
     const proxies = new Map<string, Effect>();
     const candidates: LightClip[] = [];
     for (const clip of project.clips) if (clip.group === undefined || !hidden.has(clip.group)) candidates.push(clip);
@@ -576,7 +667,8 @@ export class Editor {
       let role: ShownClip['role'];
       if (row.kind === 'group') role = priority === 0 ? 'own' : 'inner';
       else if (row.kind === 'light') role = clip.scope === 'light' || (clip.target === undefined && clip.ids !== null) ? 'own' : 'background';
-      else role = clip.target === row.group.id ? 'own' : priority > rowPriority ? 'inner' : 'background';
+      // (a group standing in for a light group of the environment: that one's clips are its own)
+      else role = clip.target === row.group.id || (clip.target === undefined && clip.scope !== 'light' && replaced.get(clip.type) === row.group.id) ? 'own' : priority > rowPriority ? 'inner' : 'background';
       found.push({ clip, partial, rank: clipRank(clip, groups), role, effect: proxies.get(clip.id) });
     }
     const ranks = [...new Set(found.map((item) => item.rank))].sort((a, b) => a - b);
@@ -642,6 +734,7 @@ export class Editor {
     } else {
       group.items = lights.map((light) => ({ ...light }));
       this.groups.push(group);
+      this.replaceCoveredTypes(group);
     }
     project.expandedGroups = [...new Set([...(project.expandedGroups ?? []), group.id])];
     this.lightSelection.clear();
@@ -664,6 +757,7 @@ export class Editor {
     this.checkpoint();
     const group: LightGroup = { kind: 'group', id: newId('g'), name, items };
     this.groups.push(group);
+    this.replaceCoveredTypes(group);
     if (open) project.expandedGroups = [...new Set([...(project.expandedGroups ?? []), group.id])];
     this.groupChanged();
     return group;
@@ -707,6 +801,17 @@ export class Editor {
       return false;
     });
     project.clips.push(...replaced);
+    // the light groups it stood in for: their rows back where it was
+    const standIns = Object.entries(project.replacedTypes ?? {}).filter(([, groupId]) => doomed.has(groupId));
+    if (standIns.length > 0) {
+      const keys = this.topRowKeys();
+      const at = keys.indexOf(`u${found.group.id}`);
+      if (at >= 0) keys.splice(at, 0, ...standIns.map(([type]) => `g${type}`));
+      project.rowOrder = keys;
+      const next = { ...(project.replacedTypes ?? {}) };
+      for (const [type] of standIns) delete next[type];
+      project.replacedTypes = next;
+    }
     const holder = parentOf(groups, found.group);
     if (holder !== null) {
       const at = holder.items.indexOf(found.group);
@@ -900,7 +1005,7 @@ export class Editor {
 
   private snapshot() {
     const project = this.project;
-    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [] });
+    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {} });
   }
 
   /** Call before a change (one undo step). */
@@ -942,7 +1047,11 @@ export class Editor {
   private restore(state: string) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[] };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string> };
+    project.bookmarks = data.bookmarks ?? [];
+    const rowsChanged = JSON.stringify(project.rowOrder ?? []) !== JSON.stringify(data.rowOrder ?? []) || JSON.stringify(project.replacedTypes ?? {}) !== JSON.stringify(data.replacedTypes ?? {});
+    project.rowOrder = data.rowOrder ?? [];
+    project.replacedTypes = data.replacedTypes ?? {};
     project.clips = data.clips;
     project.raw = data.raw;
     project.effects = data.effects ?? [];
@@ -953,7 +1062,7 @@ export class Editor {
     project.groups = data.groups;
     const ids = new Set([...data.clips.map((clip) => clip.id), ...data.raw.map((event) => event.id), ...project.effects.map((effect) => effect.id), ...project.ringBlocks.map((block) => block.id)]);
     for (const id of [...this.selection]) if (!ids.has(id)) this.selection.delete(id);
-    if (groupsChanged || hadPoses !== project.ringBlocks.length > 0) {
+    if (groupsChanged || rowsChanged || hadPoses !== project.ringBlocks.length > 0) {
       this.buildRows();
       this.emit('rows');
     }
@@ -1032,6 +1141,10 @@ export class Editor {
 
   rawById(id: string) {
     return this.project?.raw.find((event) => event.id === id);
+  }
+
+  selectedRaw(): RawEvent[] {
+    return this.project?.raw.filter((event) => this.selection.has(event.id)) ?? [];
   }
 
   selectedClips(): LightClip[] {
@@ -1129,6 +1242,65 @@ export class Editor {
     const end = Math.max(...spans.map((clip) => clip.end));
     this.copy();
     this.paste(start + (end - start));
+  }
+
+  // ----- mirroring ------------------------------------------------------------------------------------
+
+  /** The row a clip stands on as its own (null: none shown). */
+  private ownRow(clip: LightClip): Row | null {
+    return this.rows.find((row) => isLightRow(row) && this.rowClips(row).some((shown) => shown.clip.id === clip.id && shown.role === 'own')) ?? null;
+  }
+
+  /** How many rows the selected clips stand on (mirroring across them needs two). */
+  selectionLanes() {
+    return new Set(this.selectedClips().map((clip) => this.ownRow(clip)?.key).filter((key) => key !== undefined)).size;
+  }
+
+  /**
+   * The selected clips mirrored across the rows they stand on: the clip on the first of those rows
+   * goes to the last, the second to the one before it… — a wave drawn by hand runs the other way.
+   * Times stay. Returns how many clips moved.
+   */
+  mirrorAcrossRows(): number {
+    const clips = this.selectedClips();
+    const placed = clips.map((clip) => ({ clip, row: this.ownRow(clip) })).filter((item): item is { clip: LightClip; row: Row } => item.row !== null);
+    const lanes = [...new Set(placed.map((item) => item.row))].sort((a, b) => this.rows.indexOf(a) - this.rows.indexOf(b));
+    if (lanes.length < 2) return 0;
+    this.checkpoint();
+    for (const { clip, row } of placed) this.retarget(clip, lanes[lanes.length - 1 - lanes.indexOf(row)]!);
+    this.changed();
+    return placed.length;
+  }
+
+  /** The selected clips and other events mirrored in time over the stretch they cover: what came
+   *  first comes last; fading in turns into fading out, gradients run the other way. */
+  mirrorInTime() {
+    const project = this.project;
+    if (project === null) return;
+    const clips = this.selectedClips();
+    const raw = project.raw.filter((event) => this.selection.has(event.id));
+    if (clips.length + raw.length === 0) return;
+    const start = Math.min(...clips.map((clip) => clip.start), ...raw.map((event) => event.beat));
+    const end = Math.max(...clips.map((clip) => clip.end), ...raw.map((event) => event.beat));
+    this.checkpoint();
+    for (const clip of clips) {
+      const [from, to] = [start + end - clip.end, start + end - clip.start];
+      const fadesIn = clip.startMode === 'fadeIn';
+      const fadesOut = clip.endMode === 'fade';
+      clip.start = from;
+      clip.end = to;
+      if (fadesOut && !fadesIn) {
+        clip.startMode = 'fadeIn';
+        clip.fadeIn = to - from;
+        clip.endMode = 'off';
+      } else if (fadesIn && !fadesOut) {
+        clip.startMode = 'on';
+        clip.endMode = 'fade';
+      }
+      if (clip.endColor !== null) [clip.color, clip.endColor] = [clip.endColor, clip.color];
+    }
+    for (const event of raw) event.beat = start + end - event.beat;
+    this.changed();
   }
 
   // ----- effects -------------------------------------------------------------------------------------
@@ -1420,6 +1592,60 @@ export class Editor {
     if (this.activeRow === key) return;
     this.activeRow = key;
     this.emit('selection');
+  }
+
+  // ----- bookmarks ------------------------------------------------------------------------------------
+
+  get bookmarks(): Bookmark[] {
+    const project = this.project;
+    if (project === null) return [];
+    project.bookmarks ??= [];
+    return project.bookmarks;
+  }
+
+  addBookmark(beat: number, name: string): Bookmark | null {
+    if (this.project === null) return null;
+    this.checkpoint();
+    const palette: Rgb[] = [[0.35, 0.75, 1], [1, 0.55, 0.3], [0.5, 1, 0.5], [1, 0.4, 0.75], [1, 0.9, 0.35], [0.7, 0.55, 1]];
+    const bookmark: Bookmark = { id: newId('m'), beat, name, color: palette[this.bookmarks.length % palette.length]! };
+    this.bookmarks.push(bookmark);
+    this.changed();
+    return bookmark;
+  }
+
+  /** Changes a bookmark (one undo step; `undoStep` false: while it is being dragged). */
+  updateBookmark(id: string, patch: (bookmark: Bookmark) => void, undoStep = true) {
+    const bookmark = this.bookmarks.find((item) => item.id === id);
+    if (bookmark === undefined) return;
+    if (undoStep) this.checkpoint();
+    patch(bookmark);
+    this.changed();
+  }
+
+  deleteBookmark(id: string) {
+    const project = this.project;
+    if (project === null) return;
+    this.checkpoint();
+    project.bookmarks = this.bookmarks.filter((item) => item.id !== id);
+    this.changed();
+  }
+
+  /** The bookmark before / after the song's place (for jumping between them). */
+  nextBookmark(direction: 1 | -1) {
+    const now = this.playhead();
+    const sorted = [...this.bookmarks].sort((a, b) => a.beat - b.beat);
+    return direction > 0 ? sorted.find((item) => item.beat > now + 1e-3) : sorted.reverse().find((item) => item.beat < now - 1e-3);
+  }
+
+  // ----- playback speed ---------------------------------------------------------------------------------
+
+  /** How fast the song plays (1: as it is; the pitch goes with it). */
+  rate = 1;
+
+  setRate(rate: number) {
+    this.rate = rate;
+    this.clock?.setRate(rate);
+    this.emit('time');
   }
 
   // ----- ring poses -----------------------------------------------------------------------------------

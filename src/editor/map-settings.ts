@@ -3,6 +3,7 @@ import type { BpmResult } from './bpm-detect';
 import type { Editor } from './editor';
 import { difficultyFile, loadProject, projectFileName, transformDifficultyBeats, transformProjectBeats } from './map-io';
 import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
+import { previewPicker, type PreviewPicker } from './song-picker';
 
 /**
  * "Map settings": the song's name and authors, the environment, its tempo, its start — silence put
@@ -175,6 +176,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
         <label>Превью длится, сек
           <span class="nm-row"><input type="number" data-id="preview-length" step="any" min="1"><button type="button" data-id="from-range" title="Начало и длина превью — по участку, выделенному на таймлайне (Shift + протянуть по линейке или спектрограмме)">Из выделения</button></span>
         </label>
+        <div class="nm-wide" data-id="picker"></div>
       </div>
       <div class="nm-status" data-id="status"></div>
       <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="apply">Применить</button></div>`;
@@ -211,6 +213,11 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     };
     env.addEventListener('change', envInfo);
     envInfo();
+    // the preview picked on the song's spectrogram (as soon as the song is read)
+    let picker: PreviewPicker | null = null;
+    const previewInput = el<HTMLInputElement>('preview');
+    const lengthInput = el<HTMLInputElement>('preview-length');
+    for (const input of [previewInput, lengthInput]) input.addEventListener('change', () => picker?.set(Number(previewInput.value) || 0, Number(lengthInput.value) || 10));
     el<HTMLButtonElement>('from-range').disabled = editor.songRange === null;
     el('from-range').addEventListener('click', () => {
       const range = editor.songRange;
@@ -219,6 +226,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       const end = editor.beatToSeconds(Math.max(range.start, range.end));
       el<HTMLInputElement>('preview').value = Math.max(0, start).toFixed(2);
       el<HTMLInputElement>('preview-length').value = Math.max(1, end - start).toFixed(2);
+      picker?.set(Math.max(0, start), Math.max(1, end - start));
     });
     if (fields.version === '4') {
       // (Info v4: the tempo lives in its audio data file — not changed here yet)
@@ -244,6 +252,16 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       audio = await decodeAudio(data);
       return audio;
     };
+    void song()
+      .then((buffer) => {
+        if (!box.isConnected) return;
+        picker = previewPicker(buffer, editor.spectrogram, Number(previewInput.value) || 0, Number(lengthInput.value) || 10, (start, duration) => {
+          previewInput.value = start.toFixed(2);
+          lengthInput.value = duration.toFixed(2);
+        });
+        el('picker').append(picker.element);
+      })
+      .catch(() => undefined);
     const bpmNow = () => Number(el<HTMLInputElement>('bpm').value) || fields.bpm;
     const beatsPerBar = () => Math.max(1, Math.round(Number(el<HTMLInputElement>('bar').value) || 4));
     const firstBeat = () => {
@@ -358,6 +376,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     });
     const finish = () => {
       stopListening?.();
+      picker?.stop();
       shade.remove();
       resolve();
     };

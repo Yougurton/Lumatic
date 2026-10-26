@@ -56,7 +56,7 @@ export async function encodeOgg(buffer: AudioBuffer, silence: number, onProgress
 
 /** Plays the song from `from` seconds with a click on every beat of the grid (to check a tempo by
  *  ear). Returns a stop function. */
-export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: number, from: number): () => void {
+export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: number, from: number, bar: { downbeat: number; beats: number } | null = null): () => void {
   const context = new AudioContext();
   const source = context.createBufferSource();
   source.buffer = buffer;
@@ -73,7 +73,9 @@ export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: numb
     if (at < 0) continue;
     const osc = context.createOscillator();
     const gain = context.createGain();
-    osc.frequency.value = k % 4 === 0 ? 1760 : 1320;
+    // (the strong beat — found, or every 4th — clicks higher)
+    const strong = bar === null ? k % 4 === 0 : ((Math.round((firstBeat + k * period - bar.downbeat) / period) % bar.beats) + bar.beats) % bar.beats === 0;
+    osc.frequency.value = strong ? 1760 : 1320;
     gain.gain.setValueAtTime(0.0001, start + at);
     gain.gain.exponentialRampToValueAtTime(0.5, start + at + 0.002);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + at + 0.06);

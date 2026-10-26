@@ -1,7 +1,9 @@
 import { environmentCatalog, isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
-import { decodeAudio, encodeOgg, findBpm, playWithClicks } from './audio-tools';
+import { decodeAudio, encodeOgg, findBpm, findDownbeat, playWithClicks } from './audio-tools';
 import type { BpmResult } from './bpm-detect';
 import { createMapFolder, type MapFolder } from './platform';
+import { previewPicker, type PreviewPicker } from './song-picker';
+import { computeSpectrogram } from './spectrogram';
 
 /**
  * "New map": a song (any audio file) → a map folder Beat Saber opens — the song as Ogg Vorbis
@@ -42,6 +44,7 @@ export interface NewMapSettings {
   difficulty: string;
   label: string;
   previewStart: number;
+  previewDuration: number;
 }
 
 /** Info.dat (v2.1.0: everything opens it) for a map with one difficulty (v3). */
@@ -58,7 +61,7 @@ export function infoText(settings: NewMapSettings, difficultyFile: string, songF
       _shuffle: 0,
       _shufflePeriod: 0.5,
       _previewStartTime: Math.round(settings.previewStart * 100) / 100,
-      _previewDuration: 10,
+      _previewDuration: Math.round(settings.previewDuration * 100) / 100,
       _songFilename: songFile,
       _coverImageFilename: coverFile ?? '',
       _environmentName: settings.environment,
@@ -205,9 +208,17 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
           <span class="nm-row"><button type="button" data-id="listen" disabled>▶ С метрономом</button><span data-id="alts" class="nm-alts"></span></span>
         </label>
         <div class="nm-wide nm-dim" data-id="bpm-info"></div>
-        <label>Тишина в начале, с<input type="number" data-id="silence" min="0" max="30" step="0.1" value="0"></label>
-        <label class="nm-check"><input type="checkbox" data-id="align" checked> Первая доля — на целой доле сетки</label>
+        <label>Тишина в начале
+          <span class="nm-row"><input type="number" data-id="silence" min="0" step="any" value="0"><select data-id="unit"><option value="bars">тактов</option><option value="beats">долей</option><option value="seconds">секунд</option></select></span>
+        </label>
+        <label>Долей в такте<input type="number" data-id="bar" min="1" max="16" step="1" value="4"></label>
+        <label class="nm-wide">Подогнать к сетке<select data-id="align">
+          <option value="bar">Сильная доля — на начало такта</option>
+          <option value="beat">Первая доля — на целую долю</option>
+          <option value="none">Без подгонки</option>
+        </select></label>
         <div class="nm-wide nm-dim" data-id="silence-info"></div>
+        <div class="nm-wide" data-id="picker"></div>
         <label>Окружение<select data-id="env"></select></label>
         <label>Сложность<select data-id="diff"></select></label>
         <label>Подпись сложности<input type="text" data-id="label" value="Lightshow"></label>
@@ -241,7 +252,13 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
     const status = el('status');
     const bpmInput = el<HTMLInputElement>('bpm');
     const silenceInput = el<HTMLInputElement>('silence');
-    const align = el<HTMLInputElement>('align');
+    const align = el<HTMLSelectElement>('align');
+    const unit = el<HTMLSelectElement>('unit');
+    const barInput = el<HTMLInputElement>('bar');
+    const beatsPerBar = () => Math.max(1, Math.round(Number(barInput.value) || 4));
+    /** The strong beat as found for a tempo, grid and bar (null: not looked for yet). */
+    let downbeat: { key: string; time: number; confidence: number } | null = null;
+    let picker: PreviewPicker | null = null;
 
     const firstBeat = () => {
       // (the grid's phase holds for the bpm typed in as long as it is the found one or a multiple)
@@ -250,15 +267,57 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
       const period = 60 / bpm;
       return ((detected.firstBeat % period) + period) % period;
     };
-    const silence = () => alignedSilence(Number(silenceInput.value) || 0, firstBeat(), Number(bpmInput.value), align.checked && detected !== null);
+    const downbeatKey = () => `${bpmInput.value}|${firstBeat().toFixed(4)}|${String(beatsPerBar())}`;
+    /** The silence asked for (in its units), in seconds. */
+    const lead = () => {
+      const value = Math.max(0, Number(silenceInput.value) || 0);
+      const bpm = Number(bpmInput.value) || 120;
+      return unit.value === 'seconds' ? value : unit.value === 'beats' ? (value * 60) / bpm : (value * beatsPerBar() * 60) / bpm;
+    };
+    const silence = () => {
+      const bpm = Number(bpmInput.value);
+      if (detected === null || !(bpm > 0) || align.value === 'none') return lead();
+      if (align.value === 'beat' || downbeat === null || downbeat.key !== downbeatKey()) return alignedSilence(lead(), firstBeat(), bpm, true);
+      // more silence, up to a bar: the strong beat at the start of a bar
+      const barSeconds = (beatsPerBar() * 60) / bpm;
+      const at = (((downbeat.time + lead()) % barSeconds) + barSeconds) % barSeconds;
+      return lead() + ((barSeconds - at) % barSeconds);
+    };
+    /** Finds the strong beat when it is wanted and not found for this tempo yet. */
+    const findStrong = async () => {
+      if (audio === null || detected === null || align.value !== 'bar' || downbeat?.key === downbeatKey()) return;
+      const key = downbeatKey();
+      status.textContent = 'Ищу сильную долю…';
+      try {
+        const found = await findDownbeat(audio, Number(bpmInput.value), firstBeat(), beatsPerBar());
+        downbeat = { key, time: found.downbeat, confidence: found.confidence };
+        status.textContent = '';
+      } catch (error) {
+        status.textContent = `Не нашлась сильная доля: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      refresh();
+    };
     const refresh = () => {
       const s = silence();
-      el('silence-info').textContent = audio === null ? '' : `В начало песни будет добавлено ${s.toFixed(3)} с тишины.${detected !== null && align.checked ? ' Первая доля попадёт ровно на долю сетки.' : ''}`;
+      const strong = align.value === 'bar' && downbeat !== null && downbeat.key === downbeatKey();
+      const lands = strong ? Math.round(((downbeat!.time + s) * Number(bpmInput.value)) / 60) : 0;
+      el('silence-info').textContent =
+        audio === null
+          ? ''
+          : `В начало песни будет добавлено ${s.toFixed(3)} с тишины.${
+              detected === null || align.value === 'none'
+                ? ''
+                : strong
+                  ? ` Сильная доля встанет на долю ${String(lands)} — начало ${String(lands / beatsPerBar() + 1)}-го такта${downbeat!.confidence < 0.15 ? ' (найдена неуверенно — проверьте на слух)' : ''}.`
+                  : ' Первая доля попадёт ровно на долю сетки.'
+            }`;
+      picker?.setLead(s);
       el<HTMLButtonElement>('create').disabled = audio === null || busy || !(Number(bpmInput.value) > 0) || el<HTMLInputElement>('title').value.trim() === '';
       el<HTMLButtonElement>('detect').disabled = audio === null || busy;
       el<HTMLButtonElement>('listen').disabled = audio === null || busy;
     };
     box.addEventListener('input', refresh);
+    for (const control of [align, bpmInput, barInput, unit]) control.addEventListener('change', () => void findStrong());
     box.addEventListener('keydown', (event) => event.stopPropagation());
 
     const detect = async () => {
@@ -269,6 +328,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
       try {
         detected = await findBpm(audio);
         bpmInput.value = String(detected.bpm);
+        downbeat = null;
         const sure = detected.confidence > 0.6 ? 'уверенно' : detected.confidence > 0.35 ? 'довольно уверенно' : 'неуверенно — проверьте на слух';
         el('bpm-info').textContent = `Найдено ${String(detected.bpm)} BPM (${sure}), первая доля на ${detected.firstBeat.toFixed(3)} с.`;
         const alts = el('alts');
@@ -291,6 +351,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
       }
       busy = false;
       refresh();
+      await findStrong();
     };
 
     el('pick').addEventListener('click', () => {
@@ -314,6 +375,10 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
           if (el<HTMLInputElement>('artist').value === '' && parts.length > 1) el<HTMLInputElement>('artist').value = parts[0]!.trim();
           status.textContent = '';
           busy = false;
+          // the preview: picked on the song (a third of the way in, to start with)
+          picker?.stop();
+          picker = previewPicker(audio, computeSpectrogram(audio), audio.duration * 0.35, 10, () => undefined);
+          el('picker').replaceChildren(picker.element);
           await detect();
         } catch (error) {
           audio = null;
@@ -334,7 +399,8 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
       }
       if (audio === null) return;
       const from = Math.max(0, audio.duration * 0.3);
-      stopListening = playWithClicks(audio, Number(bpmInput.value), firstBeat(), from);
+      const strong = align.value === 'bar' && downbeat !== null && downbeat.key === downbeatKey() ? { downbeat: downbeat.time, beats: beatsPerBar() } : null;
+      stopListening = playWithClicks(audio, Number(bpmInput.value), firstBeat(), from, strong);
       el('listen').textContent = '■ Стоп';
     });
     el('cover-pick').addEventListener('click', () => {
@@ -349,6 +415,7 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
     });
     const finish = (result: MapFolder | null) => {
       stopListening?.();
+      picker?.stop();
       shade.remove();
       resolve(result);
     };
@@ -368,7 +435,8 @@ export function newMapDialog(defaultMapper: string): Promise<MapFolder | null> {
         environment: env.value,
         difficulty: diff.value,
         label: el<HTMLInputElement>('label').value.trim(),
-        previewStart: silence() + audio.duration * 0.35,
+        previewStart: picker?.value().start ?? silence() + audio.duration * 0.35,
+        previewDuration: picker?.value().duration ?? 10,
       };
       const song = audio;
       void (async () => {
