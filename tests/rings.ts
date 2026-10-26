@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
 import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
-import { newPose, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
+import { dataFirstRing, firstRingFromLog, newPose, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
 /**
@@ -17,6 +17,10 @@ const environment = JSON.parse(readFileSync(new URL('../public/environments/Defa
   objects: { name: string; components?: Record<string, Record<string, unknown>[]> }[];
 };
 const systems: RingSystemInfo[] = [];
+const markers = new Map<number, string[]>();
+environment.objects.forEach((object, index) => {
+  for (const marker of (object.components?.ChromaIDMarker ?? []) as { ChromaID: string }[]) markers.set(index, [...(markers.get(index) ?? []), marker.ChromaID]);
+});
 environment.objects.forEach((object, index) => {
   for (const rotation of object.components?.TrackLaneRingsRotation ?? []) {
     const manager = environment.objects[(rotation.Manager as { obj: number }).obj]!;
@@ -37,7 +41,7 @@ environment.objects.forEach((object, index) => {
       propagationSpeed: effect.PropagationSpeed as number,
       flexySpeed: effect.FlexySpeed as number,
     };
-    systems.push({ name: manager.name, rings, rotation: config, seed: (rotation.Manager as { obj: number }).obj, ringIds: Array.from({ length: rings }, () => []) });
+    systems.push({ name: manager.name, rings, rotation: config, seed: (rotation.Manager as { obj: number }).obj, ringIds: (manager.components!.TrackLaneRingsManager![0]!.Rings as { obj: number }[]).map((ring) => markers.get(ring.obj) ?? []) });
   }
 });
 
@@ -148,6 +152,33 @@ for (const pose of zoom.poses) {
       console.log('zoom off', pose.step, i, want[i], got[i]);
     }
   }
+}
+
+// the rings found where the game puts them: every GameCore place moved by the same amount
+const first = dataFirstRing(systems)!;
+const moved = ringEnhancements([{ ...tracks, system: systems[0]!.name }], systems, first + 7);
+const placeOf = (id: string) => [...id.matchAll(/GameCore\\\.\\\[(\d+)\\\]/gu)].map((match) => Number(match[1]));
+const original = ringEnhancements([{ ...tracks, system: systems[0]!.name }], systems);
+checks++;
+if (moved.length === 0 || moved.some((item, i) => placeOf(item.id).join() !== placeOf(original[i]!.id).map((place) => place + 7).join() || placeOf(item.id).length === 0)) {
+  failures++;
+  console.log('moved ids', moved[0]?.id, original[0]?.id);
+}
+// …and the place read from a Chroma debug listing in a game log (the last one in it)
+const names = ringObjectNames(systems);
+const log = [
+  `[DEBUG @ 10:00:00 | Chroma] GameCore.[300]${names[0]!}`,
+  ...Array.from({ length: 300 }, () => 'noise'),
+  `[DEBUG @ 10:05:00 | Chroma] DefaultEnvironment.[0]Environment`,
+  `[DEBUG @ 10:05:00 | Chroma] GameCore.[612]${names[0]!}`,
+  `[DEBUG @ 10:05:00 | Chroma] GameCore.[612]${names[0]!}.[0]Ring`,
+  `[DEBUG @ 10:05:00 | Chroma] GameCore.[611]${names[0]!}`,
+  `[DEBUG @ 10:05:00 | Chroma] GameCore.[640]Something(Clone)`,
+].join('\n');
+checks++;
+if (firstRingFromLog(log, names) !== 611 || firstRingFromLog('nothing', names) !== undefined) {
+  failures++;
+  console.log('log place', firstRingFromLog(log, names));
 }
 
 console.log('checks', checks, 'failures', failures);

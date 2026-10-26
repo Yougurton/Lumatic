@@ -321,17 +321,65 @@ export function trackedSystems(blocks: readonly RingBlock[]) {
 
 const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
-export function ringEnhancements(blocks: readonly RingBlock[], systems: readonly RingSystemInfo[]): RingEnhancement[] {
+/**
+ * `firstRing`: where the game puts the rings for this player — the game spawns them at the root of
+ * its GameCore scene and Chroma finds them by their place there ("GameCore.[509]SmallTrackLaneRing
+ * (Clone)"), which hangs on the game's version and mods; the environment data's places are moved so
+ * its first ring is there (undefined: as the data has them).
+ */
+export function ringEnhancements(blocks: readonly RingBlock[], systems: readonly RingSystemInfo[], firstRing?: number): RingEnhancement[] {
   const out: RingEnhancement[] = [];
+  const shift = firstRing === undefined ? 0 : firstRing - (dataFirstRing(systems) ?? firstRing);
   for (const name of trackedSystems(blocks)) {
     const system = systems.find((item) => item.name === name);
     if (system === undefined) continue;
     system.ringIds.forEach((ids, index) => {
       if (ids.length === 0) return;
-      out.push({ id: `^(?:${ids.map(escapeRegex).join('|')})$`, lookupMethod: 'Regex', track: ringTrack(name, index) });
+      const moved = ids.map((id) => id.replace(GAME_CORE_RING, (_, place: string) => `GameCore.[${String(Number(place) + shift)}]`));
+      out.push({ id: `^(?:${moved.map(escapeRegex).join('|')})$`, lookupMethod: 'Regex', track: ringTrack(name, index) });
     });
   }
   return out;
+}
+
+const GAME_CORE_RING = /^GameCore\.\[(\d+)\]/u;
+
+/** The place of the environment data's first ring in the game's GameCore scene (undefined: its
+ *  rings aren't there). */
+export function dataFirstRing(systems: readonly RingSystemInfo[]): number | undefined {
+  const places = systems.flatMap((system) => system.ringIds.flat()).flatMap((id) => {
+    const match = GAME_CORE_RING.exec(id);
+    return match === null ? [] : [Number(match[1])];
+  });
+  return places.length === 0 ? undefined : Math.min(...places);
+}
+
+/** The rings' object names in the environment data ("SmallTrackLaneRing(Clone)"…). */
+export function ringObjectNames(systems: readonly RingSystemInfo[]): string[] {
+  return [...new Set(systems.flatMap((system) => system.ringIds.flat()).flatMap((id) => {
+    const match = /^GameCore\.\[\d+\]([^.]+)$/u.exec(id);
+    return match === null ? [] : [match[1]!];
+  }))];
+}
+
+/**
+ * The game's place of its first ring, read from a Beat Saber log with Chroma's "print environment
+ * enhancement debug" on (it lists every environment object's id): the lowest place of these ring
+ * names in the last listing in it (undefined: none there).
+ */
+export function firstRingFromLog(log: string, names: readonly string[]): number | undefined {
+  const wanted = new Set(names);
+  const found: { line: number; place: number }[] = [];
+  log.split(/\r?\n/u).forEach((text, line) => {
+    for (const match of text.matchAll(/GameCore\.\[(\d+)\]([^\s.\]"]+\(Clone\))(?=$|[\s"])/gu)) {
+      if (wanted.has(match[2]!)) found.push({ line, place: Number(match[1]) });
+    }
+  });
+  if (found.length === 0) return undefined;
+  // (the last listing: the matches after the last gap of many lines)
+  let from = found.length - 1;
+  while (from > 0 && found[from]!.line - found[from - 1]!.line < 200) from--;
+  return Math.min(...found.slice(from).map((item) => item.place));
 }
 
 export function ringAnimations(blocks: readonly RingBlock[], systems: readonly RingSystemInfo[]): RingAnimation[] {

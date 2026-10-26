@@ -2,7 +2,7 @@ import type { Editor } from './editor';
 import { button, check, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { ringSystemName } from './library';
 import { newId } from './model';
-import { EASINGS, EVENT_SHAPES, isZoom, newPose, poseAngles, ringDelay, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { dataFirstRing, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -273,7 +273,54 @@ export class RingEditor {
       list.append(row);
     });
     col.append(list);
+    if (!isZoom(block) && block.mode === 'tracks') col.append(this.gameRings());
     return col;
+  }
+
+  /** Where the game puts its rings for this player (Chroma finds each ring by its place there). */
+  private gameRings() {
+    const editor = this.editor;
+    const box = document.createElement('div');
+    box.className = 'ring-game';
+    const fromData = dataFirstRing(editor.ringInfo);
+    if (fromData === undefined) return box;
+    box.append(heading('Кольца в игре'));
+    box.append(note('Chroma находит каждое кольцо по его номеру в сцене игры — GameCore.[N]. Номер зависит от версии игры и модов: если в игре кольца не поворачиваются, укажите номер первого кольца (или возьмите его из лога игры) и сохраните карту ещё раз.'));
+    const current = editor.gameFirstRing ?? fromData;
+    box.append(labeled('Номер первого кольца', numberInput(current, 1, (value) => {
+      editor.gameFirstRing = value === fromData ? null : Math.max(0, Math.round(value));
+      this.render();
+    })));
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = '.log,.txt';
+    file.hidden = true;
+    file.addEventListener('change', () => {
+      const picked = file.files?.[0];
+      if (picked === undefined) return;
+      void picked.text().then((text) => {
+        const found = firstRingFromLog(text, ringObjectNames(editor.ringInfo));
+        if (found === undefined) {
+          window.alert('В этом логе нет списка объектов окружения с кольцами. Включите в Beat Saber/UserData/Chroma.json "PrintEnvironmentEnhancementDebug": true и в Beat Saber/UserData/Beat Saber IPA.json "ShowDebug": true, сыграйте карту в этом окружении и выберите Beat Saber/Logs/_latest.log.');
+          return;
+        }
+        editor.gameFirstRing = found === fromData ? null : found;
+        window.alert(`Первое кольцо в игре: GameCore.[${String(found)}]. Сохраните карту, чтобы записать кольца с этим номером.`);
+        this.render();
+      });
+    });
+    const row = document.createElement('div');
+    row.className = 'gls-swatches';
+    row.append(
+      button('Из лога игры…', 'Найти номер в логе Beat Saber (Logs/_latest.log) — нужен отладочный вывод Chroma', () => file.click()),
+      button(`Как в данных (${String(fromData)})`, 'Номер из данных окружения', () => {
+        editor.gameFirstRing = null;
+        this.render();
+      }, editor.gameFirstRing === null),
+      file,
+    );
+    box.append(row);
+    return box;
   }
 
   private poseColumn(block: RingBlock) {

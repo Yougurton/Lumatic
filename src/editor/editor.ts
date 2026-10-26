@@ -411,9 +411,33 @@ export class Editor {
     return [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm)];
   }
 
-  /** The Chroma environment the ring poses on tracks need: the rings on tracks, their turns. */
-  ringChroma(): { enhancements: RingEnhancement[]; animations: RingAnimation[] } {
-    return { enhancements: ringEnhancements(this.ringBlocks, this.ringInfo), animations: ringAnimations(this.ringBlocks, this.ringInfo) };
+  /** The Chroma environment the ring poses on tracks need: the rings on tracks, their turns
+   *  (`forGame`: the rings found where the game puts them for this player — gameFirstRing). */
+  ringChroma(forGame = false): { enhancements: RingEnhancement[]; animations: RingAnimation[] } {
+    const first = forGame ? this.gameFirstRing : null;
+    return { enhancements: ringEnhancements(this.ringBlocks, this.ringInfo, first ?? undefined), animations: ringAnimations(this.ringBlocks, this.ringInfo) };
+  }
+
+  /** Where the game spawns its first ring in its GameCore scene for this player (it hangs on the game's
+   *  version and mods; Chroma finds the rings by it) — null: where the environment data has it. */
+  get gameFirstRing(): number | null {
+    try {
+      const value = Number(localStorage.getItem(FIRST_RING_KEY) ?? NaN);
+      return Number.isInteger(value) && value >= 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  set gameFirstRing(value: number | null) {
+    try {
+      if (value === null) localStorage.removeItem(FIRST_RING_KEY);
+      else localStorage.setItem(FIRST_RING_KEY, String(Math.round(value)));
+    } catch {
+      // (not kept: it stays as it was)
+    }
+    // (what's saved changes with it)
+    this.dirty = this.dirty || this.ringBlocks.some((block) => block.mode === 'tracks');
   }
 
   async save() {
@@ -424,10 +448,10 @@ export class Editor {
     const file = difficultyFile(row);
     const original = await map.folder.readText(file);
     const events = this.bake();
-    const text = writeDifficulty(original, events, this.ringChroma(), this.bookmarks);
+    const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks);
     await map.folder.writeText(file, text);
     await map.folder.writeText(projectFileName(file), JSON.stringify(project));
-    if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma().enhancements.length > 0) {
+    if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma(true).enhancements.length > 0) {
       const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
       if (infoName !== undefined) await map.folder.writeText(infoName, suggestChroma(await map.folder.readText(infoName), file));
     }
@@ -1858,6 +1882,7 @@ export class Editor {
 
 /** How long a picked light's flash takes to fade out. */
 const FLASH_MS = 1100;
+const FIRST_RING_KEY = 'chroeditor.gameFirstRing';
 
 /** The angle of a point around a centre, going clockwise from the top (0…2π). */
 function angleOf(dx: number, dy: number) {

@@ -18,6 +18,9 @@ interface SpriteStandIn {
   height: number;
   /** White at the heart when bright (neon), or keeping its colour throughout (glass). */
   white: boolean;
+  /** Lying flat along the depth instead of upright (a quad in XZ from z = -height to 0, the
+   *  texture's width along it). */
+  flat?: boolean;
 }
 
 const WINDOW = 'textures/chroeditor-window-gothic.png';
@@ -35,7 +38,12 @@ const STAND_INS: Record<string, SpriteStandIn[]> = {
   BTSEnvironment: [{ name: 'MagicDoorSprite', texture: FRAMES, width: 12.5, height: 17.5, white: true }],
   // the band's sign on the floor either side: three slanted stripes along the track (scaled ×4: about
   // 9.4 m long)
-  SkrillexEnvironment: [{ name: 'Logo', texture: STRIPES, width: 2.57, height: 0.45, white: true }],
+  SkrillexEnvironment: [
+    { name: 'Logo', texture: STRIPES, width: 2.57, height: 0.45, white: true },
+    // the band's sign above and below the track far ahead: blades lying flat along the depth (scaled
+    // ×0.8 × 4: about 3.8 m wide, 78 m long) — three stripes, their ends cut by one slant
+    { name: 'Core', texture: STRIPES, width: 4.8, height: 19.55, white: true, flat: true },
+  ],
   // the small dots on the rings' lasers
   Dragons2Environment: [{ name: 'Dot', texture: GLOW, width: 1, height: 1, white: true }],
 };
@@ -49,12 +57,17 @@ export function supplementEnvironment(data: EnvironmentData) {
   Object.defineProperty(data.materials, MARK, { value: true, enumerable: false });
   data.objects.forEach((object, index) => {
     const standIn = standIns.find((item) => object.name.startsWith(item.name));
-    const controller = object.components?.SpriteLightController?.[0];
-    // (its sprite renderer — none, or the object's own, which the data has no picture for)
-    const ownRenderer = controller?.Renderer === null || controller?.Renderer?.obj === index;
-    if (standIn === undefined || controller === undefined || !ownRenderer || object.mesh !== undefined) return;
-    const meshName = `__chroeditor_quad_${String(standIn.width)}x${String(standIn.height)}`;
-    data.meshes[meshName] ??= quad(standIn.width, standIn.height);
+    // a light whose renderer — none, or the object's own — the data has no picture for: a sprite light,
+    // or a material light on a mesh that isn't in the data
+    const sprite = object.components?.SpriteLightController?.[0];
+    const material = object.components?.MaterialLightController?.[0];
+    const ownRenderer =
+      sprite !== undefined
+        ? sprite.Renderer === null || sprite.Renderer.obj === index
+        : material !== undefined && (material.Renderer === null || material.Renderer.obj === index);
+    if (standIn === undefined || !ownRenderer || object.mesh !== undefined) return;
+    const meshName = `__chroeditor_${standIn.flat === true ? 'flat' : 'quad'}_${String(standIn.width)}x${String(standIn.height)}`;
+    data.meshes[meshName] ??= standIn.flat === true ? flatQuad(standIn.width, standIn.height) : quad(standIn.width, standIn.height);
     const materialName = `__chroeditor_sprite_${standIn.texture}${standIn.white ? '_white' : ''}`;
     data.materials[materialName] ??= {
       name: materialName,
@@ -79,6 +92,18 @@ function quad(width: number, height: number) {
   return {
     positions: [-x, -y, 0, x, -y, 0, x, y, 0, -x, y, 0],
     normals: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+    indices: [0, 1, 2, 0, 2, 3],
+  };
+}
+
+/** A quad lying in the XZ plane, `width` across, from z = -`length` to 0, facing up; the texture's
+ *  width runs along its length. */
+function flatQuad(width: number, length: number) {
+  const x = width / 2;
+  return {
+    positions: [-x, 0, -length, -x, 0, 0, x, 0, 0, x, 0, -length],
+    normals: [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
     uvs: [0, 0, 1, 0, 1, 1, 0, 1],
     indices: [0, 1, 2, 0, 2, 3],
   };
