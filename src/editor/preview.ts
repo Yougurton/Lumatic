@@ -37,7 +37,7 @@ export class Preview {
     this.view = new MapView({ mirrorQuality: 'medium' });
     this.lifecycle.setView(this.view);
     this.view.setLightshowMode('full-lightshow');
-    this.view.setShowPlayerPlatform(false);
+    this.view.setShowPlayerPlatform(true);
     this.view.setScreenDisplacementEffects(true);
     this.view.setReplayCameraSettings({ ...DEFAULT_REPLAY_CAMERA_SETTINGS });
   }

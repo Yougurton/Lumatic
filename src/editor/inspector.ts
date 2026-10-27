@@ -58,7 +58,18 @@ export class Inspector {
     }
   }
 
+  /** Drawn again; the panel stays scrolled where it was, and the field being typed in keeps the keys. */
   render() {
+    const scroll = this.root.scrollTop;
+    const fields = () => [...this.root.querySelectorAll<HTMLInputElement>('input[type="number"], input[type="text"]')];
+    const active = document.activeElement;
+    const typing = active instanceof HTMLInputElement && this.root.contains(active) ? fields().indexOf(active) : -1;
+    this.draw();
+    this.root.scrollTop = scroll;
+    if (typing >= 0) fields()[typing]?.focus({ preventScroll: true });
+  }
+
+  private draw() {
     const root = this.root;
     root.replaceChildren();
     const open = this.editor.openEffect === null ? undefined : this.editor.effectById(this.editor.openEffect);

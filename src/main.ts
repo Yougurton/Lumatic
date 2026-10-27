@@ -237,6 +237,23 @@ const ACTIONS_RUN: Record<string, () => void> = {
   open: () => void openMapFolder().then(openFolder),
   new: () => void newMap(),
 };
+// the number pad types its digits in a field whether NumLock is on or not (off, its keys are arrows,
+// Home, End… — and in a number field the arrows would change the number), its point a point in a
+// number field (a Russian layout gives a comma there, which a number field won't take)
+window.addEventListener(
+  'keydown',
+  (event) => {
+    const target = event.target;
+    const number = target instanceof HTMLInputElement && target.type === 'number';
+    const text = target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && ['text', 'search'].includes(target.type));
+    if ((!number && !text) || event.ctrlKey || event.metaKey || event.altKey) return;
+    const char = /^Numpad(\d)$/u.exec(event.code)?.[1] ?? (number && event.code === 'NumpadDecimal' ? '.' : undefined);
+    if (char === undefined || event.key === char) return;
+    event.preventDefault();
+    document.execCommand('insertText', false, char);
+  },
+  true,
+);
 window.addEventListener('keydown', (event) => {
   const target = event.target as HTMLElement;
   if (document.querySelector('.ce-shade') !== null) return;

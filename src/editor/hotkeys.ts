@@ -85,13 +85,17 @@ const MODIFIERS = new Set(['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRig
 /** A key press as a key string ('Ctrl+Shift+KeyZ'); null for a modifier alone. */
 export function comboOf(event: KeyboardEvent): string | null {
   if (MODIFIERS.has(event.code) || event.code === '') return null;
-  return [event.ctrlKey || event.metaKey ? 'Ctrl' : '', event.shiftKey ? 'Shift' : '', event.altKey ? 'Alt' : '', event.code].filter(Boolean).join('+');
+  // (the number pad without NumLock: its arrows, Home, Delete… are those keys)
+  const code = event.code.startsWith('Numpad') && /^(Arrow\w+|Home|End|PageUp|PageDown|Insert|Delete)$/u.test(event.key) ? event.key : event.code;
+  return [event.ctrlKey || event.metaKey ? 'Ctrl' : '', event.shiftKey ? 'Shift' : '', event.altKey ? 'Alt' : '', code].filter(Boolean).join('+');
 }
 
 /** The action a key string does (null: none). */
 export function actionFor(combo: string): string | null {
   for (const [id, keys] of Object.entries(bindings())) if (keys.includes(combo)) return id;
-  return null;
+  // (the number pad's keys do what the same keys above the letters do, unless given their own)
+  const main = combo.replace(/Numpad(\d)$/u, 'Digit$1').replace(/NumpadSubtract$/u, 'Minus').replace(/NumpadAdd$/u, 'Equal');
+  return main !== combo ? actionFor(main) : null;
 }
 
 const NAMES: Record<string, string> = {
