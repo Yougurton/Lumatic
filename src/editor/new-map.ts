@@ -193,44 +193,66 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     const shade = document.createElement('div');
     shade.className = 'ce-shade';
     const box = document.createElement('form');
-    box.className = 'ce-dialog nm-dialog';
+    box.className = 'ce-dialog nm-dialog nm-new';
     box.innerHTML = `
       <div class="ce-dialog-title">Новая карта</div>
-      <div class="nm-grid">
-        <label class="nm-wide">Песня
-          <span class="nm-row"><button type="button" data-id="pick">Выбрать файл…</button><span data-id="song" class="nm-dim">mp3, ogg, wav, flac, m4a</span></span>
-        </label>
-        <label>Название<input type="text" data-id="title"></label>
-        <label>Исполнитель<input type="text" data-id="artist"></label>
-        <label>Подзаголовок<input type="text" data-id="sub"></label>
-        <label>Автор карты<input type="text" data-id="mapper"></label>
-        <label>BPM
-          <span class="nm-row"><input type="number" data-id="bpm" min="10" max="1000" step="0.01" value="120"><button type="button" data-id="detect" disabled>Определить</button></span>
-        </label>
-        <label>Проверка на слух
-          <span class="nm-row"><button type="button" data-id="listen" disabled>▶ С метрономом</button><span data-id="alts" class="nm-alts"></span></span>
-        </label>
-        <div class="nm-wide nm-dim" data-id="bpm-info"></div>
-        <label>Тишина в начале
-          <span class="nm-row"><input type="number" data-id="silence" min="0" step="any" value="0"><select data-id="unit"><option value="bars">тактов</option><option value="beats">долей</option><option value="seconds">секунд</option></select></span>
-        </label>
-        <label>Долей в такте<input type="number" data-id="bar" min="1" max="16" step="1" value="4"></label>
-        <label class="nm-wide">Подогнать к сетке<select data-id="align">
-          <option value="bar">Сильная доля — на начало такта</option>
-          <option value="beat">Первая доля — на целую долю</option>
-          <option value="none">Без подгонки</option>
-        </select></label>
-        <div class="nm-wide nm-dim" data-id="silence-info"></div>
-        <div class="nm-wide" data-id="picker"></div>
-        <div class="nm-wide env-plate-wrap"><span class="nm-dim">Окружение</span><div class="env-plate" data-id="env"></div></div>
-        <label>Сложность<select data-id="diff"></select></label>
-        <label>Подпись сложности<input type="text" data-id="label" value="Lightshow"></label>
-        <label>Обложка
-          <span class="nm-row"><img class="nm-cover" data-id="cover-image" alt="" hidden><button type="button" data-id="cover-pick">Картинка…</button><span data-id="cover" class="nm-dim">нарисую сам</span></span>
-        </label>
+      <div class="nm-scroll">
+        <div class="nm-song">
+          <button type="button" class="nm-cover-big" data-id="cover-pick" title="Обложка: картинка из тегов песни, своя — по клику, или нарисую сам из названия">
+            <img data-id="cover-image" alt="" hidden><span>Обложка</span>
+          </button>
+          <div class="nm-song-main">
+            <div class="nm-row"><button type="button" class="primary" data-id="pick">🎵 Выбрать песню…</button><span data-id="song" class="nm-dim">mp3, ogg, wav, flac, m4a — название, исполнитель и обложка возьмутся из тегов</span></div>
+            <div class="nm-grid nm-names">
+              <label>Название<input type="text" data-id="title"></label>
+              <label>Исполнитель<input type="text" data-id="artist"></label>
+              <label>Подзаголовок<input type="text" data-id="sub"></label>
+              <label>Автор карты<input type="text" data-id="mapper"></label>
+            </div>
+            <div class="nm-dim">Обложка: <span data-id="cover">нарисую сам</span></div>
+          </div>
+        </div>
+        <div class="nm-cols">
+          <section class="nm-col">
+            <div class="nm-section">Темп и начало</div>
+            <div class="nm-grid">
+              <label>BPM
+                <span class="nm-row"><input type="number" data-id="bpm" min="10" max="1000" step="0.01" value="120"><button type="button" data-id="detect" disabled>Определить</button></span>
+              </label>
+              <label>Проверка на слух
+                <span class="nm-row"><button type="button" data-id="listen" disabled>▶ С метрономом</button></span>
+              </label>
+              <div class="nm-wide nm-row nm-alts" data-id="alts"></div>
+              <div class="nm-wide nm-dim" data-id="bpm-info"></div>
+              <label>Тишина в начале
+                <span class="nm-row"><input type="number" data-id="silence" min="0" step="any" value="0"><select data-id="unit"><option value="bars">тактов</option><option value="beats">долей</option><option value="seconds">секунд</option></select></span>
+              </label>
+              <label>Долей в такте<input type="number" data-id="bar" min="1" max="16" step="1" value="4"></label>
+              <label class="nm-wide">Подогнать к сетке<select data-id="align">
+                <option value="bar">Сильная доля — на начало такта</option>
+                <option value="beat">Первая доля — на целую долю</option>
+                <option value="none">Без подгонки</option>
+              </select></label>
+              <div class="nm-wide nm-dim" data-id="silence-info"></div>
+            </div>
+          </section>
+          <section class="nm-col">
+            <div class="nm-section">Окружение</div>
+            <div class="env-plate" data-id="env"></div>
+            <div class="nm-section">Сложность</div>
+            <div class="nm-grid">
+              <label>Сложность<select data-id="diff"></select></label>
+              <label>Подпись<input type="text" data-id="label" value="Lightshow"></label>
+            </div>
+            <div class="nm-section">Превью в списке песен</div>
+            <div data-id="picker"><div class="nm-dim">Появится, когда выберете песню.</div></div>
+          </section>
+        </div>
       </div>
-      <div class="nm-status" data-id="status"></div>
-      <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="create" disabled>Создать карту…</button></div>`;
+      <div class="nm-foot">
+        <div class="nm-status" data-id="status"></div>
+        <button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="create" disabled>Создать карту…</button>
+      </div>`;
     shade.append(box);
     document.body.append(shade);
     const el = <T extends HTMLElement>(id: string) => box.querySelector<T>(`[data-id="${id}"]`)!;
@@ -390,8 +412,10 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
         const sure = detected.confidence > 0.6 ? 'уверенно' : detected.confidence > 0.35 ? 'довольно уверенно' : 'неуверенно — проверьте на слух';
         el('bpm-info').textContent = `Найдено ${String(detected.bpm)} BPM (${sure}), первая доля на ${detected.firstBeat.toFixed(3)} с.`;
         const alts = el('alts');
+        const others = detected.alternatives.slice(0, 3);
         alts.replaceChildren(
-          ...detected.alternatives.slice(0, 3).map((value) => {
+          ...(others.length > 0 ? [Object.assign(document.createElement('span'), { className: 'nm-dim', textContent: 'Или, может быть:' })] : []),
+          ...others.map((value) => {
             const button = document.createElement('button');
             button.type = 'button';
             button.textContent = String(value);

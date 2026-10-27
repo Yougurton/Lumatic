@@ -151,7 +151,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     box.className = 'ce-dialog nm-dialog';
     box.innerHTML = `
       <div class="ce-dialog-title">Свойства карты</div>
-      <div class="nm-grid">
+      <div class="nm-scroll"><div class="nm-grid">
         <label>Название<input type="text" data-id="title"></label>
         <label>Исполнитель<input type="text" data-id="artist"></label>
         <label>Подзаголовок<input type="text" data-id="sub"></label>
@@ -187,7 +187,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
         <label class="nm-wide">Формат карты
           <span class="nm-row"><span data-id="format" class="nm-dim"></span><button type="button" data-id="convert"></button></span>
         </label>
-      </div>
+      </div></div>
       <div class="nm-status" data-id="status"></div>
       <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="apply">Применить</button></div>`;
     shade.append(box);
