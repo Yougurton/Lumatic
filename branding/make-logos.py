@@ -1,6 +1,6 @@
 """
-Lumatic's logo concepts as SVG files (branding/logos/): the lambda of lasers and the spark, each in a few
-palettes — its icon, the icon with the name beside it, and the icon in one colour. The name is drawn as outlines of Inter Display (SIL Open Font
+Lumatic's logo: the spark, in several forms and palettes, as SVG files (branding/logos/) — its icon, the icon
+with the name beside it, the icon in one colour (one per form); and the name alone. The name is drawn as outlines of Inter Display (SIL Open Font
 License), so it looks the same without the font installed.
 
   python3 branding/make-logos.py        (needs fontTools: pip install fonttools)
@@ -63,129 +63,89 @@ def lr_gradient(id_, x1=0, x2=128, a=RED, b=BLUE):
             f'<stop offset="0" stop-color="{a}"/><stop offset="1" stop-color="{b}"/></linearGradient>')
 
 
-# ----- the palettes: not the game's red and blue — the lights can be any colour ---------------------------
+# ----- the spark: the first round's sparkle and glow, in several forms and palettes -------------------------
 
+# each palette's colours, laid along the spark from its lower left to its upper right
 PALETTES = {
-    # a colour for each beam / arm, round the colour wheel
-    'spectrum': ['#ff4f8b', '#ff9a3d', '#ffd84a', '#4dffb8', '#3dc8ff', '#8f6bff'],
-    # two neon colours that aren't the game's own
-    'neon': ['#ff4fd8', '#ff4fd8', '#ff4fd8', '#3de0ff', '#3de0ff', '#3de0ff'],
-    # the editor's own accent, blue to violet
-    'accent': ['#6aa6ff', '#7f9cff', '#9890ff', '#b084ff', '#9890ff', '#6aa6ff'],
+    'spectrum': ['#ff4f8b', '#ffb03d', '#ffe14a', '#4dffb8', '#3dc8ff', '#8f6bff'],
+    'neon': ['#ff4fd8', '#b06bff', '#3de0ff'],
+    'sunset': ['#ffc04a', '#ff5f6d', '#c86bff'],
+    'aurora': ['#4dffb8', '#3dc8ff', '#8f6bff'],
+    'accent': ['#6aa6ff', '#8f98ff', '#b084ff'],
+    'fire': ['#ffe14a', '#ff8a3d', '#ff3d6e'],
 }
+PALETTE_NAMES = {'spectrum': 'спектр', 'neon': 'неон', 'sunset': 'закат', 'aurora': 'аврора', 'accent': 'акцент', 'fire': 'огонь'}
 
 
 def tile(fill=BG):
     return f'  <rect width="128" height="128" rx="28" fill="{fill}"/>'
 
 
-def fade_gradient(id_, x1, y1, x2, y2, color, start=1.0, end=0.12):
-    return (f'    <linearGradient id="{id_}" gradientUnits="userSpaceOnUse" x1="{r(x1)}" y1="{r(y1)}" x2="{r(x2)}" y2="{r(y2)}">'
-            f'<stop offset="0" stop-color="{color}" stop-opacity="{start}"/><stop offset="1" stop-color="{color}" stop-opacity="{end}"/></linearGradient>')
+def sparkle(cx, cy, outers, inner, turn=0.0):
+    """A sparkle's outline: its points `outers` (radii, from the top clockwise), curved in through the
+    middle between them (the first round's shape)."""
+    n = len(outers)
+    pts = []
+    for k in range(n * 2):
+        a = math.radians(-90 + turn + k * 180 / n)
+        rad = outers[k // 2] if k % 2 == 0 else inner
+        pts.append((cx + math.cos(a) * rad, cy + math.sin(a) * rad))
+    d = f'M{r(pts[0][0])} {r(pts[0][1])}'
+    for k in range(1, n * 2 + 1):
+        p = pts[k % (n * 2)]
+        d += f' Q{r(cx)} {r(cy)} {r(p[0])} {r(p[1])}' if k % 2 == 1 else f' L{r(p[0])} {r(p[1])}'
+    return d + 'Z'
 
 
-def leg_stops(palette, side):
-    """A leg's colours from the light at its foot up to where the legs meet."""
-    c = PALETTES[palette]
-    if palette == 'spectrum':
-        return [c[0], c[1], c[2]] if side == 0 else [c[5], c[4], c[3]]
-    return [c[side * 3 + 1]] * 3
+FORMS = {
+    # the first round's four-pointed sparkle
+    'classic': ('классика', lambda: [sparkle(64, 64, [46] * 4, 13)], None),
+    # taller than wide, like a flare in a lens
+    'tall': ('вытянутая', lambda: [sparkle(64, 64, [54, 32, 54, 32], 12)], None),
+    # four long points and four short ones between them
+    'eight': ('восемь лучей', lambda: [sparkle(64, 64, [48, 24, 48, 24, 48, 24, 48, 24], 11)], None),
+    # turned a little, as if caught spinning
+    'tilted': ('наклонная', lambda: [sparkle(64, 64, [50, 38, 50, 38], 12, turn=-18)], None),
+    # in a thin ring — the rings of the stage
+    'ring': ('в кольце', lambda: [sparkle(64, 64, [40] * 4, 11)], 'ring'),
+    # a streak of light through it
+    'flare': ('с бликом', lambda: [sparkle(64, 64, [44] * 4, 12)], 'streak'),
+}
 
 
-def lambda_lasers(palette, mono=None):
-    """The Greek L (Λ) drawn by lasers: two beams from lights on the floor meet up high and cross a
-    little, as beams do; fainter beams fan out to the outside. No crossbar — it's a lambda, not an A."""
-    colors = PALETTES.get(palette, [])
-    left, right, apex = (30, 106), (98, 106), (64, 22)
-    defs = []
-    out = [] if mono else [tile()]
-    if not mono:
-        defs.append(glow('fl', 1.8))
-        defs.append(f'    <radialGradient id="al" cx="{apex[0]}" cy="{apex[1]}" r="10" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="{WHITE}" stop-opacity="0.95"/><stop offset="1" stop-color="{WHITE}" stop-opacity="0"/></radialGradient>')
-    out.append('  <g stroke-linecap="round"' + ('' if mono else ' filter="url(#fl)"') + '>')
-    # the fan: beams turned outward from each leg, fading out
-    for side, (ox, oy) in ((0, left), (1, right)):
-        dx, dy = apex[0] - ox, apex[1] - oy
-        for k, spread in enumerate((13, 26)):
-            a = math.atan2(dy, dx) + math.radians(spread) * (-1 if side == 0 else 1)
-            length = 74 - k * 10
-            x2, y2 = ox + math.cos(a) * length, oy + math.sin(a) * length
-            if mono:
-                out.append(f'    <line x1="{ox}" y1="{oy}" x2="{r(x2)}" y2="{r(y2)}" stroke="{mono}" stroke-width="{r(2.6 - k * 0.6)}" opacity="{r(0.6 - k * 0.15)}"/>')
-            else:
-                color = leg_stops(palette, side)[1 + k] if palette == 'spectrum' else colors[side * 3 + 1]
-                gid = f'fan{side}{k}'
-                defs.append(fade_gradient(gid, ox, oy, x2, y2, color, 0.9, 0.0))
-                out.append(f'    <line x1="{ox}" y1="{oy}" x2="{r(x2)}" y2="{r(y2)}" stroke="url(#{gid})" stroke-width="{r(3 - k * 0.7)}"/>')
-    # the legs: a little past the apex, so they cross there; the right stroke heavier, as the letter is written
-    for side, (ox, oy) in ((0, left), (1, right)):
-        dx, dy = apex[0] - ox, apex[1] - oy
-        x2, y2 = apex[0] + dx * 0.14, apex[1] + dy * 0.14
-        width = 8 if side else 5.5
-        if mono:
-            out.append(f'    <line x1="{ox}" y1="{oy}" x2="{r(x2)}" y2="{r(y2)}" stroke="{mono}" stroke-width="{width}"/>')
-            continue
-        a, b, c = leg_stops(palette, side)
-        gid = f'leg{side}'
-        defs.append(f'    <linearGradient id="{gid}" gradientUnits="userSpaceOnUse" x1="{ox}" y1="{oy}" x2="{r(x2)}" y2="{r(y2)}"><stop offset="0" stop-color="{a}"/><stop offset="0.45" stop-color="{b}"/><stop offset="0.8" stop-color="{c}"/><stop offset="0.93" stop-color="{WHITE}"/><stop offset="1" stop-color="{WHITE}" stop-opacity="0.3"/></linearGradient>')
-        out.append(f'    <line x1="{ox}" y1="{oy}" x2="{r(x2)}" y2="{r(y2)}" stroke="url(#{gid})" stroke-width="{width}"/>')
-    out.append('  </g>')
-    if not mono:
-        out.append(f'  <circle cx="{apex[0]}" cy="{apex[1]}" r="10" fill="url(#al)"/>')
-    # the two lights on the floor
-    for side, (ox, oy) in ((0, left), (1, right)):
-        out.append(f'  <circle cx="{ox}" cy="{oy}" r="{6 if side else 5}" fill="{mono or leg_stops(palette, side)[0]}"/>')
-    return '\n'.join(defs), '\n'.join(out)
-
-
-def spark(palette, mono=None):
-    """A spark of light: a four-pointed sparkle, each arm its own colour, white only at its very heart —
-    one star and nothing else."""
-    colors = PALETTES.get(palette, [])
-    cx, cy, outer, inner = 64, 64, 50, 17
-    arms = []
-    for k in range(4):
-        a = math.radians(-90 + k * 90)
-        tip = (cx + math.cos(a) * outer, cy + math.sin(a) * outer)
-        side1 = (cx + math.cos(a - math.pi / 4) * inner, cy + math.sin(a - math.pi / 4) * inner)
-        side2 = (cx + math.cos(a + math.pi / 4) * inner, cy + math.sin(a + math.pi / 4) * inner)
-        bend = (cx + math.cos(a) * inner * 1.15, cy + math.sin(a) * inner * 1.15)
-        # (curved in towards the middle: a sparkle, not a plain star)
-        d = (f'M{r(cx)} {r(cy)} L{r(side1[0])} {r(side1[1])} Q{r(bend[0])} {r(bend[1])} {r(tip[0])} {r(tip[1])}'
-             f' Q{r(bend[0])} {r(bend[1])} {r(side2[0])} {r(side2[1])}Z')
-        arms.append((d, tip))
+def spark(form, palette, mono=None):
+    _, shapes, extra = FORMS[form]
+    paths = shapes()
     if mono:
-        # (one outline: the arms' own shapes would leave hairlines where they meet)
-        d = ''
-        for k in range(4):
-            a = math.radians(-90 + k * 90)
-            tip = (cx + math.cos(a) * outer, cy + math.sin(a) * outer)
-            nxt = math.radians(-90 + (k + 1) * 90)
-            between = (cx + math.cos(a + math.pi / 4) * inner * 0.55, cy + math.sin(a + math.pi / 4) * inner * 0.55)
-            next_tip = (cx + math.cos(nxt) * outer, cy + math.sin(nxt) * outer)
-            d += (f'M{r(tip[0])} {r(tip[1])}' if k == 0 else '') + f' Q{r(between[0])} {r(between[1])} {r(next_tip[0])} {r(next_tip[1])}'
-        return '', f'  <path d="{d}Z" fill="{mono}"/>'
-    # an arm's colour each: top, right, bottom, left
-    pick = {'spectrum': [2, 4, 5, 0], 'neon': [0, 3, 3, 0], 'accent': [3, 1, 3, 0]}[palette]
-    defs = [glow('fs', 2.4), f'    <radialGradient id="cs" cx="{cx}" cy="{cy}" r="13" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.5" stop-color="{WHITE}" stop-opacity="0.7"/><stop offset="1" stop-color="{WHITE}" stop-opacity="0"/></radialGradient>']
-    out = [tile(), '  <g filter="url(#fs)">']
-    for k, (d, tip) in enumerate(arms):
-        gid = f'arm{k}'
-        color = colors[pick[k]]
-        defs.append(f'    <linearGradient id="{gid}" gradientUnits="userSpaceOnUse" x1="{cx}" y1="{cy}" x2="{r(tip[0])}" y2="{r(tip[1])}"><stop offset="0" stop-color="{WHITE}"/><stop offset="0.2" stop-color="{color}"/><stop offset="1" stop-color="{color}"/></linearGradient>')
-        out.append(f'    <path d="{d}" fill="url(#{gid})"/>')
-    out.append('  </g>')
-    out.append(f'  <circle cx="{cx}" cy="{cy}" r="13" fill="url(#cs)"/>')
+        out = [f'  <path d="{d}" fill="{mono}"/>' for d in paths]
+        if extra == 'ring':
+            out.append(f'  <circle cx="64" cy="64" r="52" fill="none" stroke="{mono}" stroke-width="3"/>')
+        if extra == 'streak':
+            out.append(f'  <rect x="4" y="62.5" width="120" height="3" rx="1.5" fill="{mono}" opacity="0.7"/>')
+        return '', '\n'.join(out)
+    colors = PALETTES[palette]
+    stops = ''.join(f'<stop offset="{r(k / (len(colors) - 1))}" stop-color="{c}"/>' for k, c in enumerate(colors))
+    defs = [
+        f'    <linearGradient id="sg" gradientUnits="userSpaceOnUse" x1="38" y1="90" x2="90" y2="38">{stops}</linearGradient>',
+        f'    <radialGradient id="sc" cx="64" cy="64" r="22" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="{WHITE}"/><stop offset="1" stop-color="{WHITE}" stop-opacity="0"/></radialGradient>',
+        glow('sf', 3.2),
+    ]
+    out = [tile()]
+    if extra == 'ring':
+        out.append('  <circle cx="64" cy="64" r="52" fill="none" stroke="url(#sg)" stroke-width="2.5" opacity="0.75" filter="url(#sf)"/>')
+    if extra == 'streak':
+        defs.append(f'    <linearGradient id="ss" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="{colors[0]}" stop-opacity="0"/><stop offset="0.5" stop-color="{WHITE}"/><stop offset="1" stop-color="{colors[-1]}" stop-opacity="0"/></linearGradient>')
+        out.append('  <rect x="4" y="62.6" width="120" height="2.8" rx="1.4" fill="url(#ss)" filter="url(#sf)"/>')
+    for d in paths:
+        out.append(f'  <path d="{d}" fill="url(#sg)" filter="url(#sf)"/>')
+    out.append('  <circle cx="64" cy="64" r="22" fill="url(#sc)"/>')
     return '\n'.join(defs), '\n'.join(out)
 
 
 CONCEPTS = [
-    ('lambda-spectrum', 'Λ-лазеры · спектр', lambda m=None: lambda_lasers('spectrum', m), 'The Greek letter lambda drawn by laser beams in many colours meeting over a stage'),
-    ('lambda-neon', 'Λ-лазеры · неон', lambda m=None: lambda_lasers('neon', m), 'The Greek letter lambda drawn by magenta and cyan laser beams meeting over a stage'),
-    ('lambda-accent', 'Λ-лазеры · акцент', lambda m=None: lambda_lasers('accent', m), 'The Greek letter lambda drawn by blue-violet laser beams meeting over a stage'),
-    ('spark-spectrum', 'Искра · спектр', lambda m=None: spark('spectrum', m), 'A four-pointed sparkle, each arm a different colour, white at its heart'),
-    ('spark-neon', 'Искра · неон', lambda m=None: spark('neon', m), 'A four-pointed sparkle in magenta and cyan, white at its heart'),
-    ('spark-accent', 'Искра · акцент', lambda m=None: spark('accent', m), 'A four-pointed sparkle in blue and violet, white at its heart'),
+    (f'spark-{form}-{palette}', f'Искра · {FORMS[form][0]} · {PALETTE_NAMES[palette]}', (lambda m=None, f=form, p=palette: spark(f, p, m)),
+     f'A sparkle of light ({form}) in the {palette} colours, white at its heart')
+    for form in FORMS for palette in PALETTES
 ]
 
 
@@ -203,8 +163,10 @@ os.makedirs(OUT, exist_ok=True)
 for slug, _, make, desc in CONCEPTS:
     defs, body = make()
     write(f'lumatic-{slug}-icon.svg', svg(128, 128, body, 'Lumatic', desc, defs))
-    _, mono = make(WHITE)
-    write(f'lumatic-{slug}-icon-mono.svg', svg(128, 128, mono, 'Lumatic', desc + ' (one colour)'))
+    form = slug.split('-')[1]
+    if slug.endswith('-spectrum'):
+        _, mono = make(WHITE)
+        write(f'lumatic-spark-{form}-mono.svg', svg(128, 128, mono, 'Lumatic', f'A sparkle of light ({form}) in one colour'))
     # the icon with the name beside it, on the editor's panel colour
     name, width = wordmark(150, 84, 56)
     total = 150 + width + 34
