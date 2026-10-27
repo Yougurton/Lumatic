@@ -72,6 +72,8 @@ export interface RingBlock {
   poses: RingPose[];
   /** Made by "Rings in steps" from these settings (gone once its poses are changed by hand). */
   steps?: StepTransition;
+  /** Made by "Ring glitch" from these settings (the same). */
+  glitch?: RingGlitch;
 }
 
 /** What making ring poses needs to know about the environment's ring systems. */
@@ -179,6 +181,60 @@ export function newStepsBlock(system: string, mode: RingBlock['mode'], start: nu
   const poses = stepPoses(transition);
   const length = Math.max(1, poses.at(-1)!.beat + poses.at(-1)!.duration);
   return { id: newId('k'), name: 'Кольца по шагам', system, mode, start, end: start + length, poses, steps: { ...transition } };
+}
+
+/** Rings jerking about at random (scratches, glitches in the song). */
+export interface RingGlitch {
+  /** Beats the block lasts. */
+  length: number;
+  /** A jerk every this many beats (some left out), or at the song's hits (`hits`, beats from the
+   *  block's start). */
+  every: number;
+  hits?: number[];
+  /** How far the rings jerk (degrees, either way). */
+  strength: number;
+  /** How far apart the rings go (degrees from ring to ring, either way; 0: all as one). */
+  chaos: number;
+  /** Each jerk's share of the time to the next (small: snaps). */
+  snap: number;
+  seed: number;
+  /** Back to where they were at the end. */
+  back: boolean;
+  /** The band of the song the hits were found in (the dialog's choice). */
+  band?: string;
+}
+
+export const DEFAULT_GLITCH: RingGlitch = { length: 4, every: 0.125, strength: 35, chaos: 12, snap: 0.3, seed: 1, back: true };
+
+/** The poses of a glitch (`mode`: per ring, the rings can each go their own way). */
+export function glitchPoses(glitch: RingGlitch, mode: RingBlock['mode']): RingPose[] {
+  let state = (glitch.seed * 9301 + 49297) % 233280 || 1;
+  const random = () => {
+    state = (state * 9301 + 49297) % 233280;
+    return state / 233280;
+  };
+  const length = Math.max(0.25, glitch.length);
+  const every = Math.max(1 / 64, glitch.every);
+  const times = (glitch.hits ?? Array.from({ length: Math.floor(length / every) }, (_, k) => k * every).filter((time, k) => k === 0 || random() < 0.8))
+    .filter((time) => time >= 0 && time < length - 1e-6)
+    .sort((a, b) => a - b);
+  const poses = times.map((time, index) => {
+    const next = times[index + 1] ?? length;
+    const angle = round((random() * 2 - 1) * glitch.strength);
+    const step = round((random() * 2 - 1) * glitch.chaos);
+    const shape: PoseShape = Math.abs(step) < 0.5 ? 'same' : mode === 'tracks' && random() < 0.35 ? 'random' : 'spiral';
+    return newPose(round(time), { shape, angle, step: shape === 'random' ? Math.abs(step) : step, seed: Math.floor(random() * 1000), duration: round(Math.max(1 / 64, (next - time) * Math.min(1, Math.max(0.02, glitch.snap)))), easing: 'easeOutCubic' });
+  });
+  if (glitch.back) poses.push(newPose(round(length), { shape: 'same', angle: 0, step: 0, duration: round(Math.min(0.5, length / 4)), easing: 'easeInOutQuad' }));
+  return poses;
+}
+
+/** A block of a glitch. */
+export function newGlitchBlock(system: string, mode: RingBlock['mode'], start: number, glitch: RingGlitch = DEFAULT_GLITCH): RingBlock {
+  const poses = glitchPoses(glitch, mode);
+  const last = poses.at(-1);
+  const end = start + Math.max(glitch.length, last === undefined ? 1 : last.beat + last.duration);
+  return { id: newId('k'), name: 'Глитч колец', system, mode, start, end, poses, glitch: { ...glitch } };
 }
 
 export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {

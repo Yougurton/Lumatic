@@ -1,7 +1,9 @@
 import type { Editor } from './editor';
 import { otherEventName } from './names';
+import { ringSystemName } from './library';
+import { laserDialog } from './laser-dialog';
 import { KIND_NAMES, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
-import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type Rgb, type StartMode } from './model';
+import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
 
 /**
  * The panel on the right: what the selected clips do (their start, their end, colour, gradient,
@@ -83,7 +85,7 @@ export class Inspector {
     title.textContent = clips.length > 0 ? (clips.length === 1 ? 'Событие света' : `Выбрано: ${String(clips.length)}`) : rawSelected.length > 0 ? 'Другие события' : 'Кисть (новые события)';
     root.append(title);
     if (clips.length === 0 && rawSelected.length > 0) {
-      this.renderRaw(rawSelected);
+      this.renderRaw(rawSelected as RawEvent[]);
       return;
     }
 
@@ -331,18 +333,124 @@ export class Inspector {
     return wrap;
   }
 
-  private renderRaw(events: { type: number; value: number; floatValue: number; customData?: Record<string, unknown> }[]) {
+  /** The other events picked (ring turns, zoom, laser speed, …): their value and what Chroma adds to
+   *  them, changed for all of them at once. */
+  private renderRaw(events: RawEvent[]) {
+    const editor = this.editor;
     const first = events[0]!;
-    const note = document.createElement('div');
-    note.className = 'ins-note';
-    const names: Record<string, string> = { rotation: 'поворот', step: 'шаг', prop: 'распространение', speed: 'скорость', direction: 'направление', nameFilter: 'кольца', counterSpin: 'встречно', reset: 'сброс' };
-    const lines = [`${otherEventName(first.type)} · событий: ${String(events.length)}`, `значение ${String(first.value)}, float ${String(first.floatValue)}`];
-    for (const [key, value] of Object.entries(first.customData ?? {})) {
-      const bare = key.replace(/^_/u, '');
-      lines.push(`${names[bare] ?? bare}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`);
+    const ids = events.map((event) => event.id);
+    const type = events.every((event) => event.type === first.type) ? first.type : null;
+    const get = (key: string): unknown => first.customData?.[key] ?? first.customData?.[`_${key}`];
+    const set = (key: string, value: unknown) =>
+      editor.updateRaw(ids, (event) => {
+        const data = { ...(event.customData ?? {}) };
+        delete data[key];
+        delete data[`_${key}`];
+        if (value !== undefined) data[key] = value;
+        if (Object.keys(data).length > 0) event.customData = data;
+        else delete event.customData;
+      });
+    const setValue = (value: number) => editor.updateRaw(ids, (event) => (event.value = Math.max(0, Math.round(value))));
+    const info = document.createElement('div');
+    info.className = 'ins-note';
+    info.textContent = `${type === null ? 'Разные события' : otherEventName(type)} · ${events.length === 1 ? `доля ${String(Math.round(first.beat * 1000) / 1000)}` : `событий: ${String(events.length)}`}`;
+    this.root.append(info);
+    const direction = (): 'random' | '0' | '1' => {
+      const value = get('direction');
+      return value === 0 ? '0' : value === 1 ? '1' : 'random';
+    };
+    const directions: ['random' | '0' | '1', string, string][] = [
+      ['random', 'Случайно', 'Как в игре: в случайную сторону'],
+      ['0', 'Сторона 0', 'Chroma direction 0'],
+      ['1', 'Сторона 1', 'Chroma direction 1 — в обратную'],
+    ];
+    const pickDirection = (value: 'random' | '0' | '1') => set('direction', value === 'random' ? undefined : Number(value));
+    const note = (text: string) => this.root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: text }));
+
+    if (type === 12 || type === 13) {
+      // laser speed: how fast, which way, from where (Chroma: lockRotation, speed, direction)
+      const speed = typeof get('speed') === 'number' ? (get('speed') as number) : typeof get('preciseSpeed') === 'number' ? (get('preciseSpeed') as number) : first.value;
+      this.root.append(
+        this.numberField('Скорость (0 — стоп)', speed, 0.25, (value) => {
+          const next = Math.max(0, value);
+          editor.updateRaw(ids, (event) => {
+            event.value = next === 0 ? 0 : Math.max(1, Math.round(next));
+            const data = { ...(event.customData ?? {}) };
+            for (const key of ['speed', '_speed', 'preciseSpeed', '_preciseSpeed']) delete data[key];
+            // (a speed between whole ones: Chroma's precise speed)
+            if (next > 0 && Math.abs(next - Math.round(next)) > 1e-6) data.speed = Math.round(next * 1000) / 1000;
+            if (Object.keys(data).length > 0) event.customData = data;
+            else delete event.customData;
+          });
+        }),
+      );
+      const locked = get('lockRotation') === true || get('lockPosition') === true;
+      if (first.value > 0) {
+        this.root.append(this.section('Направление', this.buttons(directions, direction(), pickDirection)));
+        this.root.append(
+          this.section(
+            'Откуда',
+            this.buttons(
+              [
+                ['random', 'Случайно', 'Как в игре: каждый лазер с исходного положения плюс случайный угол'],
+                ['lock', 'С того же места', 'lockRotation: лазеры продолжают оттуда, где стоят — после «вернуть в исходное» идут ровным рядом'],
+              ],
+              locked ? 'lock' : 'random',
+              (value) => set('lockRotation', value === 'lock' ? true : undefined),
+            ),
+          ),
+        );
+      } else {
+        this.root.append(
+          this.section(
+            'Остановка',
+            this.buttons(
+              [
+                ['reset', 'В исходное', 'Лазеры возвращаются в исходное положение (ряд, как задумано окружением)'],
+                ['lock', 'Замереть', 'lockRotation: лазеры останавливаются там, где стоят'],
+              ],
+              locked ? 'lock' : 'reset',
+              (value) => set('lockRotation', value === 'lock' ? true : undefined),
+            ),
+          ),
+        );
+      }
+      note('Нужен Chroma. Ровный ряд, крутящийся в одну сторону: событие «стоп → в исходное», затем скорость «с того же места» и выбранной стороной. Готовые повороты на угол и кручение рядом — «✳ Лазеры…».');
+      const tool = document.createElement('button');
+      tool.textContent = '✳ Лазеры…';
+      tool.addEventListener('click', () => laserDialog(editor));
+      this.root.append(tool);
+    } else if (type === 8) {
+      // ring turns
+      const number = (key: string) => (typeof get(key) === 'number' ? (get(key) as number) : null);
+      const field = (label: string, key: string, fallback: number, step: number) => this.numberField(label, number(key) ?? fallback, step, (value) => set(key, value));
+      this.root.append(field('Поворот, °', 'rotation', 90, 5), field('Шаг между кольцами, °', 'step', 5, 1), field('Распространение (prop)', 'prop', 1, 0.5), field('Скорость', 'speed', 1, 0.25));
+      this.root.append(this.section('Направление', this.buttons(directions, direction(), pickDirection)));
+      const systems = editor.ringInfo;
+      if (systems.length > 1) {
+        const current = typeof get('nameFilter') === 'string' ? (get('nameFilter') as string) : '';
+        this.root.append(
+          this.section(
+            'Какие кольца',
+            this.buttons<string>([['', 'Все', 'Все системы колец'], ...systems.map((system): [string, string, string] => [system.name, ringSystemName(system.name), system.name])], current, (value) => set('nameFilter', value === '' ? undefined : value)),
+          ),
+        );
+      }
+      note('Пустые поля — как в игре по умолчанию. Нужен Chroma для своих значений.');
+    } else if (type === 9) {
+      const number = (key: string) => (typeof get(key) === 'number' ? (get(key) as number) : null);
+      this.root.append(this.numberField('Расстояние между кольцами (step)', number('step') ?? 0, 0.5, (value) => set('step', value)), this.numberField('Скорость', number('speed') ?? 1, 0.25, (value) => set('speed', value)));
+      note('Зум колец: Chroma step — расстояние, к которому кольца съезжаются или разъезжаются.');
+    } else {
+      this.root.append(this.numberField('Значение', first.value, 1, setValue), this.numberField('Float', first.floatValue, 0.1, (value) => editor.updateRaw(ids, (event) => (event.floatValue = value))));
     }
-    note.innerText = lines.join('\n');
-    this.root.append(note);
+    if (Object.keys(first.customData ?? {}).length > 0) {
+      const clear = document.createElement('button');
+      clear.textContent = 'Убрать данные Chroma';
+      clear.title = 'Событие станет обычным, как в игре без модов';
+      clear.addEventListener('click', () => editor.updateRaw(ids, (event) => delete event.customData));
+      this.root.append(clear);
+    }
   }
 
   private section(label: string, content: HTMLElement) {

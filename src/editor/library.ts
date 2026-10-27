@@ -1,4 +1,6 @@
 import { ringStepsDialog } from './ring-steps-dialog';
+import { laserDialog } from './laser-dialog';
+import { ringGlitchDialog } from './ring-glitch-dialog';
 import type { SchemeColors } from './bake';
 import type { Editor } from './editor';
 import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectKind, type EffectParams } from './effects';
@@ -273,6 +275,24 @@ export class Library {
       steps.title = 'Кольца переходят из начального угла в конечный за несколько шагов: число шагов и скорость поворота настраиваются';
       steps.addEventListener('click', () => ringStepsDialog(this.editor, null));
       this.body.append(steps);
+    }
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
+      // rings jerking about (scratches, glitches)
+      const glitch = document.createElement('button');
+      glitch.className = 'lib-poses';
+      glitch.textContent = '⚡ Глитч колец…';
+      glitch.title = 'Кольца дёргаются в случайные стороны — по сетке или по ударам песни (скретчи, глюки). Над выделенным участком песни, иначе от курсора';
+      glitch.addEventListener('click', () => ringGlitchDialog(this.editor, null));
+      this.body.append(glitch);
+    }
+    if (this.tab === 'rings' && this.editor.project !== null) {
+      // the rotating lasers: in a row, one way, by a set angle (Chroma's laser speed data)
+      const lasers = document.createElement('button');
+      lasers.className = 'lib-poses';
+      lasers.textContent = '✳ Лазеры…';
+      lasers.title = 'Вращающиеся лазеры: крутятся ровным рядом в выбранную сторону или поворачиваются на угол по шагам (нужен Chroma)';
+      lasers.addEventListener('click', () => laserDialog(this.editor));
+      this.body.append(lasers);
     }
     if (this.tab === 'rings' && this.editor.zoomInfo.length > 0) {
       const zoom = document.createElement('button');

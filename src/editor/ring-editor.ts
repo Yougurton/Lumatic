@@ -161,8 +161,9 @@ export class RingEditor {
   private change(patch: (block: RingBlock) => void) {
     this.editor.updateRingBlock(this.blockId, (block) => {
       patch(block);
-      // (changed by hand: no longer the steps it was made from)
+      // (changed by hand: no longer the steps or the glitch it was made from)
       delete block.steps;
+      delete block.glitch;
     });
     this.showPose();
   }

@@ -851,7 +851,7 @@ export function scrubStrip(editor: Editor, range: () => { start: number; end: nu
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     const beat = editor.playhead();
-    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)}`;
+    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)} ${editor.spectrogram === null ? '' : 's'}`;
     if (view === null || width === 0 || key === drawn) return;
     drawn = key;
     const ratio = window.devicePixelRatio || 1;
@@ -862,6 +862,23 @@ export function scrubStrip(editor: Editor, range: () => { start: number; end: nu
     const x = (value: number) => ((value - view.from) / (view.to - view.from)) * width;
     ctx.fillStyle = '#121318';
     ctx.fillRect(0, 0, width, height);
+    // the song's spectrogram under it (dimmed): what is heard there
+    const picture = editor.spectrogram;
+    if (picture !== null) {
+      const from = editor.beatToSeconds(view.from) / picture.secondsPerFrame;
+      const to = editor.beatToSeconds(view.to) / picture.secondsPerFrame;
+      const first = Math.max(0, Math.floor(from));
+      const last = Math.min(picture.frames, Math.ceil(to));
+      if (last > first) {
+        ctx.globalAlpha = 0.75;
+        ctx.imageSmoothingEnabled = true;
+        // (one canvas column per frame; the stretch shown placed where its beats are)
+        const left = ((first - from) / (to - from)) * width;
+        const right = ((last - from) / (to - from)) * width;
+        ctx.drawImage(picture.image, first, 0, last - first, picture.image.height, left, 0, right - left, height);
+        ctx.globalAlpha = 1;
+      }
+    }
     ctx.fillStyle = 'rgba(90,130,220,0.22)';
     ctx.fillRect(x(view.block.start), 0, x(view.block.end) - x(view.block.start), height);
     ctx.fillStyle = 'rgba(120,160,255,0.9)';
@@ -875,7 +892,7 @@ export function scrubStrip(editor: Editor, range: () => { start: number; end: nu
       ctx.fillStyle = whole ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
       ctx.fillRect(Math.round(x(at)), whole ? 0 : height * 0.55, 1, height);
       if (whole) {
-        ctx.fillStyle = '#9aa0b4';
+        ctx.fillStyle = '#d6d9e4';
         ctx.fillText(String(Math.round(at * 100) / 100), x(at) + 3, 11);
       }
     }

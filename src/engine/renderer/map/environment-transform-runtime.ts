@@ -119,7 +119,7 @@ export class EnvironmentTransformRuntime {
       const random = deterministicRotationRandom(rotation.seed);
       function create(source: MapRenderData['lightEvents']) {
         return rotation.pair === undefined
-          ? createLightRotationSampler(source, data.songBpm, rotation.speedMultiplier, random)
+          ? createLightRotationSampler(source, data.songBpm, rotation.speedMultiplier, random, rotation.eventType === 12)
           : createLightPairRotationSampler(
               source,
               data.songBpm,

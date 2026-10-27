@@ -1,6 +1,7 @@
 import { adjustDialog, selectByDialog } from './adjust-dialog';
 import { soundDialog } from './sound-dialog';
 import { ringStepsDialog } from './ring-steps-dialog';
+import { ringGlitchDialog } from './ring-glitch-dialog';
 import { resolveRgb } from './bake';
 import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
@@ -1060,6 +1061,7 @@ export class Timeline {
       { label: 'Снять выделение', hint: 'Esc', action: () => editor.setSongRange(null) },
       { label: 'Выделить события в нём…', hint: 'по строкам, цвету', action: () => selectByDialog(editor) },
       { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor) },
+      { label: 'Глитч колец здесь…', hint: 'скретчи, глюки', disabled: editor.ringInfo.length === 0, action: () => ringGlitchDialog(editor, null) },
       null,
       { label: 'Настройки спектрограммы…', action: () => this.openSpectroPanel(x, y - 200) },
     ]);
@@ -1724,6 +1726,17 @@ export class Timeline {
           this.drag = { kind: 'box', x0: x, y0: y, x1: x, y1: y, additive: event.shiftKey || event.ctrlKey || event.metaKey };
           return;
         }
+        if (item.row.kind === 'raw') {
+          // a marker for the other events (ring turns, zoom, laser speed…): placed by a click
+          const project = this.editor.project;
+          if (project === null) return;
+          this.editor.checkpoint();
+          const raw: RawEvent = { id: newId('r'), beat: this.editor.snapBeat(beat), type: item.row.type, value: item.row.type === 5 ? 1 : 0, floatValue: 1 };
+          project.raw.push(raw);
+          this.editor.selection = new Set([raw.id]);
+          this.editor.changed();
+          return;
+        }
         const from = this.editor.snapBeat(beat);
         this.drag = { kind: 'create', row: item.row, from, to: from, x0: x, moved: false };
         this.needsDraw = true;
@@ -1771,6 +1784,7 @@ export class Timeline {
       if (hit !== null && 'block' in hit) {
         // (a block made by "Rings in steps": its simple window; others: the pose editor)
         if (hit.block.steps !== undefined) ringStepsDialog(this.editor, hit.block.id);
+        else if (hit.block.glitch !== undefined) ringGlitchDialog(this.editor, hit.block.id);
         else this.editor.ringEditorHook?.(hit.block.id);
         return;
       }
@@ -1967,17 +1981,6 @@ export class Timeline {
         if (!drag.moved) {
           if (this.editor.selection.size > 0) this.editor.select([]);
           this.needsDraw = true;
-          return;
-        }
-        if (row.kind === 'raw') {
-          // a marker for the other events: one at the snapped beat where the drag started
-          const project = this.editor.project;
-          if (project === null) return;
-          this.editor.checkpoint();
-          const raw: RawEvent = { id: newId('r'), beat: drag.from, type: row.type, value: row.type === 5 ? 1 : 0, floatValue: 1 };
-          project.raw.push(raw);
-          this.editor.selection = new Set([raw.id]);
-          this.editor.changed();
           return;
         }
         if (row.kind === 'poses') {

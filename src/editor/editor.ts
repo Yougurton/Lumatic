@@ -1367,6 +1367,15 @@ export class Editor {
     this.emit('selection');
   }
 
+  /** Changes these other events (ring turns, zoom, laser speed — the inspector). */
+  updateRaw(ids: readonly string[], patch: (event: RawEvent) => void) {
+    const events = this.project?.raw.filter((event) => ids.includes(event.id)) ?? [];
+    if (events.length === 0) return;
+    this.checkpoint();
+    for (const event of events) patch(event);
+    this.changed();
+  }
+
   /** Changes the selected clips (the inspector). */
   updateSelected(patch: (clip: LightClip) => void) {
     const clips = this.selectedClips();
@@ -1549,6 +1558,18 @@ export class Editor {
     this.restore(trying.state, false);
     project.ringBlocks = [...this.ringBlocks.filter((item) => item.id !== block.id), structuredClone(block)];
     this.selection = new Set([block.id]);
+    this.changed();
+  }
+
+  /** One try of new other events (the lasers window): the events as they were before the tries, and
+   *  these (selected). */
+  tryRaw(events: RawEvent[]) {
+    const project = this.project;
+    const trying = this.trying;
+    if (project === null || trying === null) return;
+    this.restore(trying.state, false);
+    project.raw.push(...events);
+    this.selection = new Set(events.map((event) => event.id));
     this.changed();
   }
 

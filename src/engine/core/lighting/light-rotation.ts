@@ -22,6 +22,7 @@ function createRotationSampler(
   speedMultiplier: number,
   mirrored: boolean,
   random: RotationRandom,
+  leftLasers = false,
 ) {
   let angle = startAngle;
   let speed = 0;
@@ -67,9 +68,8 @@ function createRotationSampler(
         ? random(event, index, 'direction') < 0.5
           ? 1
           : -1
-        : numberSchema.parse(customDirection) === 0
-          ? 1
-          : -1;
+        : // (as Chroma: 0 turns the left lasers one way and the right ones the other, 1 the opposite)
+          (numberSchema.parse(customDirection) === 0 ? 1 : -1) * (leftLasers ? -1 : 1);
     if (mirrored) direction *= -1;
     if (!lockRotation) angle = startAngle + random(event, index, 'angle') * randomAngle;
     speed = value * speedMultiplier * 20 * direction;
@@ -96,8 +96,9 @@ export function createLightRotationSampler(
   songBpm: number,
   speedMultiplier: number,
   random: RotationRandom,
+  leftLasers = false,
 ) {
-  return createRotationSampler(events, songBpm, 0, 180, speedMultiplier, false, random);
+  return createRotationSampler(events, songBpm, 0, 180, speedMultiplier, false, random, leftLasers);
 }
 
 export function createLightPairRotationSampler(
