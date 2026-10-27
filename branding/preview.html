@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Lumatic logos</title>
+<style>
+  body { margin: 0; padding: 28px; background: #0b0c10; color: #c9cdd8; font: 14px Inter, system-ui, sans-serif; }
+  h2 { margin: 0 0 6px; font-size: 15px; color: #fff; }
+  .concept { display: grid; grid-template-columns: 220px 128px 64px 32px 16px 100px 1fr; align-items: center; gap: 22px; padding: 16px 0; border-bottom: 1px solid #23252d; }
+  .concept .note { color: #8a90a0; font-size: 12px; }
+  .light { background: #eef0f5; border-radius: 12px; padding: 10px; }
+  img.h { height: 72px; }
+  .word { padding-top: 22px; }
+</style>
+<body>
+<div id="list"></div>
+<div class="word"><img src="logos/lumatic-wordmark.svg" style="height:90px"></div>
+<script>
+const concepts = [['1-rings', '1. Тоннель колец'], ['2-lasers', '2. Лазеры сцены'], ['3-timeline', '3. L из таймлайна'], ['4-spark', '4. Искра Chroma'], ['5-light-i', '5. i со светом']];
+for (const [slug, name] of concepts) {
+  const base = `logos/lumatic-${slug}`;
+  document.getElementById('list').insertAdjacentHTML('beforeend', `<div class="concept">
+    <div><h2>${name}</h2><div class="note">128 · 64 · 32 · 16 px · одноцветный</div></div>
+    <img src="${base}-icon.svg" width="128"><img src="${base}-icon.svg" width="64"><img src="${base}-icon.svg" width="32"><img src="${base}-icon.svg" width="16">
+    <img src="${base}-icon-mono.svg" width="64" style="background:#16171c;border-radius:14px;padding:8px">
+    <img class="h" src="${base}-horizontal.svg"></div>`);
+}
+</script>

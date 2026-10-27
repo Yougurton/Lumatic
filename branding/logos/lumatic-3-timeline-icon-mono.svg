@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="t d">
+  <title id="t">Lumatic</title>
+  <desc id="d">The letter L made of timeline clips in red and blue, with the song cursor running through it (one colour)</desc>
+  <rect x="26" y="26" width="26" height="14" rx="4" fill="#f4f6fb"/>
+  <rect x="26" y="46" width="26" height="14" rx="4" fill="#f4f6fb"/>
+  <rect x="26" y="66" width="26" height="14" rx="4" fill="#f4f6fb"/>
+  <rect x="26" y="86" width="78" height="14" rx="4" fill="#f4f6fb"/>
+  <g fill="#f4f6fb">
+    <rect x="76" y="24" width="3" height="80" rx="1.5"/>
+    <path d="M70.5 18h14l-7 8z"/>
+  </g>
+</svg>
