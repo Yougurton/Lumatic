@@ -58,6 +58,9 @@ export interface RingPose {
   delay: number;
   /** …from the last ring to the first. */
   reverse: boolean;
+  /** `angle` is a turn from where the first ring was headed before it (+15: 15° further
+   *  counterclockwise), not where it ends up. */
+  relative?: boolean;
 }
 
 export interface RingBlock {
@@ -330,6 +333,31 @@ export function turn(from: number, to: number, way: TurnWay, loops: number) {
   return delta + sign * 360 * Math.max(0, Math.round(loops));
 }
 
+/** A relative pose's turn as asked: by its angle, its whole turns on top the same way. */
+function relativeTurn(pose: RingPose) {
+  const sign = pose.angle < 0 || (pose.angle === 0 && pose.way === 'cw') ? -1 : 1;
+  return pose.angle + sign * 360 * Math.max(0, Math.round(pose.loops));
+}
+
+/**
+ * Where the first ring is headed before `pose` (of `block`), by the poses of the same rings before it
+ * (0 at the start) — for showing where a relative pose puts the rings. (The show's own ring events are
+ * left out; the map's events count them.)
+ */
+export function poseBase(blocks: readonly RingBlock[], block: RingBlock, pose: RingPose) {
+  let current = 0;
+  for (const item of timedPoses(blocks.filter((other) => isTurn(other) && other.system === block.system && other.mode === block.mode))) {
+    if (item.pose.id === pose.id) return current;
+    current = item.pose.relative === true ? current + item.pose.angle : item.pose.angle;
+  }
+  return current;
+}
+
+/** The pose with its first ring's angle where it ends up (`base`: where it was headed before). */
+export function absolutePose(pose: RingPose, base: number): RingPose {
+  return pose.relative === true ? { ...pose, angle: base + pose.angle, relative: false } : pose;
+}
+
 /** The poses of blocks in time order (each with its block), only those inside its block. */
 function timedPoses(blocks: readonly RingBlock[]) {
   return blocks
@@ -381,7 +409,7 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     if (system === undefined) continue;
     const songBeat = toSong(beat);
     const base = ringBase(known, system, songBeat);
-    const rotation = turn(base, pose.angle, pose.way, pose.loops);
+    const rotation = pose.relative === true ? relativeTurn(pose) : turn(base, pose.angle, pose.way, pose.loops);
     const step = pose.shape === 'spiral' ? pose.step : 0;
     const count = system.rings;
     // the wave: rings per 0.02 s tick (the game's fixed step); the turn's time: how fast each ring
@@ -508,19 +536,33 @@ export function ringAnimations(blocks: readonly RingBlock[], systems: readonly R
   const out: RingAnimation[] = [];
   // per ring: its turns in time order, each from where the ring is when it starts
   const lanes = new Map<string, { beat: number; duration: number; from: number; to: number; easing: string }[]>();
-  const steps: { track: string; beat: number; pose: RingPose; target: number }[] = [];
+  // (a relative pose's angles: from where the first ring was headed at the pose's time — worked out
+  // when its first ring's turn comes up, before any of its own turns count)
+  const steps: { track: string; beat: number; pose: RingPose; at: number; first: string; target: number }[] = [];
   for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'tracks'))) {
     const system = systems.find((item) => item.name === block.system);
     if (system === undefined) continue;
     const angles = poseAngles(pose, system.rings, 'tracks');
-    angles.forEach((target, i) => steps.push({ track: ringTrack(system.name, i), beat: beat + ringDelay(pose, i, system.rings), pose, target }));
+    angles.forEach((target, i) => steps.push({ track: ringTrack(system.name, i), beat: beat + ringDelay(pose, i, system.rings), pose, at: beat, first: ringTrack(system.name, 0), target }));
   }
   steps.sort((a, b) => a.beat - b.beat);
+  const bases = new Map<RingPose, number>();
   for (const step of steps) {
     const lane = lanes.get(step.track) ?? [];
     lanes.set(step.track, lane);
     const from = laneValue(lane, step.beat);
-    const to = from + turn(from, step.target, step.pose.way, step.pose.loops);
+    let to: number;
+    if (step.pose.relative === true) {
+      let base = bases.get(step.pose);
+      if (base === undefined) {
+        base = laneTarget(lanes.get(step.first) ?? [], step.at - 1e-6);
+        bases.set(step.pose, base);
+      }
+      // (turned by the pose's angle, its whole turns on top — no shorter way round)
+      const target = base + step.target;
+      const loops = 360 * Math.max(0, Math.round(step.pose.loops));
+      to = target + (step.pose.angle < 0 || (step.pose.angle === 0 && step.pose.way === 'cw') ? -loops : loops);
+    } else to = from + turn(from, step.target, step.pose.way, step.pose.loops);
     const duration = Math.max(0, step.pose.duration);
     lane.push({ beat: step.beat, duration, from, to, easing: step.pose.easing });
     if (duration <= 1e-6) {
@@ -533,6 +575,13 @@ export function ringAnimations(blocks: readonly RingBlock[], systems: readonly R
     out.push({ beat: step.beat, duration, track: step.track, easing: step.pose.easing, localRotation: points });
   }
   return out.sort((a, b) => a.beat - b.beat);
+}
+
+/** Where a ring is headed at `beat`: the end of its latest turn by then. */
+function laneTarget(lane: readonly { beat: number; to: number }[], beat: number) {
+  let current = 0;
+  for (const item of lane) if (item.beat <= beat + 1e-9) current = item.to;
+  return current;
 }
 
 /** Where a ring is at `beat` after the turns before it (its track's latest AnimateTrack wins). */

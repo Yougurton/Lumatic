@@ -9,7 +9,7 @@ import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { groupHue, lightGroupName } from './names';
-import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, ringDelay, type RingBlock } from './rings';
+import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
@@ -892,7 +892,8 @@ export class Timeline {
       ctx.beginPath();
       ctx.arc(px, cy, r, 0, Math.PI * 2);
       ctx.stroke();
-      const angle = (pose.angle * Math.PI) / 180;
+      // (a relative pose: where it puts the first ring)
+      const angle = ((pose.relative === true ? poseBase(this.editor.ringBlocks, block, pose) + pose.angle : pose.angle) * Math.PI) / 180;
       ctx.beginPath();
       ctx.moveTo(px, cy);
       ctx.lineTo(px - Math.sin(angle) * r, cy - Math.cos(angle) * r);

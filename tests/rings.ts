@@ -151,6 +151,49 @@ if (points.length !== 5 || points.at(-1)![2] !== 360) {
   console.log('loop points', JSON.stringify(points));
 }
 
+// relative poses: 90°, then +15 → 105°, then −45 → 60° (ring events, with a show's ring event between
+// them that the turn adds to; ring tracks)
+{
+  const system = systems[0]!;
+  const block: RingBlock = {
+    id: 'r',
+    name: 'relative',
+    system: system.name,
+    mode: 'event',
+    start: 2,
+    end: 22,
+    poses: [newPose(0, { shape: 'same', angle: 90, duration: 0 }), newPose(4, { shape: 'same', angle: 15, duration: 0, relative: true }), newPose(10, { shape: 'spiral', angle: -45, step: 10, duration: 0, relative: true })],
+  };
+  const others = [{ beat: 9, type: 8, value: 0, floatValue: 1, customData: { rotation: 20, step: 0, prop: 50, speed: 50, direction: 0 } }];
+  const made = poseRingEvents([block], others, systems, 8, (beat) => beat, 60 / bpm);
+  const all: BasicEvent[] = [...made, ...others]
+    .sort((a, b) => a.beat - b.beat)
+    .map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, customData: event.customData as BasicEvent['customData'] }));
+  const sampler = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed));
+  const first = (beat: number) => sampler(beat)[0]!;
+  const want: [number, number][] = [[5.9, 90], [8.9, 105], [11.9, 125], [16, 80]];
+  for (const [beat, angle] of want) {
+    checks++;
+    const off = Math.abs((((first(beat) - angle) % 360) + 540) % 360 - 180);
+    if (off > 0.5) {
+      failures++;
+      console.log('relative off', beat, angle, first(beat));
+    }
+  }
+  checks++;
+  if (Math.abs(sampler(16)[3]! - (80 + 30)) > 0.5) {
+    failures++;
+    console.log('relative spiral', sampler(16)[3]);
+  }
+  const lanes = ringAnimations([{ ...block, id: 'rt', mode: 'tracks', system: systems[1]!.name }], systems).filter((animation) => animation.track.endsWith(':0'));
+  const ends = lanes.map((animation) => animation.localRotation.at(-1)![2]);
+  checks++;
+  if (JSON.stringify(ends) !== JSON.stringify([90, 105, 60])) {
+    failures++;
+    console.log('relative tracks', JSON.stringify(ends));
+  }
+}
+
 // zoom poses: the rings stand their pose's spacing apart once its time is over
 const zoomSystem: ZoomSystemInfo = {
   name: 'SmallTrackLaneRings',

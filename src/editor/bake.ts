@@ -133,6 +133,7 @@ function stateAt(frames: readonly Keyframe[], beat: number, secondsPerBeat: numb
       fromRgb[2] + (next.rgb[2] - fromRgb[2]) * t,
     ];
     const brightness = fromBrightness + (next.brightness - fromBrightness) * t;
+    if (brightness <= 0.001) return null;
     if (t <= 0 && current.kind !== 'off' && current.color !== null) return { color: current.color, rgb: current.rgb, brightness: current.brightness, resting: current };
     return { color: { ref: 'custom', rgb, brightness }, rgb, brightness, resting: null };
   }
@@ -144,6 +145,9 @@ function stateAt(frames: readonly Keyframe[], beat: number, secondsPerBeat: numb
     if (brightness <= 0.001) return null;
     return { color: { ...current.color, brightness }, rgb: current.rgb, brightness, resting: null };
   }
+  // (faded out to nothing: dark, as if off — a clip over it fades out in its own colour, not into
+  // the colour of a light that isn't shining)
+  if (current.brightness <= 0.001) return null;
   return { color: current.color, rgb: current.rgb, brightness: current.brightness, resting: current.kind === 'on' ? current : null };
 }
 

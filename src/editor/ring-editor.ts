@@ -2,7 +2,7 @@ import type { Editor } from './editor';
 import { button, check, scrubStrip, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { ringSystemName } from './library';
 import { newId } from './model';
-import { dataFirstRing, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { absolutePose, dataFirstRing, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -265,7 +265,7 @@ export class RingEditor {
       row.className = `gls-box${pose.id === this.poseId ? ' active' : ''}`;
       const label = document.createElement('div');
       label.className = 'gls-box-name';
-      label.textContent = isZoom(block) ? `${String(index + 1)}. Расстояние ${String(round(pose.step))}` : `${String(index + 1)}. ${SHAPES.find(([shape]) => shape === shapeOf(pose, block))?.[1] ?? ''} · ${String(round(pose.angle))}°${pose.shape === 'spiral' ? ` +${String(round(pose.step))}°` : ''}`;
+      label.textContent = isZoom(block) ? `${String(index + 1)}. Расстояние ${String(round(pose.step))}` : `${String(index + 1)}. ${SHAPES.find(([shape]) => shape === shapeOf(pose, block))?.[1] ?? ''} · ${pose.relative === true && pose.shape !== 'manual' ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round(pose.angle)))}° от прошлой` : `${String(round(pose.angle))}°`}${pose.shape === 'spiral' ? ` +${String(round(pose.step))}°` : ''}`;
       const info = document.createElement('div');
       info.className = 'gls-dim';
       info.textContent = isZoom(block) ? `доля ${String(round(pose.beat))} · переход ${String(round(pose.duration))}` : `доля ${String(round(pose.beat))} · поворот ${String(round(pose.duration))}${pose.delay > 0 ? ` · волна ${String(round(pose.delay))}` : ''}`;
@@ -349,17 +349,42 @@ export class RingEditor {
     col.append(labeled('Доля (от начала блока)', numberInput(pose.beat, this.editor.snap || 0.25, (value) => this.changePose((item) => (item.beat = Math.max(0, value))))));
     const shapes = SHAPES.filter(([shape]) => !events || EVENT_SHAPES.has(shape));
     col.append(toggle(shapes, shapeOf(pose, block), (value) => this.changePose((item) => {
-      if (value === 'manual' && item.shape !== 'manual') item.manual = poseAngles(item, this.system(block)?.rings ?? 1, block.mode).map(round);
+      if (value === 'manual' && item.shape !== 'manual') {
+        // (by hand: each ring's own angle, where it ends up)
+        item.manual = poseAngles(absolutePose(item, poseBase(this.editor.ringBlocks, block, item)), this.system(block)?.rings ?? 1, block.mode).map(round);
+        delete item.relative;
+      }
       item.shape = value;
     })));
     if (events && !EVENT_SHAPES.has(pose.shape)) col.append(note('События колец ставят кольца только спиралью — эта форма будет показана как спираль. Для любой формы включите «Каждое кольцо отдельно».'));
     const shape = shapeOf(pose, block);
     if (shape !== 'manual') {
-      col.append(labeled(shape === 'wave' ? 'Средний угол, °' : 'Угол первого кольца, °', numberInput(pose.angle, 1, (value) => this.changePose((item) => (item.angle = value)))));
+      const relative = pose.relative === true;
+      // (switching keeps where the rings end up: the angle becomes the turn there, or the other way)
+      col.append(
+        check('От прошлой позы (+ / −)', relative, (on) => {
+          const base = poseBase(this.editor.ringBlocks, block, pose);
+          this.changePose((item) => {
+            item.angle = round(on ? item.angle - base : base + item.angle);
+            if (on) item.relative = true;
+            else delete item.relative;
+          });
+        }),
+      );
+      const label = relative ? (shape === 'wave' ? 'Средний угол: повернуть на, °' : 'Повернуть первое кольцо на, °') : shape === 'wave' ? 'Средний угол, °' : 'Угол первого кольца, °';
+      col.append(labeled(label, numberInput(pose.angle, 1, (value) => this.changePose((item) => (item.angle = value)))));
       const quick = document.createElement('div');
       quick.className = 'gls-swatches';
-      for (const angle of [-90, -45, 0, 45, 90, 180]) quick.append(button(`${String(angle)}°`, `Угол ${String(angle)}°`, () => this.changePose((item) => (item.angle = angle))));
+      const angles = relative ? [-90, -45, -15, 15, 45, 90] : [-90, -45, 0, 45, 90, 180];
+      for (const angle of angles) {
+        const text = relative && angle > 0 ? `+${String(angle)}°` : `${String(angle)}°`;
+        quick.append(button(text, relative ? `Повернуть на ${text}` : `Угол ${text}`, () => this.changePose((item) => (item.angle = angle))));
+      }
       col.append(quick);
+      if (relative) {
+        const base = poseBase(this.editor.ringBlocks, block, pose);
+        col.append(note(`До неё первое кольцо стоит на ${String(round(base))}°, после — на ${String(round(base + pose.angle))}°.${events ? ' В игре поворот прибавляется к тому, где кольца остались, — и после обычных событий вращения тоже.' : ''}`));
+      }
     }
     if (shape === 'spiral') col.append(labeled('Шаг от кольца к кольцу, °', numberInput(pose.step, 1, (value) => this.changePose((item) => (item.step = value)))));
     if (shape === 'wave' || shape === 'alternate' || shape === 'random') col.append(labeled(shape === 'alternate' ? 'Каждое второе повёрнуто на, °' : 'Размах, °', numberInput(pose.step, 1, (value) => this.changePose((item) => (item.step = value)))));
@@ -577,13 +602,14 @@ export class RingEditor {
       ctx.beginPath();
       ctx.arc(x, cy, 10, 0, Math.PI * 2);
       ctx.stroke();
-      const angle = (pose.angle * Math.PI) / 180;
+      const relative = pose.relative === true && pose.shape !== 'manual';
+      const angle = ((relative ? poseBase(this.editor.ringBlocks, block, pose) + pose.angle : pose.angle) * Math.PI) / 180;
       ctx.beginPath();
       ctx.moveTo(x, cy);
       ctx.lineTo(x - Math.sin(angle) * 10, cy - Math.cos(angle) * 10);
       ctx.stroke();
       ctx.fillStyle = '#c9cdd8';
-      ctx.fillText(`${String(round(pose.angle))}°`, x + 13, cy + 20);
+      ctx.fillText(relative ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round(pose.angle)))}°` : `${String(round(pose.angle))}°`, x + 13, cy + 20);
     }
     this.laneCanvas = { canvas, image: ctx.getImageData(0, 0, canvas.width, canvas.height), block };
   }
@@ -660,7 +686,7 @@ export class RingEditor {
 
   /** The angles the picked pose gives the rings (as they will stand), or the bars being dragged. */
   private angles(block: RingBlock, pose: RingPose, system: RingSystemInfo) {
-    return this.barDrag?.angles ?? poseAngles(pose, system.rings, block.mode);
+    return this.barDrag?.angles ?? poseAngles(absolutePose(pose, poseBase(this.editor.ringBlocks, block, pose)), system.rings, block.mode);
   }
 
   private drawSketch(canvas: HTMLCanvasElement, block: RingBlock, pose: RingPose, system: RingSystemInfo) {
@@ -777,13 +803,14 @@ export class RingEditor {
       this.changePose((item) => {
         item.shape = 'manual';
         item.manual = angles;
+        delete item.relative;
       });
     };
     canvas.addEventListener('mousedown', (event) => {
       const pose = this.pose();
       if (pose === undefined) return;
       // (starting from what the pose has now: its own shape's angles, not where the rings ended up)
-      this.barDrag = { angles: poseAngles(pose, system.rings, 'tracks'), last: null };
+      this.barDrag = { angles: poseAngles(absolutePose(pose, poseBase(this.editor.ringBlocks, this.block() ?? block, pose)), system.rings, 'tracks'), last: null };
       paint(event);
       window.addEventListener('mousemove', paint);
       window.addEventListener('mouseup', up, { once: true });
