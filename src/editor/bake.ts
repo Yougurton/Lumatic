@@ -204,7 +204,24 @@ function bakeLight(clips: readonly BakeClip[], scheme: SchemeColors, secondsPerB
     });
     base = sortFrames([...kept, ...added]);
   }
-  return base;
+  return withoutRepeats(base);
+}
+
+/** Without an "on" that only says again what the transition just arrived at (chained gradients:
+ *  one clip's end is the next one's start) — the next transition starts from there all the same. */
+function withoutRepeats(frames: Keyframe[]): Keyframe[] {
+  return frames.filter((frame, index) => {
+    const before = frames[index - 1];
+    return !(
+      frame.kind === 'on' &&
+      before !== undefined &&
+      before.kind === 'trans' &&
+      Math.abs(before.beat - frame.beat) < 1e-6 &&
+      Math.abs(before.brightness - frame.brightness) < 1e-6 &&
+      before.rgb.every((value, channel) => Math.abs(value - frame.rgb[channel]!) < 1e-6) &&
+      (before.color?.ref ?? '') === (frame.color?.ref ?? '')
+    );
+  });
 }
 
 function valueOf(kind: Kind, color: ClipColor | null): number {

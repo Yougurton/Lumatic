@@ -1,5 +1,6 @@
 import { environmentCatalog, isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
 import { choiceLabel, environmentGallery, type EnvironmentChoice } from './environment-gallery';
+import { readTags } from './song-tags';
 import { decodeAudio, encodeOgg, findBpm, findDownbeat, playWithClicks } from './audio-tools';
 import type { BpmResult } from './bpm-detect';
 import { createMapFolder, type MapFolder } from './platform';
@@ -225,7 +226,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
         <label>Сложность<select data-id="diff"></select></label>
         <label>Подпись сложности<input type="text" data-id="label" value="Lightshow"></label>
         <label>Обложка
-          <span class="nm-row"><button type="button" data-id="cover-pick">Картинка…</button><span data-id="cover" class="nm-dim">нарисую сам</span></span>
+          <span class="nm-row"><img class="nm-cover" data-id="cover-image" alt="" hidden><button type="button" data-id="cover-pick">Картинка…</button><span data-id="cover" class="nm-dim">нарисую сам</span></span>
         </label>
       </div>
       <div class="nm-status" data-id="status"></div>
@@ -290,6 +291,20 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     let audio: AudioBuffer | null = null;
     let detected: BpmResult | null = null;
     let cover: File | null = null;
+    /** The cover came from the song's tags (another song's replaces it). */
+    let coverFromSong = false;
+    /** What the last song filled in (another song replaces it, what was typed stays). */
+    let named = { title: '', artist: '' };
+    let coverUrl = '';
+    /** The cover chosen (a small picture of it) and where it comes from. */
+    const showCover = (label: string) => {
+      if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
+      coverUrl = cover === null ? '' : URL.createObjectURL(cover);
+      const image = el<HTMLImageElement>('cover-image');
+      image.hidden = cover === null;
+      image.src = coverUrl;
+      el('cover').textContent = label;
+    };
     let stopListening: (() => void) | null = null;
     let busy = false;
     const status = el('status');
@@ -408,14 +423,24 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
         refresh();
         status.textContent = `Читаю ${file.name}…`;
         try {
-          audio = await decodeAudio(await file.arrayBuffer());
+          const data = await file.arrayBuffer();
+          audio = await decodeAudio(data);
           const minutes = Math.floor(audio.duration / 60);
           el('song').textContent = `${file.name} · ${String(minutes)}:${String(Math.floor(audio.duration % 60)).padStart(2, '0')}`;
-          // the title (and the artist) from the file name: "Artist - Title"
+          // the title, the artist and the cover from the file's tags; else from its name: "Artist - Title"
+          const tags = readTags(data);
           const base = file.name.replace(/\.[^.]+$/u, '');
           const parts = base.split(/\s+[-–—]\s+/u);
-          if (el<HTMLInputElement>('title').value === '') el<HTMLInputElement>('title').value = (parts.length > 1 ? parts.slice(1).join(' - ') : base).trim();
-          if (el<HTMLInputElement>('artist').value === '' && parts.length > 1) el<HTMLInputElement>('artist').value = parts[0]!.trim();
+          const title = tags.title ?? (parts.length > 1 ? parts.slice(1).join(' - ') : base).trim();
+          const artist = tags.artist ?? (parts.length > 1 ? parts[0]!.trim() : '');
+          if (el<HTMLInputElement>('title').value === '' || el<HTMLInputElement>('title').value === named.title) el<HTMLInputElement>('title').value = title;
+          if (el<HTMLInputElement>('artist').value === '' || el<HTMLInputElement>('artist').value === named.artist) el<HTMLInputElement>('artist').value = artist;
+          named = { title, artist };
+          if (tags.picture !== undefined && (cover === null || coverFromSong)) {
+            cover = new File([new Uint8Array(tags.picture.data)], 'cover', { type: tags.picture.type });
+            coverFromSong = true;
+            showCover('из тегов песни');
+          }
           status.textContent = '';
           busy = false;
           // the preview: picked on the song (a third of the way in, to start with)
@@ -452,11 +477,13 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
       input.accept = 'image/*';
       input.addEventListener('change', () => {
         cover = input.files?.[0] ?? null;
-        el('cover').textContent = cover?.name ?? 'нарисую сам';
+        coverFromSong = false;
+        showCover(cover?.name ?? 'нарисую сам');
       });
       input.click();
     });
     const finish = (result: { folder: MapFolder; preset?: string } | null) => {
+      if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
       stopListening?.();
       picker?.stop();
       shade.remove();

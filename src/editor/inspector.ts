@@ -1,6 +1,6 @@
 import type { Editor } from './editor';
 import { otherEventName } from './names';
-import { KIND_NAMES, type Direction, type Effect, type EffectParams, type StrobePattern } from './effects';
+import { KIND_NAMES, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
 import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type Rgb, type StartMode } from './model';
 
 /**
@@ -191,7 +191,7 @@ export class Inspector {
     }
     // the colour(s)
     root.append(this.section('Цвет', this.colorPicker(p.color, (color) => change((params) => (params.color = color)))));
-    const secondLabel = effect.kind === 'strobe' ? ' Чередовать со вторым цветом' : effect.kind === 'twinkle' ? ' Случайные цвета до второго' : ' Градиент по элементам';
+    const secondLabel = effect.kind === 'strobe' ? ' Чередовать со вторым цветом' : effect.kind === 'twinkle' ? ' Случайные цвета до второго' : effect.kind === 'fire' ? ' Пламя колеблется до второго цвета' : ' Градиент по элементам';
     const second = this.check(secondLabel, p.color2 !== null, (on) => change((params) => (params.color2 = on ? { ...params.color, ref: params.color.ref === 'left' ? 'right' : 'left', rgb: undefined } : null)));
     root.append(second);
     if (p.color2 !== null) {
@@ -234,6 +234,32 @@ export class Inspector {
         ['sequence', 'По очереди', 'Бегущий огонь'],
       ];
       root.append(this.section('Рисунок', this.buttons(patterns, p.pattern, (value) => change((params) => (params.pattern = value)))));
+    }
+    if (effect.kind === 'fire') {
+      const shapes: [FireShape, string, string][] = [
+        ['rise', 'Разгорается', 'Медленно нарастает'],
+        ['steady', 'Горит', 'Ровно, только дрожит'],
+        ['fall', 'Догорает', 'Медленно затухает'],
+      ];
+      root.append(this.section('Огонёк', this.buttons(shapes, p.shape ?? 'steady', (value) => change((params) => (params.shape = value)))));
+      if ((p.shape ?? 'steady') !== 'steady') root.append(this.slider(p.shape === 'rise' ? 'С какой яркости' : 'До какой яркости', p.floor ?? 0.15, 0, 1, 0.05, (value) => change((params) => (params.floor = value))));
+      root.append(this.slider('Дрожание', p.tremor ?? 0.3, 0, 1, 0.05, (value) => change((params) => (params.tremor = value))));
+      const steps: [string, string, string][] = [
+        ['0.5', '1/2', 'Меняется раз в полдоли'],
+        ['0.25', '1/4', 'Четыре раза в долю'],
+        ['0.125', '1/8', 'Восемь раз в долю'],
+        ['0.0625', '1/16', 'Шестнадцать раз в долю'],
+      ];
+      root.append(this.section('Как часто дрожит', this.buttons(steps, String(p.rate), (value) => change((params) => (params.rate = Number(value))))));
+      const together: [string, string, string][] = [
+        ['each', 'Каждая сама', 'У каждой лампы (элемента) своё дрожание'],
+        ['all', 'Все вместе', 'Все дрожат одинаково'],
+      ];
+      root.append(this.section('Лампы', this.buttons(together, p.pattern === 'all' ? 'all' : 'each', (value) => change((params) => (params.pattern = value === 'all' ? 'all' : 'alternate')))));
+      const reroll = document.createElement('button');
+      reroll.textContent = '🎲 Другое дрожание';
+      reroll.addEventListener('click', () => change((params) => (params.seed = Math.floor(Math.random() * 1e6))));
+      root.append(reroll);
     }
     if (effect.kind === 'twinkle') {
       root.append(this.slider('Доля ламп за раз', p.density, 0.05, 1, 0.05, (value) => change((params) => (params.density = value))));

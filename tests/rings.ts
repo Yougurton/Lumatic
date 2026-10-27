@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
 import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
-import { dataFirstRing, firstRingFromLog, newPose, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
+import { dataFirstRing, firstRingFromLog, newPose, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
 /**
@@ -103,6 +103,27 @@ for (let round = 0; round < 40; round++) {
       }
     }
   }
+}
+
+// a turn in steps: each step's form reached (ring events, no other ring events in between)
+{
+  const system = systems[0]!;
+  const block: RingBlock = { id: 's', name: 'steps', system: system.name, mode: 'event', start: 2, end: 20, poses: stepPoses({ fromAngle: 0, toAngle: 90, fromStep: 0, toStep: 20, steps: 4, every: 2, turn: 0.5 }) };
+  const made = poseRingEvents([block], [], systems, 8, (beat) => beat, 60 / bpm);
+  const all: BasicEvent[] = made.map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, customData: event.customData as BasicEvent['customData'] }));
+  const sampler = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed));
+  block.poses.forEach((pose, k) => {
+    const angles = sampler(block.start + pose.beat + 1.9);
+    for (const i of [0, 5]) {
+      const want = 22.5 * k + i * 5 * k;
+      const off = Math.abs((((angles[i]! - want) % 360) + 540) % 360 - 180);
+      checks++;
+      if (off > 0.5) {
+        failures++;
+        console.log('steps off', k, i, want, angles[i]);
+      }
+    }
+  });
 }
 
 // ring tracks: each turn starts where the ring is, also when a turn cuts the one before it short

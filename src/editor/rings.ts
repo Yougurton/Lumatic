@@ -136,6 +136,49 @@ export function newRingBlock(system: string, mode: RingBlock['mode'], start: num
   };
 }
 
+/** A turn from one form to another in even steps: the rings stand still between them. */
+export interface StepTransition {
+  /** The first ring's angle at the start and at the end. */
+  fromAngle: number;
+  toAngle: number;
+  /** The spiral (degrees from ring to ring) at the start and at the end. */
+  fromStep: number;
+  toStep: number;
+  /** How many steps from the first form to the last. */
+  steps: number;
+  /** Beats from one step to the next. */
+  every: number;
+  /** Beats each step's turn takes (the speed). */
+  turn: number;
+}
+
+export const DEFAULT_STEPS: StepTransition = { fromAngle: 0, toAngle: 90, fromStep: 0, toStep: 15, steps: 4, every: 1, turn: 0.5 };
+
+/** The poses of a step transition (the first: its start form). */
+export function stepPoses(transition: StepTransition): RingPose[] {
+  const steps = Math.max(1, Math.round(transition.steps));
+  const every = Math.max(1 / 16, transition.every);
+  const turn = Math.max(0, Math.min(transition.turn, every));
+  return Array.from({ length: steps + 1 }, (_, k) => {
+    const t = k / steps;
+    const step = transition.fromStep + (transition.toStep - transition.fromStep) * t;
+    return newPose(round(k * every), {
+      shape: Math.abs(step) < 1e-6 ? 'same' : 'spiral',
+      angle: round(transition.fromAngle + (transition.toAngle - transition.fromAngle) * t),
+      step: round(step),
+      duration: turn,
+      easing: 'easeInOutQuad',
+    });
+  });
+}
+
+/** A block of a step transition (as long as its steps). */
+export function newStepsBlock(system: string, mode: RingBlock['mode'], start: number, transition: StepTransition = DEFAULT_STEPS): RingBlock {
+  const poses = stepPoses(transition);
+  const length = Math.max(1, poses.at(-1)!.beat + poses.at(-1)!.duration);
+  return { id: newId('k'), name: 'Кольца по шагам', system, mode, start, end: start + length, poses };
+}
+
 export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {
   const length = Math.max(1, end - start);
   const initial = round(system?.initialStep ?? 2);

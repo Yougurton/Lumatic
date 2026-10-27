@@ -1,5 +1,7 @@
 import { decodeAudio, encodeOgg, findBpm, findDownbeat, playWithClicks } from './audio-tools';
 import type { BpmResult } from './bpm-detect';
+import { convertMapFolder } from './convert-dialog';
+import { mapVersion } from './convert';
 import type { Editor } from './editor';
 import { difficultyFile, loadProject, projectFileName, transformDifficultyBeats, transformProjectBeats } from './map-io';
 import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
@@ -182,6 +184,9 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
           <span class="nm-row"><input type="number" data-id="preview-length" step="any" min="1"><button type="button" data-id="from-range" title="Начало и длина превью — по участку, выделенному на таймлайне (Shift + протянуть по линейке или спектрограмме)">Из выделения</button></span>
         </label>
         <div class="nm-wide" data-id="picker"></div>
+        <label class="nm-wide">Формат карты
+          <span class="nm-row"><span data-id="format" class="nm-dim"></span><button type="button" data-id="convert"></button></span>
+        </label>
       </div>
       <div class="nm-status" data-id="status"></div>
       <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="apply">Применить</button></div>`;
@@ -387,6 +392,25 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     };
     el('cancel').addEventListener('click', () => {
       if (!busy) finish();
+    });
+    // the format: the map as a copy in the other one
+    const version = mapVersion(infoText);
+    el('format').textContent = version === '4' ? 'v4 (Info 4, свет в отдельных файлах)' : 'v3 (Info 2.1)';
+    el('convert').textContent = version === '4' ? 'Сделать копию в v3…' : 'Сделать копию в v4…';
+    el('convert').addEventListener('click', () => {
+      if (busy) return;
+      busy = true;
+      void convertMapFolder(editor, (text) => (status.textContent = text))
+        .then((made) => {
+          busy = false;
+          if (made) finish();
+          else status.textContent = '';
+        })
+        .catch((error: unknown) => {
+          console.error(error);
+          status.textContent = `Не получилось: ${error instanceof Error ? error.message : String(error)}`;
+          busy = false;
+        });
     });
     box.addEventListener('submit', (event) => {
       event.preventDefault();

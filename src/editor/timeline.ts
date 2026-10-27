@@ -1,3 +1,5 @@
+import { adjustDialog, selectByDialog } from './adjust-dialog';
+import { soundDialog } from './sound-dialog';
 import { resolveRgb } from './bake';
 import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
@@ -1010,6 +1012,9 @@ export class Timeline {
       } },
       { label: 'Зеркально во времени', hint: 'начало ↔ конец', disabled: clips + editor.selectedRaw().length === 0, action: () => editor.mirrorInTime() },
       null,
+      { label: 'Изменить свет…', hint: 'яркость, оттенок, градиент', disabled: clips === 0, action: () => adjustDialog(editor) },
+      { label: 'Выделить по условиям…', action: () => selectByDialog(editor) },
+      null,
       { label: 'Копировать', hint: 'Ctrl+C', action: () => editor.copy() },
       { label: 'Дублировать', hint: 'Ctrl+D', action: () => editor.duplicateSelection() },
       { label: `Удалить (${String(count)})`, hint: 'Delete', action: () => editor.deleteSelection() },
@@ -1029,6 +1034,8 @@ export class Timeline {
       { label: 'Сделать превью песни', hint: 'Info.dat — сразу', action: () => void editor.previewFromRange() },
       { label: 'Проиграть по кругу', hint: 'Esc — стоп', action: () => editor.startTrial({ clips: [], raw: [], start: start + 0.5, end: end - 1 }) },
       { label: 'Снять выделение', hint: 'Esc', action: () => editor.setSongRange(null) },
+      { label: 'Выделить события в нём…', hint: 'по строкам, цвету', action: () => selectByDialog(editor) },
+      { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor) },
       null,
       { label: 'Настройки спектрограммы…', action: () => this.openSpectroPanel(x, y - 200) },
     ]);
@@ -1311,6 +1318,8 @@ export class Timeline {
             ? [null, { label: 'Группа по кольцам', hint: 'одно событие — одно кольцо', action: () => editor.ringPreset(row.type, 'rings') }, { label: 'Группа по линиям', hint: 'одно событие — одна линия', action: () => editor.ringPreset(row.type, 'lines') }]
             : []),
           null,
+          { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor, row) },
+          null,
           { label: 'Удалить строку', hint: 'вернуть — в «Шаблонах»', action: () => {
             if (window.confirm(`Убрать строку «${row.label}» с таймлайна? Её события останутся в карте (видны в группах с её лампами); вернуть строку можно в меню «Шаблоны» → «Скрытые строки».`)) editor.removeType(row.type);
           } },
@@ -1483,6 +1492,7 @@ export class Timeline {
       { label: 'Войти в группу', action: () => editor.enterGroup(group.id), disabled: editor.focus === group.id },
       { label: 'Переименовать…', action: () => void ask('Новое название', group.name).then((name) => name !== null && editor.renameGroup(group.id, name)) },
       { label: 'Выбрать её лампы', action: () => editor.selectLights(groupLights(group).map((light) => lightKey(light.type, light.id)), 'replace', group.id) },
+      { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor, row) },
       null,
       { label: 'Сортировать', heading: true },
       ...SORTS.map(([key, label]) => ({ label, action: () => editor.sortGroup(group.id, key) })),

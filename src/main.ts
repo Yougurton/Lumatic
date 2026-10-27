@@ -6,6 +6,7 @@ import { GlsEditor } from './editor/gls-editor';
 import { RingEditor } from './editor/ring-editor';
 import { Library } from './editor/library';
 import { mapSettingsDialog } from './editor/map-settings';
+import { colorsDialog } from './editor/colors-dialog';
 import { environmentDialog } from './editor/environment-dialog';
 import { newMapDialog } from './editor/new-map';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
@@ -45,6 +46,7 @@ function refreshToolbar() {
   saveButton.disabled = editor.project === null;
   byId<HTMLButtonElement>('settings').disabled = editor.project === null;
   byId<HTMLButtonElement>('environment').disabled = editor.project === null;
+  byId<HTMLButtonElement>('map-colors').disabled = editor.project === null;
   const rows = editor.difficulties();
   difficultySelect.disabled = rows.length === 0;
   const key = rows.map((row) => row.key).join('|');
@@ -133,6 +135,7 @@ difficultySelect.addEventListener('change', () => {
 saveButton.addEventListener('click', () => void save());
 byId('settings').addEventListener('click', () => void mapSettingsDialog(editor));
 byId('environment').addEventListener('click', () => void environmentDialog(editor));
+byId('map-colors').addEventListener('click', () => void colorsDialog(editor));
 byId('undo').addEventListener('click', () => editor.undo());
 byId('redo').addEventListener('click', () => editor.redo());
 playButton.addEventListener('click', () => editor.togglePlay());

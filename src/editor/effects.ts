@@ -14,7 +14,9 @@ import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, t
  * lines — or its lights); on an event type's row, that type's lights by ID.
  */
 
-export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'gls';
+export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'fire' | 'gls';
+/** fire: how its light goes over its time — coming up, dying down, or just burning. */
+export type FireShape = 'rise' | 'fall' | 'steady';
 export type Direction = 'forward' | 'backward' | 'outward' | 'inward' | 'pingpong';
 export type StrobePattern = 'all' | 'alternate' | 'sequence';
 
@@ -40,6 +42,13 @@ export interface EffectParams {
   /** twinkle: the share of items lit each time. */
   density: number;
   seed: number;
+  /** fire: coming up, dying down or burning on (older effects: none). */
+  shape?: FireShape;
+  /** fire: how low it goes (its share of the brightness: where it starts coming up from, dies down
+   *  to). */
+  floor?: number;
+  /** fire: how much it trembles (a share of the brightness it has at the time). */
+  tremor?: number;
 }
 
 export interface Effect {
@@ -77,6 +86,7 @@ export const KIND_NAMES: Record<EffectKind, string> = {
   strobe: 'Стробоскоп',
   gradient: 'Градиент',
   twinkle: 'Мерцание',
+  fire: 'Огонёк',
   gls: 'GLS-группа',
 };
 
@@ -96,6 +106,9 @@ export function defaultParams(color: ClipColor): EffectParams {
     pattern: 'all',
     density: 0.3,
     seed: 1,
+    shape: 'steady',
+    floor: 0.15,
+    tremor: 0.3,
   };
 }
 
@@ -279,6 +292,8 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
         });
       }
     }
+  } else if (effect.kind === 'fire') {
+    out.push(...fire(effect, items, scheme, (start, end, color, slot) => base(start, end, color, slot), onItem));
   } else {
     // twinkle
     const rate = Math.max(1 / 32, p.rate);
@@ -295,6 +310,59 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
       }
     }
   }
+  return out;
+}
+
+/**
+ * A flame: the light comes up, dies down or burns on — slowly — and trembles on its way: every step
+ * (about `rate` beats, never quite the same) it goes a little dimmer, now and then a little brighter,
+ * never far from where the slow change has it. Each item burns on its own (pattern 'all': all of
+ * them as one); a second colour: the flame wavers between the two.
+ */
+function fire(
+  effect: Effect,
+  items: readonly EffectItem[],
+  scheme: SchemeColors,
+  make: (start: number, end: number, color: ClipColor, slot: number) => LightClip,
+  onItem: (clip: LightClip, item: EffectItem | null) => LightClip,
+): LightClip[] {
+  const p = effect.params;
+  const shape = p.shape ?? 'steady';
+  const floor = Math.min(1, Math.max(0, p.floor ?? 0.15));
+  const tremor = Math.min(1, Math.max(0, p.tremor ?? 0.3));
+  const rate = Math.max(1 / 32, p.rate);
+  const duration = Math.max(1 / 64, effect.end - effect.start);
+  const level = (u: number) => (shape === 'rise' ? floor + (1 - floor) * u : shape === 'fall' ? 1 - (1 - floor) * u : 1);
+  const out: LightClip[] = [];
+  const burn = (item: EffectItem | null, slot: number) => {
+    const next = random(p.seed * 7919 + slot * 104729 + 1);
+    // the moments it changes at: about `rate` apart
+    const times = [effect.start];
+    // (on a 1/64 grid: uneven, but on the map's beats)
+    while (times.at(-1)! < effect.end - 1e-6) times.push(Math.min(effect.end, Math.round((times.at(-1)! + rate * (0.6 + next() * 0.8)) * 64) / 64));
+    if (times.length > 2 && times.at(-1)! - times.at(-2)! < rate * 0.3) times.splice(times.length - 2, 1);
+    const points = times.map((time, index) => {
+      const u = (time - effect.start) / duration;
+      const at = level(u);
+      // (mostly a little dimmer, a flare now and then; the very ends as the slow change has them)
+      const shake = index === 0 || index === times.length - 1 ? 0 : next() < 0.22 ? next() * 0.45 : -next();
+      const brightness = Math.round(Math.max(0, p.color.brightness * at * (1 + tremor * shake)) * 1000) / 1000;
+      const color = mixColor(p.color, p.color2, p.color2 === null ? 0 : next(), p.hsv, scheme);
+      return { time, color: { ...color, brightness } };
+    });
+    for (let k = 0; k + 1 < points.length; k++) {
+      const from = points[k]!;
+      const to = points[k + 1]!;
+      const clip = make(from.time, to.time, from.color, slot);
+      clip.startMode = k === 0 ? (p.startMode === 'fade' ? 'on' : p.startMode) : 'on';
+      clip.endColor = to.color;
+      // (one step hands over to the next; the last one ends as the effect does)
+      clip.endMode = k + 2 < points.length ? 'stay' : p.endMode;
+      out.push(onItem(clip, item));
+    }
+  };
+  if (p.pattern === 'all' || items.length === 0) burn(null, -1);
+  else items.forEach((item, index) => burn(item, index));
   return out;
 }
 
@@ -328,5 +396,7 @@ export function sketchLevel(clips: readonly LightClip[], slot: number, t: number
     if (clip.endMode === 'fade') level *= 1 - into / Math.max(0.01, length);
   }
   if (clip.startMode === 'fade' && into > length && clip.endMode !== 'stay') level = 0;
-  return { level: level * clip.color.brightness, color: clip.color };
+  // (a gradient: its brightness on its way to the end's)
+  const brightness = clip.endColor === null ? clip.color.brightness : clip.color.brightness + (clip.endColor.brightness - clip.color.brightness) * Math.min(1, Math.max(0, into / Math.max(0.01, length)));
+  return { level: level * brightness, color: clip.color };
 }

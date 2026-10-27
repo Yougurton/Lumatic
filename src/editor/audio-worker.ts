@@ -1,22 +1,25 @@
 import { createOggEncoder } from 'wasm-media-encoders';
 
 import { detectBpm, detectDownbeat } from './bpm-detect';
+import { bandFlux } from './onsets';
 
 /**
- * Off the page's thread: the tempo of a song, and the song as Ogg Vorbis (what Beat Saber plays),
- * with silence put in front of it.
+ * Off the page's thread: the tempo of a song, where its drums hit, and the song as Ogg Vorbis
+ * (what Beat Saber plays) with silence put in front of it.
  */
 
 export type AudioRequest =
   | { kind: 'bpm'; channels: Float32Array[]; sampleRate: number }
   | { kind: 'downbeat'; channels: Float32Array[]; sampleRate: number; bpm: number; firstBeat: number; beatsPerBar: number }
-  | { kind: 'ogg'; channels: Float32Array[]; sampleRate: number; silence: number; quality: number };
+  | { kind: 'ogg'; channels: Float32Array[]; sampleRate: number; silence: number; quality: number }
+  | { kind: 'bands'; channels: Float32Array[]; sampleRate: number; bands: [number, number][] };
 
 export type AudioReply =
   | { kind: 'bpm'; result: ReturnType<typeof detectBpm> }
   | { kind: 'downbeat'; result: ReturnType<typeof detectDownbeat> }
   | { kind: 'progress'; done: number }
   | { kind: 'ogg'; data: Uint8Array }
+  | { kind: 'bands'; result: ReturnType<typeof bandFlux> }
   | { kind: 'error'; message: string };
 
 const post = (reply: AudioReply, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(reply, transfer);
@@ -30,6 +33,11 @@ self.onmessage = async (event: MessageEvent<AudioRequest>) => {
     }
     if (request.kind === 'downbeat') {
       post({ kind: 'downbeat', result: detectDownbeat(request.channels, request.sampleRate, request.bpm, request.firstBeat, request.beatsPerBar) });
+      return;
+    }
+    if (request.kind === 'bands') {
+      const result = bandFlux(request.channels, request.sampleRate, request.bands);
+      post({ kind: 'bands', result }, result.flux.map((values) => values.buffer));
       return;
     }
     const encoder = await createOggEncoder();

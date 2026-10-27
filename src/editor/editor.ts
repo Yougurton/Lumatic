@@ -36,6 +36,11 @@ import {
 import { clipRank, resolveRgb } from './bake';
 import { buildEffect, childrenSignature, defaultParams, effectItems, KIND_NAMES, type Effect, type EffectExtras, type EffectKind, type EffectParams } from './effects';
 import { defaultGls } from './gls';
+import { adjustClips, type Adjustment } from './adjust';
+import { writeMapColors, type MapColors } from './map-colors';
+import { colorSchemeForDifficulty, parseInfo, type InfoColorScheme } from '../engine/core/beatmap/info';
+import { findBandFlux } from './audio-tools';
+import { BANDS } from './onsets';
 import { lightGroupName, otherEventName } from './names';
 import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
@@ -143,6 +148,10 @@ export class Editor {
   duration = 60;
   clock: SongClock | null = null;
   spectrogram: Spectrogram | null = null;
+  /** The song decoded (null: none, or not yet). */
+  private songBuffer: AudioBuffer | null = null;
+  /** Where the song's bands grow (`low-high` → its flux): worked out when first asked for. */
+  private fluxes = new Map<string, Promise<{ flux: Float32Array; fps: number; offset: number }>>();
   /** The environment's turning ring systems (as it came, before the editor's ring tracks). */
   ringInfo: RingSystemInfo[] = [];
   /** …and the ones that zoom. */
@@ -160,7 +169,7 @@ export class Editor {
   /** The song list's preview as Info.dat has it (seconds of the song). */
   songPreview: { start: number; duration: number } | null = null;
   /** Opens a ring pose block's editor (set by the app). */
-  ringEditorHook: ((id: string) => void) | null = null;
+  ringEditorHook: ((id: string, options?: { steps?: boolean }) => void) | null = null;
   status = '';
   dirty = false;
   private undoStack: string[] = [];
@@ -284,6 +293,39 @@ export class Editor {
     this.setStatus(`Превью песни: с ${start.toFixed(2)} с, ${(end - start).toFixed(2)} с`);
   }
 
+  /** The 3D view and the timeline in these colours (null: the difficulty's own; 'environment': the
+   *  environment's, no map colours) — tried before they are kept. */
+  previewColors(scheme: InfoColorScheme | 'environment' | null) {
+    const own = scheme === 'environment' ? undefined : (scheme ?? this.row?.colorScheme);
+    this.preview.setTiming(this.songBpm, this.bpmEvents, own);
+    this.preview.view.refreshMapColors(own);
+    this.emit('clips');
+  }
+
+  /** The map's colours (Info.dat, every difficulty; null: the environment's own again). */
+  async setMapColors(colors: MapColors | null) {
+    const map = this.map;
+    const name = this.infoName();
+    if (map === null || name === undefined) return;
+    const text = writeMapColors(await map.folder.readText(name), colors);
+    await map.folder.writeText(name, text);
+    // (the difficulties' colours as the Info now has them)
+    const info = parseInfo(text);
+    for (const row of map.parsed.rows) {
+      const own = row.infoDifficulty;
+      if (own === undefined) continue;
+      const found = info.difficultySets.flatMap((set) => set.difficulties).find((item) => item.characteristic === own.characteristic && item.difficulty === own.difficulty);
+      if (found !== undefined) row.colorScheme = colorSchemeForDifficulty(info, found);
+    }
+    this.previewColors(null);
+  }
+
+  /** The map's cover picture, if it has one. */
+  cover(): Blob | null {
+    const cover = this.map?.parsed.cover ?? null;
+    return cover === null ? null : new Blob([cover.data], { type: cover.type });
+  }
+
   difficulties(): DifficultyRow[] {
     return this.map?.parsed.rows.filter((row) => row.difficulty !== undefined) ?? [];
   }
@@ -374,6 +416,8 @@ export class Editor {
     this.emit('all');
     // (the spectrogram comes when it's ready)
     this.spectrogram = null;
+    this.songBuffer = buffer;
+    this.fluxes.clear();
     if (buffer !== null) {
       void computeSpectrogram(buffer).then((spectrogram) => {
         if (this.map !== map) return;
@@ -381,6 +425,30 @@ export class Editor {
         this.emit('time');
       });
     }
+  }
+
+  /** The song's length in samples and their rate (v4's audio data). */
+  songSamples(): { sampleCount: number; frequency: number } {
+    const buffer = this.songBuffer;
+    if (buffer !== null) return { sampleCount: buffer.length, frequency: buffer.sampleRate };
+    return { sampleCount: Math.round(this.duration * 44100), frequency: 44100 };
+  }
+
+  /** How much a band of the song grows frame by frame (for finding its hits, see onsets.ts); the
+   *  first time, the usual drum bands are worked out together with it. */
+  songFlux(lowHz: number, highHz: number): Promise<{ flux: Float32Array; fps: number; offset: number }> | null {
+    const buffer = this.songBuffer;
+    if (buffer === null) return null;
+    const key = `${String(lowHz)}-${String(highHz)}`;
+    const known = this.fluxes.get(key);
+    if (known !== undefined) return known;
+    const bands: [number, number][] = [[lowHz, highHz], ...(this.fluxes.size === 0 ? BANDS.map((band): [number, number] => [band.lowHz, band.highHz]) : [])];
+    const all = findBandFlux(buffer, bands);
+    bands.forEach(([low, high], index) => {
+      const name = `${String(low)}-${String(high)}`;
+      if (!this.fluxes.has(name)) this.fluxes.set(name, all.then((result) => ({ flux: result.flux[index]!, fps: result.fps, offset: result.offset })));
+    });
+    return this.fluxes.get(key)!;
   }
 
   private endBeatOfProject() {
@@ -1182,7 +1250,7 @@ export class Editor {
     this.restore(state);
   }
 
-  private restore(state: string) {
+  private restore(state: string, notify = true) {
     const project = this.project;
     if (project === null) return;
     const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number> };
@@ -1205,7 +1273,7 @@ export class Editor {
       this.buildRows();
       this.emit('rows');
     }
-    this.changed(true);
+    if (notify) this.changed(true);
   }
 
   newClip(type: number, ids: number[] | null, start: number, end: number): LightClip {
@@ -1440,6 +1508,74 @@ export class Editor {
     }
     for (const event of raw) event.beat = start + end - event.beat;
     this.changed();
+  }
+
+  private trying: { state: string; selection: string[] } | null = null;
+
+  /** Trying out a change (the dialogs of the light and of the hits): one undo step for all the
+   *  tries, each try made on the clips as they were. */
+  startTrying() {
+    if (this.project === null || this.trying !== null) return;
+    this.checkpoint();
+    this.trying = { state: this.undoStack[this.undoStack.length - 1]!, selection: [...this.selection] };
+  }
+
+  /** The selected clips' light changed (brighter, another hue, a gradient over them, pulses, a
+   *  flutter — see `adjustClips`). Returns how many clips there are now. */
+  adjustSelection(adjustment: Adjustment): number {
+    const project = this.project;
+    if (project === null) return 0;
+    const trying = this.trying;
+    if (trying !== null) {
+      this.restore(trying.state, false);
+      this.selection = new Set(trying.selection);
+    }
+    const clips = this.selectedClips();
+    if (clips.length === 0) return 0;
+    if (trying === null) this.checkpoint();
+    const added = adjustClips(clips, adjustment, this.scheme(), (clip) => this.ownRow(clip)?.key ?? '');
+    project.clips.push(...added);
+    for (const clip of added) this.selection.add(clip.id);
+    this.changed();
+    return clips.length + added.length;
+  }
+
+  /** One try of new clips (the hits of the song): the clips as they were before the tries, and these
+   *  (selected). */
+  tryClips(clips: LightClip[]) {
+    const project = this.project;
+    const trying = this.trying;
+    if (project === null || trying === null) return;
+    this.restore(trying.state, false);
+    project.clips.push(...clips);
+    this.selection = new Set(clips.map((clip) => clip.id));
+    this.changed();
+  }
+
+  /** The tries done: kept (one undo step) or the clips put back as they were. */
+  finishTrying(keep: boolean) {
+    const trying = this.trying;
+    if (trying === null) return;
+    this.trying = null;
+    if (keep) return;
+    this.restore(trying.state);
+    this.selection = new Set(trying.selection);
+    this.undoDiscard();
+    this.emit('selection');
+  }
+
+  /** The clips that match: of these rows (keys; none: any), this colour, within these beats. */
+  clipsMatching(criteria: { rows: string[]; color: ClipColor['ref'] | 'any'; from: number; to: number; effects: boolean }): string[] {
+    const project = this.project;
+    if (project === null) return [];
+    const rows = this.rows.filter((row) => isLightRow(row) && (criteria.rows.length === 0 || criteria.rows.includes(row.key)));
+    const shown = new Set(rows.flatMap((row) => this.rowClips(row).filter((item) => item.role === 'own').map((item) => item.clip.id)));
+    const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
+    return project.clips
+      .filter((clip) => (criteria.rows.length === 0 || shown.has(clip.id)) && clip.end > criteria.from && clip.start < criteria.to)
+      .filter((clip) => criteria.color === 'any' || clip.color.ref === criteria.color)
+      .filter((clip) => clip.group === undefined || (criteria.effects && !hidden.has(clip.group)) || clip.group === this.openEffect)
+      .map((clip) => clip.id);
   }
 
   // ----- effects -------------------------------------------------------------------------------------

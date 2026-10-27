@@ -1,5 +1,6 @@
 import type { AudioReply, AudioRequest } from './audio-worker';
 import type { BpmResult } from './bpm-detect';
+import type { BandFlux } from './onsets';
 
 /** The song tools of the new-map dialog: decoding any audio file, the tempo, Ogg Vorbis. */
 
@@ -44,6 +45,13 @@ export async function findDownbeat(buffer: AudioBuffer, bpm: number, firstBeat: 
 export async function findBpm(buffer: AudioBuffer): Promise<BpmResult> {
   const reply = await run({ kind: 'bpm', channels: channelsOf(buffer), sampleRate: buffer.sampleRate });
   if (reply.kind !== 'bpm') throw new Error('unexpected reply');
+  return reply.result;
+}
+
+/** How much each band of the song (`[lowHz, highHz]`) grows frame by frame (see bandFlux). */
+export async function findBandFlux(buffer: AudioBuffer, bands: [number, number][]): Promise<BandFlux> {
+  const reply = await run({ kind: 'bands', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, bands });
+  if (reply.kind !== 'bands') throw new Error('unexpected reply');
   return reply.result;
 }
 

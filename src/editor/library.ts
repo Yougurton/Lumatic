@@ -4,7 +4,7 @@ import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectK
 import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
-import { newRingBlock, newZoomBlock } from './rings';
+import { newRingBlock, newStepsBlock, newZoomBlock } from './rings';
 
 /**
  * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
@@ -44,6 +44,9 @@ const EFFECTS: EffectCard[] = [
   { name: 'Пульс', hint: 'Вспышка на каждую долю, гаснущая к следующей', kind: 'strobe', length: 4, params: () => ({ pattern: 'all', rate: 1, duty: 0.95, startMode: 'flash', endMode: 'fade' }) },
   { name: 'Градиент', hint: 'Все элементы горят, цвет плавно меняется от первого к последнему', kind: 'gradient', length: 4, params: ({ other }) => ({ startMode: 'fadeIn', fadeIn: 0.5, endMode: 'fade', color2: other }) },
   { name: 'Мерцание', hint: 'Случайные лампы вспыхивают и гаснут', kind: 'twinkle', length: 4, params: () => ({ rate: 0.25, density: 0.3, duty: 1.5, startMode: 'flash', endMode: 'fade' }) },
+  { name: 'Огонёк', hint: 'Горит и дрожит, как пламя: то чуть тусклее, то чуть ярче', kind: 'fire', length: 4, params: () => ({ shape: 'steady', tremor: 0.35, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
+  { name: 'Разгорается', hint: 'Медленно нарастает, дрожа, как разгорающийся огонь', kind: 'fire', length: 8, params: () => ({ shape: 'rise', floor: 0.1, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'stay' }) },
+  { name: 'Догорает', hint: 'Медленно затухает, дрожа, как догорающий огонь', kind: 'fire', length: 8, params: () => ({ shape: 'fall', floor: 0, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
 ];
 
 interface RingCard {
@@ -260,6 +263,22 @@ export class Library {
         editor.ringEditorHook?.(block.id);
       });
       this.body.append(poses);
+    }
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
+      // a turn in steps: its block at the cursor, its editor opened on the steps
+      const steps = document.createElement('button');
+      steps.className = 'lib-poses';
+      steps.textContent = '⟳ Кольца по шагам…';
+      steps.title = 'Кольца переходят из начального угла в конечный за несколько шагов: число шагов и скорость поворота настраиваются';
+      steps.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        const system = editor.ringInfo.find((item) => editor.geometryRings.has(item.name))?.name ?? editor.ringInfo[0]!.name;
+        const block = newStepsBlock(system, editor.geometryRings.has(system) ? 'tracks' : 'event', editor.snapBeat(editor.playhead()));
+        editor.addRingBlock(block);
+        editor.ringEditorHook?.(block.id, { steps: true });
+      });
+      this.body.append(steps);
     }
     if (this.tab === 'rings' && this.editor.zoomInfo.length > 0) {
       const zoom = document.createElement('button');

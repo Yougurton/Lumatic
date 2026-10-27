@@ -639,6 +639,11 @@ export class MapView implements RenderView {
     );
   }
 
+  /** The environment's own colours (no map colours over them). */
+  environmentColors() {
+    return this.resolveMapColors(undefined);
+  }
+
   private resolveMapColors(override?: InfoColorScheme) {
     return this.environment === null ? DEFAULT_COLORS : resolveColorScheme(this.environment.data.colorScheme, override);
   }
