@@ -1318,6 +1318,12 @@ export class Timeline {
       items.push({ label: 'По кольцам', hint: 'одно событие — одно кольцо', action: () => editor.ringPreset(type, 'rings') });
       items.push({ label: 'По линиям', hint: 'одно событие — одна линия', action: () => editor.ringPreset(type, 'lines') });
     }
+    const moving = editor.movingLasers();
+    if (moving.left.length + moving.right.length > 0) {
+      items.push({ label: `Подвижные лазеры (${String(moving.left.length + moving.right.length)})`, heading: true });
+      items.push({ label: 'По сторонам', hint: 'только вращающиеся: левые, правые', action: () => editor.movingLasersPreset('sides') });
+      items.push({ label: 'Парами', hint: 'ближний левый с ближним правым…', action: () => editor.movingLasersPreset('pairs') });
+    }
     if (types.includes(2) && types.includes(3)) {
       items.push({ label: 'Левые + правые лазеры', heading: true });
       items.push({ label: 'Парами', hint: 'ближний левый с ближним правым…', action: () => editor.laserPreset('pairs', 2, 3) });

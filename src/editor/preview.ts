@@ -21,6 +21,8 @@ export interface LightInfo {
   lightId: number;
   position: [number, number, number];
   ring: { group: number; index: number } | null;
+  /** On something the laser speed events turn (a rotating laser). */
+  moving: boolean;
 }
 
 export class Preview {

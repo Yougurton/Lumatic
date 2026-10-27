@@ -1199,6 +1199,31 @@ export class Editor {
     return this.addGroup(`${title}: ${mode === 'pairs' ? 'парами' : 'по сторонам'}`, items);
   }
 
+  /** The lights the laser speed events turn (the rotating lasers), left and right, near to far. */
+  movingLasers(): { left: LightRef[]; right: LightRef[] } {
+    const moving = (light: LightRef) => this.lightInfo.some((item) => item.type === light.type && item.lightId === light.id && item.moving);
+    const x = (light: LightRef) => this.lightInfo.find((item) => item.type === light.type && item.lightId === light.id)?.position[0] ?? 0;
+    const types = [...this.lightsByType.keys()].filter((type) => this.sortedLights(type, 'z').some(moving));
+    const all = types.flatMap((type) => this.sortedLights(type, 'z').filter(moving));
+    // (by their event type where it says the side — 2 left, 3 right — else by where they stand)
+    const side = (light: LightRef) => (light.type === 2 ? 'left' : light.type === 3 ? 'right' : x(light) < 0 ? 'left' : 'right');
+    return { left: all.filter((light) => side(light) === 'left'), right: all.filter((light) => side(light) === 'right') };
+  }
+
+  /** A group of only the rotating lasers: by side, or in pairs (the nearest left with the nearest right…). */
+  movingLasersPreset(mode: 'pairs' | 'sides'): LightGroup | null {
+    const { left, right } = this.movingLasers();
+    if (left.length + right.length === 0) return null;
+    const items: GroupItem[] =
+      mode === 'pairs'
+        ? Array.from({ length: Math.max(left.length, right.length) }, (_, i) => ({ kind: 'group' as const, id: newId('g'), name: `Пара ${String(i + 1)}`, items: [left[i], right[i]].filter((light): light is LightRef => light !== undefined) }))
+        : [
+            { kind: 'group', id: newId('g'), name: 'Левые', items: left },
+            { kind: 'group', id: newId('g'), name: 'Правые', items: right },
+          ];
+    return this.addGroup(`Подвижные лазеры: ${mode === 'pairs' ? 'парами' : 'по сторонам'}`, items);
+  }
+
   /** One group of an event type's lights in the order of where they are. */
   orderedPreset(type: number, key: 'z' | 'y' | 'x'): LightGroup | null {
     const lights = this.sortedLights(type, key);

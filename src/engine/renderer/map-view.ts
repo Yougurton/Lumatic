@@ -361,7 +361,7 @@ export class MapView implements RenderView {
 
   /** The environment's lights as events address them: per event type, each light ID, where it is
    *  in the world, and the ring (group, index from the camera) it rides on, if any. */
-  lightLayout(): { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null }[] {
+  lightLayout(): { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; moving: boolean }[] {
     const environment = this.environment;
     if (environment === null) return [];
     if (!this.overlayAdded) {
@@ -378,7 +378,13 @@ export class MapView implements RenderView {
       }
       return null;
     };
-    const out = new Map<string, { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; count: number }>();
+    // (lights on something the laser speed events turn: the rotating lasers)
+    const turning = new Set<Object3D>(environment.rotations.map((rotation) => rotation.target));
+    const moves = (node: Object3D) => {
+      for (let current: Object3D | null = node; current !== null; current = current.parent) if (turning.has(current)) return true;
+      return false;
+    };
+    const out = new Map<string, { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; moving: boolean; count: number }>();
     const inactive = (node: Object3D) => {
       for (let current: Object3D | null = node; current !== null; current = current.parent) if (current.userData.inactive === true) return true;
       return false;
@@ -390,13 +396,17 @@ export class MapView implements RenderView {
       for (const binding of bindings) {
         const remapped = new Map<number, number>();
         for (const [source, target] of binding.lightIdRemap) if (!remapped.has(source)) remapped.set(source, target);
+        // the one id a map lights it by (as Chroma finds lights): the smallest of the environment's
+        // table that points to it; with none, its own place in the game's list — unless the table
+        // uses that number for another light (then nothing reaches it)
         const ids = new Set<number>();
-        if (!remapped.has(binding.lightId)) ids.add(binding.lightId);
-        for (const [source, target] of remapped) if (target === binding.lightId) ids.add(source);
+        const keys = [...remapped].filter(([, target]) => target === binding.lightId).map(([source]) => source);
+        if (keys.length > 0) ids.add(Math.min(...keys));
+        else if (!remapped.has(binding.lightId)) ids.add(binding.lightId);
         for (const id of ids) {
           const key = `${String(binding.eventType)}|${String(id)}`;
           const known = out.get(key);
-          if (known === undefined) out.set(key, { type: binding.eventType, lightId: id, position: [world.x, world.y, world.z], ring, count: 1 });
+          if (known === undefined) out.set(key, { type: binding.eventType, lightId: id, position: [world.x, world.y, world.z], ring, moving: moves(node), count: 1 });
           else {
             // (a light made of several pieces: their middle)
             const n = known.count + 1;
