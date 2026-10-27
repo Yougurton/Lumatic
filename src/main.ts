@@ -10,7 +10,7 @@ import { environmentDialog } from './editor/environment-dialog';
 import { newMapDialog } from './editor/new-map';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
-import { GRIDS, MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
+import { MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
 import { adjustDialog } from './editor/adjust-dialog';
 import { actionFor, comboOf } from './editor/hotkeys';
 import { hotkeysDialog } from './editor/hotkeys-dialog';
@@ -169,15 +169,7 @@ const brushColor = (ref: 'left' | 'right' | 'white', name: string) => {
   editor.emit('selection');
   editor.setStatus(`Кисть: ${name}`);
 };
-const stepGrid = (finer: boolean) => {
-  const grids = GRIDS.filter(([value]) => value > 0).map(([value]) => value);
-  const at = grids.findIndex((value) => Math.abs(value - editor.snap) < 1e-9);
-  const next = grids[Math.min(grids.length - 1, Math.max(0, (at < 0 ? grids.indexOf(0.25) : at) + (finer ? 1 : -1)))]!;
-  editor.snap = next;
-  timeline.redraw();
-  timeline.syncPlayControls();
-  editor.setStatus(`Сетка: ${GRIDS.find(([value]) => value === next)?.[1] ?? ''}`);
-};
+const stepGrid = (finer: boolean) => timeline.stepGrid(finer);
 const stepRate = (up: boolean) => {
   const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, Math.round((editor.rate + (up ? 0.1 : -0.1)) * 100) / 100));
   editor.setRate(rate);

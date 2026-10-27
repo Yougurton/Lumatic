@@ -1,6 +1,7 @@
 import { adjustDialog, selectByDialog } from './adjust-dialog';
 import { soundDialog } from './sound-dialog';
 import { ringStepsDialog } from './ring-steps-dialog';
+import { laserDialog, lastLaserMove } from './laser-dialog';
 import { ringGlitchDialog } from './ring-glitch-dialog';
 import { resolveRgb } from './bake';
 import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
@@ -8,7 +9,7 @@ import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { groupHue, lightGroupName } from './names';
-import { isZoom, newRingBlock, newZoomBlock, ringDelay, type RingBlock } from './rings';
+import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, ringDelay, type RingBlock } from './rings';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
@@ -40,18 +41,27 @@ const PLAY_ROOM = 74;
 export const GRIDS: [number, string][] = [
   [1, '1'],
   [0.5, '1/2'],
-  [1 / 3, '1/3'],
   [0.25, '1/4'],
-  [1 / 6, '1/6'],
   [0.125, '1/8'],
-  [1 / 12, '1/12'],
   [0.0625, '1/16'],
-  [1 / 24, '1/24'],
   [0.03125, '1/32'],
-  [1 / 48, '1/48'],
   [0.015625, '1/64'],
+  [1 / 3, '1/3'],
+  [1 / 6, '1/6'],
+  [1 / 12, '1/12'],
+  [1 / 24, '1/24'],
+  [1 / 48, '1/48'],
   [0, 'без сетки'],
 ];
+
+/** The next grid finer or coarser — among the halves, or among the triplets when it is one. */
+export function nextGrid(current: number, finer: boolean): number {
+  const triplet = current > 0 && Math.abs(Math.log2(current) - Math.round(Math.log2(current))) > 1e-6;
+  const family = GRIDS.map(([value]) => value).filter((value) => value > 0 && (Math.abs(Math.log2(value) - Math.round(Math.log2(value))) > 1e-6) === triplet);
+  const at = family.findIndex((value) => Math.abs(value - current) < 1e-9);
+  return family[Math.min(family.length - 1, Math.max(0, (at < 0 ? family.indexOf(0.25) : at) + (finer ? 1 : -1)))]!;
+}
+
 /** The playback speed's range. */
 export const MIN_RATE = 0.1;
 export const MAX_RATE = 2;
@@ -731,8 +741,10 @@ export class Timeline {
     const ctx = this.context;
     const effect = shown.effect!;
     const background = shown.role === 'background';
+    // (an effect of a group inside this one: dimmer, and striped when it lights only some of it)
+    const inner = shown.role === 'inner';
     ctx.save();
-    ctx.globalAlpha = ghost ? 0.6 : background ? 0.3 : 1;
+    ctx.globalAlpha = ghost ? 0.6 : background ? 0.3 : inner ? 0.6 : 1;
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
@@ -759,9 +771,19 @@ export class Timeline {
       } else ctx.fillStyle = this.colorCss(child.color, 1);
       ctx.fillRect(cx, ly, cw, lh);
     }
+    if (shown.partial) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 3;
+      for (let sx = x - h; sx < x + w; sx += 9) {
+        ctx.beginPath();
+        ctx.moveTo(sx, y + h);
+        ctx.lineTo(sx + h, y);
+        ctx.stroke();
+      }
+    }
     ctx.restore();
     if (background) return;
-    ctx.globalAlpha = ghost ? 0.6 : 1;
+    ctx.globalAlpha = ghost ? 0.6 : inner ? 0.7 : 1;
     const selected = this.editor.selection.has(effect.id);
     ctx.strokeStyle = selected ? '#ffffff' : this.colorCss(effect.params.color, 0.9);
     ctx.lineWidth = selected ? 2 : 1.2;
@@ -789,12 +811,13 @@ export class Timeline {
 
   /** The blocks a ring poses row shows (turns or zooms). */
   private blocksOf(row: Extract<Row, { kind: 'poses' }>) {
-    return this.editor.ringBlocks.filter((block) => isZoom(block) === (row.ring === 'zoom'));
+    return this.editor.ringBlocks.filter((block) => (row.ring === 'zoom' ? isZoom(block) : row.ring === 'lasers' ? isLasers(block) : isTurn(block)));
   }
 
   /** A new block for a ring poses row. */
   private newBlockFor(row: Extract<Row, { kind: 'poses' }>, start: number, end: number) {
     const editor = this.editor;
+    if (row.ring === 'lasers') return newLaserBlock(start, { ...lastLaserMove(), mode: 'spin', length: Math.max(0.25, end - start) });
     if (row.ring === 'zoom') return newZoomBlock(editor.zoomInfo[0], start, end, editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '');
     // (rings drawn from geometry only turn ring by ring)
     const system = editor.ringInfo.find((item) => editor.geometryRings.has(item.name))?.name ?? editor.ringInfo[0]?.name ?? '';
@@ -811,7 +834,7 @@ export class Timeline {
     const y = top + 3;
     const h = height - 6;
     const selected = this.editor.selection.has(block.id);
-    const hue = isZoom(block) ? 190 : block.mode === 'tracks' ? 275 : 300;
+    const hue = isLasers(block) ? 18 : isZoom(block) ? 190 : block.mode === 'tracks' ? 275 : 300;
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
@@ -822,6 +845,32 @@ export class Timeline {
     const r = Math.max(3, Math.min(8, h / 2 - 3));
     const rings = this.editor.ringInfo.find((system) => system.name === block.system)?.rings ?? this.editor.ringInfo[0]?.rings ?? 1;
     const zoom = isZoom(block);
+    if (isLasers(block) && block.lasers !== undefined) {
+      // (the lasers: a mark at each step and how far it turns; a spin as a line with its arrows)
+      const move = laserBlockMove(block);
+      ctx.strokeStyle = `hsl(${String(hue)} 80% 68%)`;
+      ctx.fillStyle = `hsla(${String(hue)} 80% 65% / 0.35)`;
+      ctx.lineWidth = 1.5;
+      if (move.mode === 'steps') {
+        for (let k = 0; k < move.steps; k++) {
+          const px = this.beatToX(block.start + k * move.every);
+          ctx.fillRect(px, cy - 1, Math.max(1, Math.min(move.turn, move.every) * this.pxPerBeat), 2);
+          ctx.beginPath();
+          ctx.moveTo(px, cy + r);
+          ctx.lineTo(px + Math.sin((Math.min(80, Math.abs(move.angle)) * Math.PI) / 180) * r * 1.4, cy + r - Math.cos((Math.min(80, Math.abs(move.angle)) * Math.PI) / 180) * r * 2);
+          ctx.stroke();
+        }
+      } else {
+        ctx.fillRect(x, cy - 1, w, 2);
+        for (let px = x + 10; px < x + w - 6; px += 26) {
+          ctx.beginPath();
+          ctx.moveTo(px, cy - 4);
+          ctx.lineTo(px + 5, cy);
+          ctx.lineTo(px, cy + 4);
+          ctx.stroke();
+        }
+      }
+    }
     const widest = Math.max(1e-3, ...block.poses.map((pose) => Math.abs(pose.step)));
     for (const pose of block.poses) {
       if (pose.beat > block.end - block.start + 1e-6) continue;
@@ -851,7 +900,7 @@ export class Timeline {
     }
     if (w > 60 && h >= 12) {
       ctx.font = '600 10px system-ui, sans-serif';
-      const label = `${isZoom(block) ? '⇹' : '◎'} ${block.name}${!isZoom(block) && block.mode === 'tracks' ? ' · по кольцам' : ''}`;
+      const label = isLasers(block) ? `✳ ${block.name}` : `${isZoom(block) ? '⇹' : '◎'} ${block.name}${!isZoom(block) && block.mode === 'tracks' ? ' · по кольцам' : ''}`;
       const tw = ctx.measureText(label).width;
       const lx = Math.max(x + 3, x + w - tw - 9);
       ctx.fillStyle = 'rgba(10,11,15,0.8)';
@@ -872,7 +921,7 @@ export class Timeline {
     const ctx = this.context;
     const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
-    if (row.type === RING_EVENT_TYPE || row.type === ZOOM_EVENT_TYPE) {
+    if (row.type === RING_EVENT_TYPE || row.type === ZOOM_EVENT_TYPE || row.type === 12 || row.type === 13) {
       // (the ring events the ring poses make: hollow — they belong to their blocks)
       ctx.strokeStyle = `hsl(${String(hue)} 70% 65%)`;
       ctx.lineWidth = 1.2;
@@ -1065,6 +1114,17 @@ export class Timeline {
       null,
       { label: 'Настройки спектрограммы…', action: () => this.openSpectroPanel(x, y - 200) },
     ]);
+  }
+
+  private gridWheel = 0;
+
+  /** The grid a step finer or coarser (Alt+wheel, the keys). */
+  stepGrid(finer: boolean) {
+    const editor = this.editor;
+    editor.snap = nextGrid(editor.snap, finer);
+    this.redraw();
+    this.syncPlayControls();
+    editor.setStatus(`Сетка: ${GRIDS.find(([value]) => Math.abs(value - editor.snap) < 1e-9)?.[1] ?? ''}`);
   }
 
   /** Where the grid and speed stand now (under the spectrogram's name or in the overview line). */
@@ -1487,8 +1547,8 @@ export class Timeline {
         ]);
       });
     } else if (row.kind === 'poses') {
-      item.textContent = `${row.ring === 'zoom' ? '⇹' : '◎'} ${row.label}`;
-      item.title = row.ring === 'zoom' ? 'Зум колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор расстояний между кольцами' : 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
+      item.textContent = `${row.ring === 'zoom' ? '⇹' : row.ring === 'lasers' ? '✳' : '◎'} ${row.label}`;
+      item.title = row.ring === 'lasers' ? 'Вращающиеся лазеры: протяните по строке, чтобы сделать блок; двойной клик по блоку — его настройки (крутятся рядом, повороты по шагам). Длина блока — сколько крутятся / сколько шагов' : row.ring === 'zoom' ? 'Зум колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор расстояний между кольцами' : 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
     } else {
       item.textContent = row.label;
     }
@@ -1642,7 +1702,14 @@ export class Timeline {
         this.pxPerBeat = Math.min(800, Math.max(0.5, this.pxPerBeat * Math.exp(-event.deltaY * 0.0015)));
         this.viewStart = beat - (x - GUTTER) / this.pxPerBeat;
         this.followPlayhead = false;
-      } else if (event.altKey || event.shiftKey || x < GUTTER) {
+      } else if (event.altKey) {
+        // Alt+wheel: the grid finer / coarser (a wheel's notch a step)
+        this.gridWheel += event.deltaY;
+        if (Math.abs(this.gridWheel) >= 40) {
+          this.stepGrid(this.gridWheel < 0);
+          this.gridWheel = 0;
+        }
+      } else if (event.shiftKey || x < GUTTER) {
         // (Shift+wheel comes as a sideways wheel on some systems)
         this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
       } else {
@@ -1792,7 +1859,8 @@ export class Timeline {
       const hit = this.hit(x, y);
       if (hit !== null && 'block' in hit) {
         // (a block made by "Rings in steps": its simple window; others: the pose editor)
-        if (hit.block.steps !== undefined) ringStepsDialog(this.editor, hit.block.id);
+        if (isLasers(hit.block)) laserDialog(this.editor, hit.block.id);
+        else if (hit.block.steps !== undefined) ringStepsDialog(this.editor, hit.block.id);
         else if (hit.block.glitch !== undefined) ringGlitchDialog(this.editor, hit.block.id);
         else this.editor.ringEditorHook?.(hit.block.id);
         return;
@@ -1996,7 +2064,8 @@ export class Timeline {
           const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
           const block = this.newBlockFor(row, a, Math.max(b, a + 1));
           this.editor.addRingBlock(block);
-          this.editor.ringEditorHook?.(block.id);
+          if (isLasers(block)) laserDialog(this.editor, block.id);
+          else this.editor.ringEditorHook?.(block.id);
           this.needsDraw = true;
           return;
         }

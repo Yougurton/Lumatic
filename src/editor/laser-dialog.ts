@@ -1,20 +1,26 @@
 import type { Editor } from './editor';
 import { scrubStrip } from './gls-editor';
 import { DEFAULT_LASER_MOVE, laserEvents, type LaserMove } from './lasers';
-import { newId, type RawEvent } from './model';
+import { laserBlockMove, newLaserBlock, type RingBlock } from './rings';
 
 /**
- * "Lasers": the rotating lasers spinning in a row one way, or turning by a set angle in steps — as
- * laser speed events with Chroma's data (see lasers.ts), put at the cursor. Tried on the timeline and
- * in the 3D view as the settings change; one undo step.
+ * "Lasers": the rotating lasers spinning in a row one way, or turning by a set angle in steps — a
+ * block on the lasers' row whose laser speed events (Chroma's data, see lasers.ts) are made from these
+ * settings; changed again with a double click, made longer or shorter by its edge. Tried on the
+ * timeline and in the 3D view as the settings change; one undo step. `blockId`: the block to change;
+ * null: a new one at the cursor.
  */
 
 let remembered: LaserMove = { ...DEFAULT_LASER_MOVE };
 
-export function laserDialog(editor: Editor) {
+/** The settings last used (a new block drawn on the row starts with them). */
+export const lastLaserMove = (): LaserMove => ({ ...remembered });
+
+export function laserDialog(editor: Editor, blockId: string | null = null) {
   if (editor.project === null) return;
-  const move: LaserMove = { ...remembered };
-  const start = editor.snapBeat(editor.playhead());
+  const old = blockId === null ? undefined : editor.ringBlockById(blockId);
+  const move: LaserMove = old?.lasers !== undefined ? laserBlockMove(old) : { ...remembered };
+  const start = old?.start ?? editor.snapBeat(editor.playhead());
   editor.startTrying();
 
   const shade = document.createElement('div');
@@ -46,7 +52,7 @@ export function laserDialog(editor: Editor) {
     </div>
     <canvas class="steps-picture" data-id="picture" width="400" height="64"></canvas>
     <div class="nm-dim" data-id="summary"></div>
-    <div class="ce-dialog-buttons"><span class="nm-dim">Нужен Chroma</span><span class="adjust-gap"></span><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="apply">Поставить</button></div>`;
+    <div class="ce-dialog-buttons"><span class="nm-dim">Нужен Chroma</span><span class="adjust-gap"></span><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="apply">${old === undefined ? 'Поставить' : 'Готово'}</button></div>`;
   shade.append(box);
   document.body.append(shade);
   const el = <T extends HTMLElement>(name: string) => box.querySelector<T>(`[data-id="${name}"]`)!;
@@ -105,12 +111,8 @@ export function laserDialog(editor: Editor) {
     update();
   });
 
-  let events: RawEvent[] = [];
-  const span = () => {
-    const last = events.reduce((most, event) => Math.max(most, event.beat), start + 1);
-    return { start, end: last };
-  };
-  el('summary').before(scrubStrip(editor, span));
+  let block: RingBlock = newLaserBlock(start, move);
+  el('summary').before(scrubStrip(editor, () => block));
 
   // the steps drawn: four lasers side by side at each step's angle (as the right ones turn)
   const picture = el<HTMLCanvasElement>('picture');
@@ -155,19 +157,20 @@ export function laserDialog(editor: Editor) {
     el('spin').hidden = move.mode !== 'spin';
     el('steps').hidden = move.mode !== 'steps';
     draw();
-    events = laserEvents(move, start, (beat) => editor.beatToSeconds(beat)).map((event) => ({ ...event, id: newId('r') }));
-    const end = events.reduce((most, event) => Math.max(most, event.beat), start);
-    el('summary').textContent = `${String(events.length)} событий скорости лазеров · доли ${String(Math.round(start * 1000) / 1000)}–${String(Math.round(end * 1000) / 1000)}`;
+    const made = newLaserBlock(start, move);
+    block = { ...made, id: old?.id ?? block.id, name: made.name };
+    const count = laserEvents(laserBlockMove(block), start, (beat) => editor.beatToSeconds(beat)).length;
+    el('summary').textContent = `${String(count)} событий скорости лазеров · доли ${String(Math.round(start * 1000) / 1000)}–${String(Math.round(block.end * 1000) / 1000)} · длину блока можно менять мышью`;
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => editor.tryRaw(events), 80);
+    timer = window.setTimeout(() => editor.tryRingBlock(block), 80);
   };
 
   const close = (keep: boolean) => {
     window.clearTimeout(timer);
     if (keep) {
-      editor.tryRaw(events);
+      editor.tryRingBlock(block);
       remembered = { ...move };
-      editor.setStatus(`Лазеры: ${String(events.length)} событий`);
+      editor.setStatus('Лазеры: блок на строке «Лазеры» — двойной клик, чтобы изменить');
     }
     editor.finishTrying(keep);
     shade.remove();

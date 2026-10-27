@@ -37,6 +37,7 @@ import { clipRank, resolveRgb } from './bake';
 import { buildEffect, childrenSignature, defaultParams, effectItems, KIND_NAMES, type Effect, type EffectExtras, type EffectKind, type EffectParams } from './effects';
 import { defaultGls } from './gls';
 import { adjustClips, type Adjustment } from './adjust';
+import { laserEvents } from './lasers';
 import { writeMapColors, type MapColors } from './map-colors';
 import { colorSchemeForDifficulty, parseInfo, type InfoColorScheme } from '../engine/core/beatmap/info';
 import { findBandFlux } from './audio-tools';
@@ -46,7 +47,7 @@ import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
-import { chromaCustomData, cloneRingBlock, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
+import { chromaCustomData, cloneRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -63,7 +64,7 @@ export type Row =
   | { kind: 'custom'; key: string; group: LightGroup; label: string; expanded: boolean; depth: number; parent: string | null }
   | { kind: 'raw'; key: string; type: number; label: string; depth: number }
   /** The ring poses (blocks of them). */
-  | { kind: 'poses'; key: string; label: string; depth: number; ring: 'rotation' | 'zoom' };
+  | { kind: 'poses'; key: string; label: string; depth: number; ring: 'rotation' | 'zoom' | 'lasers' };
 
 /** A row of lights (a light group, a light, a group of the user's) — clips and effects go there. */
 export type LightRow = Extract<Row, { kind: 'group' | 'light' | 'custom' }>;
@@ -475,7 +476,7 @@ export class Editor {
   private bakeWith(clips: readonly LightClip[], raw: readonly RawEvent[]): OutEvent[] {
     const other = rawEvents(raw);
     const rings = other.filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
-    const poses = [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm)].map(({ group: _group, ...event }) => event);
+    const poses = [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm), ...this.laserBlockEvents()].map(({ group: _group, ...event }) => event);
     // (the poses' ring events before the show's own at the same moment: of two at once, the first wins)
     return [...bakeLights(clips, this.lightsByType, this.scheme(), 60 / this.songBpm, this.groups), ...poses, ...other].sort((a, b) => a.beat - b.beat);
   }
@@ -485,7 +486,12 @@ export class Editor {
     const project = this.project;
     if (project === null) return [];
     const rings = rawEvents(project.raw).filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
-    return [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm)];
+    return [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm), ...this.laserBlockEvents()];
+  }
+
+  /** The laser speed events of the lasers blocks (as long as each block is now). */
+  laserBlockEvents(): (OutEvent & { group: string })[] {
+    return this.ringBlocks.filter(isLasers).flatMap((block) => laserEvents(laserBlockMove(block), block.start, (beat) => this.beatToSeconds(beat)).map((event) => ({ ...event, group: block.id })));
   }
 
   /** The Chroma environment the ring poses on tracks need: the rings on tracks, their turns
@@ -675,8 +681,9 @@ export class Editor {
       return at < 0 ? Number.POSITIVE_INFINITY : at;
     };
     tops.map((top, index) => ({ top, index })).sort((a, b) => rank(a.top.key) - rank(b.top.key) || a.index - b.index).forEach(({ top }) => top.push());
-    if (this.ringInfo.length > 0 || this.ringBlocks.some((block) => block.kind !== 'zoom')) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0, ring: 'rotation' });
+    if (this.ringInfo.length > 0 || this.ringBlocks.some(isTurn)) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0, ring: 'rotation' });
     if (this.zoomInfo.length > 0 || this.ringBlocks.some((block) => block.kind === 'zoom')) rows.push({ kind: 'poses', key: 'zoomposes', label: 'Зум колец', depth: 0, ring: 'zoom' });
+    if (this.lightInfo.some((light) => light.moving) || this.ringBlocks.some(isLasers)) rows.push({ kind: 'poses', key: 'laserposes', label: 'Лазеры', depth: 0, ring: 'lasers' });
     const rawTypes = [...new Set(project.raw.map((event) => event.type))].sort((a, b) => a - b);
     for (const type of [8, 9, 12, 13, 5]) if (!rawTypes.includes(type)) rawTypes.push(type);
     for (const type of rawTypes.sort((a, b) => a - b)) rows.push({ kind: 'raw', key: `r${String(type)}`, type, label: otherEventName(type), depth: 0 });
@@ -879,7 +886,8 @@ export class Editor {
       if (row.kind === 'group') {
         if (!lights.has(row.type)) continue;
         const ids = lights.get(row.type)!;
-        touched = ids === null || ids.length > 0;
+        // (only the lights the row has: those a group took out of it don't count)
+        touched = ids === null || ids.some((id) => row.lights.includes(id));
         partial = ids !== null && !(row.lights.length > 0 && row.lights.every((id) => ids.includes(id)));
       } else if (row.kind === 'light') {
         if (!lights.has(row.type)) continue;

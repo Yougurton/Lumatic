@@ -1,4 +1,5 @@
 import { easingFromName } from '../engine/core/easing';
+import type { LaserMove } from './lasers';
 import { deterministicRingRandom, matchesRingName, type RingPositionConfig, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
 import type { OutEvent } from './bake';
 import { newId } from './model';
@@ -61,8 +62,8 @@ export interface RingPose {
 
 export interface RingBlock {
   id: string;
-  /** Turning the rings (the default) or spacing them out. */
-  kind?: 'rotation' | 'zoom';
+  /** Turning the rings (the default), spacing them out, or turning the rotating lasers. */
+  kind?: 'rotation' | 'zoom' | 'lasers';
   name: string;
   /** The ring system (its name — Chroma's nameFilter); '' for 'event': every ring system. */
   system: string;
@@ -74,6 +75,8 @@ export interface RingBlock {
   steps?: StepTransition;
   /** Made by "Ring glitch" from these settings (the same). */
   glitch?: RingGlitch;
+  /** A lasers block: what they do (its length decides how long they spin / how many steps). */
+  lasers?: LaserMove;
 }
 
 /** What making ring poses needs to know about the environment's ring systems. */
@@ -105,6 +108,9 @@ export interface ZoomSystemInfo {
 }
 
 export const isZoom = (block: RingBlock) => block.kind === 'zoom';
+export const isLasers = (block: RingBlock) => block.kind === 'lasers';
+/** A block turning the rings (not a zoom, not lasers). */
+export const isTurn = (block: RingBlock) => block.kind !== 'zoom' && block.kind !== 'lasers';
 
 /** The shapes ring events can make. */
 export const EVENT_SHAPES = new Set<PoseShape>(['same', 'spiral']);
@@ -237,6 +243,19 @@ export function newGlitchBlock(system: string, mode: RingBlock['mode'], start: n
   return { id: newId('k'), name: 'Глитч колец', system, mode, start, end, poses, glitch: { ...glitch } };
 }
 
+/** A lasers block at `start` (as long as the move: its spin, or its steps). */
+export function newLaserBlock(start: number, move: LaserMove): RingBlock {
+  const length = move.mode === 'spin' ? Math.max(0.25, move.length) : Math.max(1, Math.round(move.steps)) * Math.max(1 / 64, move.every);
+  return { id: newId('k'), kind: 'lasers', name: move.mode === 'spin' ? 'Лазеры крутятся' : 'Лазеры по шагам', system: '', mode: 'event', start, end: start + length, poses: [], lasers: { ...move } };
+}
+
+/** A lasers block's move as long as the block is now (dragged longer: a longer spin, more steps). */
+export function laserBlockMove(block: RingBlock): LaserMove {
+  const move = block.lasers!;
+  const length = block.end - block.start;
+  return move.mode === 'spin' ? { ...move, length } : { ...move, steps: Math.max(1, Math.round(length / Math.max(1 / 64, move.every))) };
+}
+
 export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {
   const length = Math.max(1, end - start);
   const initial = round(system?.initialStep ?? 2);
@@ -357,7 +376,7 @@ export function ringBase(events: readonly { songBeat: number; customData?: Recor
 export function poseRingEvents(blocks: readonly RingBlock[], others: readonly OutEvent[], systems: readonly RingSystemInfo[], eventType: number, toSong: (beat: number) => number, secondsPerBeat: number): (OutEvent & { group: string })[] {
   const out: (OutEvent & { group: string })[] = [];
   const known = others.map((event) => ({ songBeat: toSong(event.beat), customData: event.customData }));
-  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => !isZoom(item) && item.mode === 'event'))) {
+  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'event'))) {
     const system = systems.find((item) => item.name === block.system) ?? systems[0];
     if (system === undefined) continue;
     const songBeat = toSong(beat);
@@ -417,7 +436,7 @@ export interface RingAnimation {
 
 /** The systems 'tracks' blocks turn. */
 export function trackedSystems(blocks: readonly RingBlock[]) {
-  return [...new Set(blocks.filter((block) => !isZoom(block) && block.mode === 'tracks').map((block) => block.system))].sort();
+  return [...new Set(blocks.filter((block) => isTurn(block) && block.mode === 'tracks').map((block) => block.system))].sort();
 }
 
 const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -490,7 +509,7 @@ export function ringAnimations(blocks: readonly RingBlock[], systems: readonly R
   // per ring: its turns in time order, each from where the ring is when it starts
   const lanes = new Map<string, { beat: number; duration: number; from: number; to: number; easing: string }[]>();
   const steps: { track: string; beat: number; pose: RingPose; target: number }[] = [];
-  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => !isZoom(item) && item.mode === 'tracks'))) {
+  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'tracks'))) {
     const system = systems.find((item) => item.name === block.system);
     if (system === undefined) continue;
     const angles = poseAngles(pose, system.rings, 'tracks');

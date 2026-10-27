@@ -89,15 +89,24 @@
         background: #263a5c;
         border-color: var(--accent);
       }
+      /* (what the editor says: over the 3D view's bottom left, not in the toolbar's way) */
       #status {
+        position: absolute;
+        left: 8px;
+        bottom: 6px;
+        max-width: calc(100% - 16px);
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: rgba(10, 11, 15, 0.6);
         color: var(--dim);
+        font-size: 12px;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 38vw;
-        min-width: 0;
-        /* (it takes what room is left on the line rather than a line of its own) */
-        flex: 1 1 0;
-        text-align: right;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      #status:empty {
+        display: none;
       }
       #time {
         font-variant-numeric: tabular-nums;
@@ -1648,10 +1657,9 @@
         <button id="zoom-in" title="Приблизить (Ctrl+колесо)">+</button>
         <button id="hotkeys" title="Горячие клавиши: посмотреть и назначить свои">⌨</button>
         <span class="grow"></span>
-        <span id="status"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><span id="status"></span></div>
         <aside id="side">
           <div id="library"></div>
         </aside>
