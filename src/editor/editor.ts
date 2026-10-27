@@ -652,9 +652,13 @@ export class Editor {
     const lightTypes = new Set<number>([...this.lightsByType.keys(), ...project.clips.filter((clip) => clip.target === undefined).map((clip) => clip.type)]);
     const tops: { key: string; push: () => void }[] = [];
     const removed = project.removedTypes ?? {};
+    const taken = this.takenLights();
     for (const type of [...lightTypes].sort((a, b) => a - b)) {
       if (replaced.has(type) || removed[String(type)] !== undefined) continue;
-      const lights = this.lightsByType.get(type) ?? [...new Set(project.clips.filter((clip) => clip.type === type).flatMap((clip) => clip.ids ?? []))].sort((a, b) => a - b);
+      const all = this.lightsByType.get(type) ?? [...new Set(project.clips.filter((clip) => clip.type === type).flatMap((clip) => clip.ids ?? []))].sort((a, b) => a - b);
+      // (lights a group of the user's took: not here; a row left with none isn't shown)
+      const lights = all.filter((id) => taken.get(type)?.has(id) !== true);
+      if (lights.length === 0 && all.length > 0) continue;
       const expanded = project.expanded.includes(type);
       tops.push({
         key: `g${String(type)}`,
@@ -680,6 +684,29 @@ export class Editor {
   }
 
   /** The environment's light groups a group of the user's stands in for (type → group). */
+  /** The lights groups of the user's take out of their environment rows (type → ids). */
+  takenLights(): Map<number, Set<number>> {
+    const out = new Map<number, Set<number>>();
+    const walk = (groups: readonly LightGroup[]) => {
+      for (const group of groups) {
+        if (group.takesLights === true) for (const light of groupLights(group)) out.set(light.type, (out.get(light.type) ?? new Set()).add(light.id));
+        walk(group.items.filter((item): item is LightGroup => item.kind === 'group'));
+      }
+    };
+    walk(this.groups);
+    return out;
+  }
+
+  /** A group's lights taken out of their environment rows, or given back. */
+  setTakesLights(id: string, takes: boolean) {
+    const found = findGroup(this.groups, id);
+    if (found === null) return;
+    this.checkpoint();
+    if (takes) found.group.takesLights = true;
+    else delete found.group.takesLights;
+    this.groupChanged();
+  }
+
   replacedTypes(): Map<number, string> {
     const out = new Map<number, string>();
     for (const [type, id] of Object.entries(this.project?.replacedTypes ?? {})) if (findGroup(this.groups, id) !== null) out.set(Number(type), id);
@@ -1221,7 +1248,11 @@ export class Editor {
             { kind: 'group', id: newId('g'), name: 'Левые', items: left },
             { kind: 'group', id: newId('g'), name: 'Правые', items: right },
           ];
-    return this.addGroup(`Подвижные лазеры: ${mode === 'pairs' ? 'парами' : 'по сторонам'}`, items);
+    // (the lasers leave the environment's rows: those keep only the other lights)
+    const group = this.addGroup(`Подвижные лазеры: ${mode === 'pairs' ? 'парами' : 'по сторонам'}`, items);
+    group.takesLights = true;
+    this.groupChanged();
+    return group;
   }
 
   /** One group of an event type's lights in the order of where they are. */
@@ -1333,7 +1364,8 @@ export class Editor {
 
   private plainClipForRow(row: Row, start: number, end: number): LightClip | null {
     if (!isLightRow(row)) return null;
-    if (row.kind === 'group') return this.newClip(row.type, null, start, end);
+    // (a row some of whose lights a group took: only the ones left)
+    if (row.kind === 'group') return this.newClip(row.type, this.takenLights().has(row.type) ? [...row.lights] : null, start, end);
     if (row.kind === 'light') return { ...this.newClip(row.type, [row.id], start, end), scope: 'light' };
     const first = groupLights(row.group)[0];
     return { ...this.newClip(first?.type ?? 0, null, start, end), target: row.group.id };

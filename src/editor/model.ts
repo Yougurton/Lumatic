@@ -72,6 +72,8 @@ export interface LightGroup {
   id: string;
   name: string;
   items: GroupItem[];
+  /** Its lights are taken out of their environment rows (those rows then light only the rest). */
+  takesLights?: boolean;
 }
 
 export type GroupItem = LightRef | LightGroup;

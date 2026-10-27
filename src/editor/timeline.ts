@@ -1584,6 +1584,9 @@ export class Timeline {
       { label: 'Войти в группу', action: () => editor.enterGroup(group.id), disabled: editor.focus === group.id },
       { label: 'Переименовать…', action: () => void ask('Новое название', group.name).then((name) => name !== null && editor.renameGroup(group.id, name)) },
       { label: 'Выбрать её лампы', action: () => editor.selectLights(groupLights(group).map((light) => lightKey(light.type, light.id)), 'replace', group.id) },
+      group.takesLights === true
+        ? { label: 'Вернуть лампы в строки окружения', hint: 'они снова и там', action: () => editor.setTakesLights(group.id, false) }
+        : { label: 'Забрать лампы из строк окружения', hint: 'там останутся остальные', action: () => editor.setTakesLights(group.id, true) },
       { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor, row) },
       null,
       { label: 'Сортировать', heading: true },
