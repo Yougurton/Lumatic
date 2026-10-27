@@ -221,6 +221,10 @@ const ACTIONS_RUN: Record<string, () => void> = {
   duplicate: () => editor.duplicateSelection(),
   delete: () => editor.deleteSelection(),
   selectAll: () => editor.selectAll(),
+  deselect: () => {
+    editor.select([]);
+    editor.selectLights([]);
+  },
   mirror: () => {
     const moved = editor.mirrorAcrossRows();
     editor.setStatus(moved > 0 ? `Отзеркалено по строкам: ${String(moved)} событий` : 'Для зеркала по строкам выделите события на двух строках и больше');

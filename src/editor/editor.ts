@@ -176,7 +176,15 @@ export class Editor {
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
-  private clipboard: { clips: LightClip[]; raw: RawEvent[]; effects: { effect: Effect; children: LightClip[]; raw: RawEvent[] }[]; ringBlocks: RingBlock[] } | null = null;
+  private clipboard: {
+    clips: LightClip[];
+    raw: RawEvent[];
+    effects: { effect: Effect; children: LightClip[]; raw: RawEvent[] }[];
+    ringBlocks: RingBlock[];
+    /** The rows things were copied from (clip / effect id → row key), top to bottom (`rows`). */
+    from: Map<string, string>;
+    rows: string[];
+  } | null = null;
   private rebuildTimer: number | null = null;
   private toSong: (jsonTime: number) => number = (beat) => beat;
 
@@ -1386,7 +1394,7 @@ export class Editor {
     delete clip.scope;
     if (row.kind === 'group') {
       clip.type = row.type;
-      clip.ids = null;
+      clip.ids = this.takenLights().has(row.type) ? [...row.lights] : null;
     } else if (row.kind === 'light') {
       clip.type = row.type;
       clip.ids = [row.id];
@@ -1478,33 +1486,78 @@ export class Editor {
     const raw = project.raw.filter((event) => this.selection.has(event.id)).map((event) => ({ ...event }));
     const effects = this.selectedEffects().map((effect) => ({ effect: structuredClone(effect), children: this.effectChildren(effect.id).map((clip) => cloneClip(clip, { id: clip.id })), raw: this.effectRaw(effect.id).map((event) => structuredClone(event)) }));
     const ringBlocks = this.selectedRingBlocks().map((block) => structuredClone(block));
-    if (clips.length + raw.length + effects.length + ringBlocks.length > 0) this.clipboard = { clips, raw, effects, ringBlocks };
+    // (where each was: for pasting into other rows, the rows kept in their order)
+    const from = new Map<string, string>();
+    for (const id of [...clips.map((clip) => clip.id), ...effects.map((item) => item.effect.id)]) {
+      const row = this.ownRowOf(id);
+      if (row !== null) from.set(id, row.key);
+    }
+    const rows = this.rows.map((row) => row.key).filter((key) => [...from.values()].includes(key));
+    if (clips.length + raw.length + effects.length + ringBlocks.length > 0) this.clipboard = { clips, raw, effects, ringBlocks, from, rows };
   }
 
-  /** Pastes at `at` (the first copied thing lands there). */
-  paste(at: number) {
+  /** What there is to paste: how many things, from how many rows (null: nothing). */
+  clipboardInfo(): { count: number; rows: number } | null {
+    const board = this.clipboard;
+    if (board === null) return null;
+    return { count: board.clips.length + board.raw.length + board.effects.length + board.ringBlocks.length, rows: board.rows.length };
+  }
+
+  /** The row a clip or an effect stands on as its own. */
+  private ownRowOf(id: string): Row | null {
+    return this.rows.find((row) => isLightRow(row) && this.rowClips(row).some((shown) => shown.clip.id === id && shown.role === 'own')) ?? null;
+  }
+
+  /** Pastes at `at` (the first copied thing lands there). `into`: the row (its key) the topmost row
+   *  copied from goes to — the others to the rows under it, in their order; none: each where it was. */
+  paste(at: number, into: string | null = null) {
     const project = this.project;
     const board = this.clipboard;
     if (project === null || board === null) return;
+    // the rows things go to
+    const lightRows = this.rows.filter(isLightRow);
+    const start = into === null ? -1 : lightRows.findIndex((row) => row.key === into);
+    const intoRow = into === null ? undefined : this.rows.find((row) => row.key === into);
+    const rowFor = (id: string): LightRow | null => {
+      if (start < 0) return null;
+      const from = board.from.get(id);
+      const k = from === undefined ? 0 : Math.max(0, board.rows.indexOf(from));
+      return lightRows[Math.min(lightRows.length - 1, start + k)] ?? null;
+    };
+    // (other events onto another row of them: when they are all of one kind)
+    const rawTypes = new Set(board.raw.map((event) => event.type));
+    const rawType = intoRow?.kind === 'raw' && rawTypes.size === 1 ? intoRow.type : null;
     const first = Math.min(...board.clips.map((clip) => clip.start), ...board.raw.map((event) => event.beat), ...board.effects.map((item) => item.effect.start), ...board.ringBlocks.map((block) => block.start));
     const shift = at - first;
     this.checkpoint();
     const pasted: string[] = [];
     for (const clip of board.clips) {
       const copy = cloneClip(clip, { start: clip.start + shift, end: clip.end + shift });
+      const row = rowFor(clip.id);
+      if (row !== null) this.retarget(copy, row);
       project.clips.push(copy);
       pasted.push(copy.id);
     }
     for (const event of board.raw) {
-      const copy = { ...event, id: newId('r'), beat: event.beat + shift };
+      const copy = { ...event, id: newId('r'), beat: event.beat + shift, ...(rawType !== null ? { type: rawType } : {}) };
       project.raw.push(copy);
       pasted.push(copy.id);
     }
     for (const { effect, children, raw } of board.effects) {
       const copy: Effect = { ...structuredClone(effect), id: newId('e'), start: effect.start + shift, end: effect.end + shift };
+      const row = rowFor(effect.id);
+      const target = row === null ? null : this.targetOfRow(row);
       this.effects.push(copy);
-      for (const child of children) project.clips.push(cloneClip(child, { start: child.start + shift, end: child.end + shift, group: copy.id }));
-      for (const event of raw) project.raw.push({ ...structuredClone(event), id: newId('r'), beat: event.beat + shift, group: copy.id });
+      if (target !== null) {
+        // (on another row: made anew for its lights — events changed by hand don't fit them)
+        delete copy.target;
+        Object.assign(copy, target);
+        delete copy.custom;
+        this.regenerate(copy);
+      } else {
+        for (const child of children) project.clips.push(cloneClip(child, { start: child.start + shift, end: child.end + shift, group: copy.id }));
+        for (const event of raw) project.raw.push({ ...structuredClone(event), id: newId('r'), beat: event.beat + shift, group: copy.id });
+      }
       pasted.push(copy.id);
     }
     for (const block of board.ringBlocks) {
@@ -1739,7 +1792,7 @@ export class Editor {
   /** The row an effect would go on → what it runs over (null: not a light row). */
   private targetOfRow(row: Row): Pick<Effect, 'target' | 'type' | 'ids'> | null {
     if (!isLightRow(row)) return null;
-    if (row.kind === 'group') return { type: row.type, ids: null };
+    if (row.kind === 'group') return { type: row.type, ids: this.takenLights().has(row.type) ? [...row.lights] : null };
     if (row.kind === 'light') return { type: row.type, ids: [row.id] };
     return { target: row.group.id, type: groupLights(row.group)[0]?.type ?? 0, ids: null };
   }

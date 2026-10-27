@@ -1095,6 +1095,28 @@ export class Timeline {
     ]);
   }
 
+  /** A right click on an empty place: what was copied pasted there — into the row under the mouse
+   *  (several rows copied: from it downwards, in their order) or each into the row it came from. */
+  private pasteMenu(clientX: number, clientY: number, x: number, y: number) {
+    const editor = this.editor;
+    const info = editor.clipboardInfo();
+    if (info === null) return;
+    const at = editor.snapBeat(Math.max(0, this.xToBeat(x)));
+    const row = this.rowAt(y)?.row ?? null;
+    const target = row !== null && (isLightRow(row) || row.kind === 'raw') ? row : null;
+    const at3 = String(Math.round(at * 1000) / 1000);
+    showMenu(clientX, clientY, [
+      { label: `Вставить (${String(info.count)}) на долю ${at3}`, heading: true },
+      {
+        label: target === null ? 'В эту строку' : `В строку «${target.label}»`,
+        hint: info.rows > 1 ? `${String(info.rows)} строки — с неё вниз` : 'сюда',
+        disabled: target === null,
+        action: () => target !== null && editor.paste(at, target.key),
+      },
+      { label: 'Как было — в свои строки', hint: 'Ctrl+V — у курсора песни', action: () => editor.paste(at) },
+    ]);
+  }
+
   /** What can be done with the picked stretch of the song. */
   private rangeMenu(x: number, y: number) {
     const editor = this.editor;
@@ -1679,6 +1701,7 @@ export class Timeline {
       if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) {
         const hit = this.hit(x, y);
         if (hit !== null && this.editor.selection.has(hitId(hit))) this.selectionMenu(event.clientX, event.clientY);
+        else if (hit === null) this.pasteMenu(event.clientX, event.clientY, x, y);
         return;
       }
       const beat = this.xToBeat(x);
