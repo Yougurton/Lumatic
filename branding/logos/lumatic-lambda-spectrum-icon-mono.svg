@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="t d">
+  <title id="t">Lumatic</title>
+  <desc id="d">The Greek letter lambda drawn by laser beams in many colours meeting over a stage (one colour)</desc>
+  <g stroke-linecap="round">
+    <line x1="30" y1="106" x2="41.62" y2="32.92" stroke="#f4f6fb" stroke-width="2.6" opacity="0.6"/>
+    <line x1="30" y1="106" x2="25.58" y2="42.15" stroke="#f4f6fb" stroke-width="2" opacity="0.45"/>
+    <line x1="98" y1="106" x2="86.38" y2="32.92" stroke="#f4f6fb" stroke-width="2.6" opacity="0.6"/>
+    <line x1="98" y1="106" x2="102.42" y2="42.15" stroke="#f4f6fb" stroke-width="2" opacity="0.45"/>
+    <line x1="30" y1="106" x2="68.76" y2="10.24" stroke="#f4f6fb" stroke-width="5.5"/>
+    <line x1="98" y1="106" x2="59.24" y2="10.24" stroke="#f4f6fb" stroke-width="8"/>
+  </g>
+  <circle cx="30" cy="106" r="5" fill="#f4f6fb"/>
+  <circle cx="98" cy="106" r="6" fill="#f4f6fb"/>
+</svg>

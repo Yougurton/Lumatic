@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="t d">
+  <title id="t">Lumatic</title>
+  <desc id="d">A four-pointed sparkle, each arm a different colour, white at its heart</desc>
+  <defs>
+    <filter id="fs" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="cs" cx="64" cy="64" r="13" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f4f6fb"/><stop offset="0.5" stop-color="#f4f6fb" stop-opacity="0.7"/><stop offset="1" stop-color="#f4f6fb" stop-opacity="0"/></radialGradient>
+    <linearGradient id="arm0" gradientUnits="userSpaceOnUse" x1="64" y1="64" x2="64" y2="14"><stop offset="0" stop-color="#f4f6fb"/><stop offset="0.2" stop-color="#ffd84a"/><stop offset="1" stop-color="#ffd84a"/></linearGradient>
+    <linearGradient id="arm1" gradientUnits="userSpaceOnUse" x1="64" y1="64" x2="114" y2="64"><stop offset="0" stop-color="#f4f6fb"/><stop offset="0.2" stop-color="#3dc8ff"/><stop offset="1" stop-color="#3dc8ff"/></linearGradient>
+    <linearGradient id="arm2" gradientUnits="userSpaceOnUse" x1="64" y1="64" x2="64" y2="114"><stop offset="0" stop-color="#f4f6fb"/><stop offset="0.2" stop-color="#8f6bff"/><stop offset="1" stop-color="#8f6bff"/></linearGradient>
+    <linearGradient id="arm3" gradientUnits="userSpaceOnUse" x1="64" y1="64" x2="14" y2="64"><stop offset="0" stop-color="#f4f6fb"/><stop offset="0.2" stop-color="#ff4f8b"/><stop offset="1" stop-color="#ff4f8b"/></linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#0e0f13"/>
+  <g filter="url(#fs)">
+    <path d="M64 64 L51.98 51.98 Q64 44.45 64 14 Q64 44.45 76.02 51.98Z" fill="url(#arm0)"/>
+    <path d="M64 64 L76.02 51.98 Q83.55 64 114 64 Q83.55 64 76.02 76.02Z" fill="url(#arm1)"/>
+    <path d="M64 64 L76.02 76.02 Q64 83.55 64 114 Q64 83.55 51.98 76.02Z" fill="url(#arm2)"/>
+    <path d="M64 64 L51.98 76.02 Q44.45 64 14 64 Q44.45 64 51.98 51.98Z" fill="url(#arm3)"/>
+  </g>
+  <circle cx="64" cy="64" r="13" fill="url(#cs)"/>
+</svg>
