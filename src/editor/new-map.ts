@@ -6,6 +6,7 @@ import type { BpmResult } from './bpm-detect';
 import { createMapFolder, type MapFolder } from './platform';
 import { previewPicker, type PreviewPicker } from './song-picker';
 import { computeSpectrogram } from './spectrogram';
+import { settings as editorSettings } from './settings';
 
 /**
  * "New map": a song (any audio file) → a map folder Beat Saber opens — the song as Ogg Vorbis
@@ -69,7 +70,7 @@ export function infoText(settings: NewMapSettings, difficultyFile: string, songF
       _environmentName: settings.environment,
       _allDirectionsEnvironmentName: 'GlassDesertEnvironment',
       _songTimeOffset: 0,
-      _customData: { _editors: { _lastEditedBy: 'ChroEditor', ChroEditor: { version: '0.4.0' } } },
+      _customData: { _editors: { _lastEditedBy: 'Lumatic', Lumatic: { version: __APP_VERSION__ } } },
       _difficultyBeatmapSets: [
         {
           _beatmapCharacteristicName: 'Standard',
@@ -91,8 +92,9 @@ export function infoText(settings: NewMapSettings, difficultyFile: string, songF
   );
 }
 
-/** An empty v3 difficulty. */
-export function emptyDifficulty() {
+/** An empty difficulty: v3, or v2 (the settings' format for new maps). */
+export function emptyDifficulty(format: '2' | '3' = '3') {
+  if (format === '2') return JSON.stringify({ _version: '2.6.0', _notes: [], _obstacles: [], _events: [], _waypoints: [], _customData: {} });
   return JSON.stringify({
     version: '3.3.0',
     bpmEvents: [],
@@ -549,7 +551,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
           const difficultyFile = `${settings.difficulty}Standard.dat`;
           await folder.writeBinary('song.ogg', ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
           await folder.writeBinary('cover.jpg', await coverJpeg(cover, settings.title, settings.artist));
-          await folder.writeText(difficultyFile, emptyDifficulty());
+          await folder.writeText(difficultyFile, emptyDifficulty(editorSettings().newFormat));
           await folder.writeText('Info.dat', infoText(settings, difficultyFile, 'song.ogg', 'cover.jpg'));
           await folder.refresh();
           try {

@@ -92,7 +92,8 @@ export interface RawEvent {
 }
 
 export interface Project {
-  format: 'chroeditor';
+  /** ('chroeditor': written when the editor was called ChroEditor) */
+  format: 'lumatic' | 'chroeditor';
   version: 1;
   /** The difficulty file it belongs to. */
   difficulty: string;

@@ -15,7 +15,7 @@ export async function convertMapFolder(editor: Editor, status: (text: string) =>
   const to = from === '4' ? '3' : '4';
   const note =
     to === '4'
-      ? 'В v4 у Chroma и Noodle поддержка неполная, а ChroEditor пока сохраняет только v2/v3: карту v4 можно смотреть, но править свет лучше в v3.'
+      ? 'В v4 у Chroma и Noodle поддержка неполная, а Lumatic пока сохраняет только v2/v3: карту v4 можно смотреть, но править свет лучше в v3.'
       : 'Свет и ноты переносятся полностью; кривые переходов цвета групп света (easing) в v3 станут линейными.';
   if (!window.confirm(`Перевести карту в формат v${to}? Будет сделана копия в новой папке, эта карта останется как есть.\n\n${note}`)) return false;
   if (editor.dirty) {

@@ -14,6 +14,9 @@ export interface MapFolder {
   writeBinary(name: string, data: ArrayBuffer): Promise<void>;
   /** Re-reads the list of files. */
   refresh(): Promise<void>;
+  /** A copy of a file in the map's "Lumatic backups" folder, keeping that many copies of it (only in
+   *  the desktop app). */
+  backup?(name: string, keep: number): Promise<void>;
 }
 
 interface NativeApi {
@@ -21,6 +24,13 @@ interface NativeApi {
   listFolder(path: string): Promise<string[]>;
   readFile(path: string): Promise<ArrayBuffer>;
   writeFile(path: string, data: ArrayBuffer | string): Promise<void>;
+  /** A copy of a file of an opened folder in its "Lumatic backups" folder, the oldest copies of that
+   *  file past `keep` deleted. */
+  backupFile?(path: string, keep: number): Promise<void>;
+  /** The language of the window's own questions (closing with unsaved changes, picking folders). */
+  setLanguage?(language: string): void;
+  /** The whole window's scale. */
+  setZoom?(factor: number): void;
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
@@ -52,6 +62,7 @@ function nativeFolder(native: NativeApi, opened: { path: string; files: string[]
     readBinary: (name) => native.readFile(joinPath(opened.path, name)),
     writeText: (name, text) => native.writeFile(joinPath(opened.path, name), text),
     writeBinary: (name, data) => native.writeFile(joinPath(opened.path, name), data),
+    backup: (name, keep) => native.backupFile?.(joinPath(opened.path, name), keep) ?? Promise.resolve(),
     refresh: async () => {
       folder.files = await native.listFolder(opened.path);
     },

@@ -47,6 +47,7 @@ import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
+import { settings } from './settings';
 import { chromaCustomData, cloneRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
@@ -224,7 +225,20 @@ export class Editor {
 
   /** Where the song is now (map beats). */
   playhead() {
-    return this.clock === null ? 0 : this.secondsToBeat(this.clock.currentTime());
+    return this.clock === null ? 0 : this.secondsToBeat(this.shownSeconds());
+  }
+
+  /** Where the song is in the sound being played (seconds; `playhead` waits for the sound by the
+   *  settings' latency while playing). */
+  songSeconds() {
+    return this.clock?.currentTime() ?? 0;
+  }
+
+  /** Where the song is in what's shown (seconds): the sound's place, less the latency while playing. */
+  private shownSeconds() {
+    const clock = this.clock;
+    if (clock === null) return 0;
+    return clock.isPlaying() ? Math.max(0, clock.currentTime() - (settings().latency / 1000) * this.rate) : clock.currentTime();
   }
 
   get endBeat() {
@@ -354,6 +368,7 @@ export class Editor {
     this.mapNoodle = difficulty.noodle;
     this.ringParentKey = '';
     this.preview.setNoodle(difficulty.noodle);
+    this.preview.setObjects(difficulty);
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);
@@ -380,7 +395,7 @@ export class Editor {
     else {
       const lastBeat = Math.max(0, ...difficulty.events.map((event) => event.jsonTime), ...difficulty.notes.map((note) => note.jsonTime));
       const { clips, raw } = importEvents(difficulty.events, this.lightsByType, lastBeat + 8, this.songBpm / 60);
-      this.project = { format: 'chroeditor', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [], bookmarks: fileBookmarks };
+      this.project = { format: 'lumatic', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [], bookmarks: fileBookmarks };
     }
     this.selection.clear();
     this.lightSelection.clear();
@@ -388,6 +403,7 @@ export class Editor {
     this.openEffect = null;
     this.previewExtra = null;
     this.activeRow = null;
+    this.snap = settings().grid;
     this.undoStack = [];
     this.redoStack = [];
     this.dirty = false;
@@ -420,8 +436,10 @@ export class Editor {
     if (map.parsed.mapMeta.songTimeOffset !== 0) this.clock.setAudioOffset(map.parsed.mapMeta.songTimeOffset);
     this.duration = this.clock.duration;
     if (this.rate !== 1) this.clock.setRate(this.rate);
+    this.clock.setVolume(settings().volume);
     const clock = this.clock;
-    this.preview.setBeatSource(() => clock.currentBeat());
+    // (the 3D view waits for the sound too: the latency in the song's own beats)
+    this.preview.setBeatSource(() => clock.currentBeat() - (clock.isPlaying() ? ((settings().latency / 1000) * this.rate * this.songBpm) / 60 : 0));
     this.emit('all');
     // (the spectrogram comes when it's ready)
     this.spectrogram = null;
@@ -600,6 +618,8 @@ export class Editor {
     const changes = hasMods(mods) || !isEmptyFragment(project.writtenEnvironment) ? { previous: project.writtenEnvironment, next: fragment } : undefined;
     const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks, changes);
     if (changes !== undefined) project.writtenEnvironment = isEmptyFragment(fragment) ? undefined : fragment;
+    // (a copy of the difficulty as it was, in the map's "Lumatic backups" — when the settings keep any)
+    if (settings().backups > 0) await map.folder.backup?.(file, settings().backups).catch((error: unknown) => console.error('[lumatic] backup failed', error));
     await map.folder.writeText(file, text);
     const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
     if (infoName !== undefined) {
@@ -1638,6 +1658,11 @@ export class Editor {
   }
 
   private trying: { state: string; selection: string[] } | null = null;
+
+  /** Something is being tried in a window (startTrying … finishTrying). */
+  isTrying() {
+    return this.trying !== null;
+  }
 
   /** Trying out a change (the dialogs of the light and of the hits): one undo step for all the
    *  tries, each try made on the clips as they were. */

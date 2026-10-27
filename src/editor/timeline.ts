@@ -10,6 +10,7 @@ import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { groupHue, lightGroupName } from './names';
 import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
+import { settings } from './settings';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
@@ -154,6 +155,8 @@ export class Timeline {
   private drag: Drag | null = null;
   private needsDraw = true;
   private hover: { x: number; y: number } | null = null;
+  /** The wheel turned so far towards the next grid step (the wheel moving the song cursor). */
+  private cursorWheel = 0;
   private followPlayhead = true;
   private headerKey = '';
   /** How the spectrogram is shown (kept between sessions). */
@@ -177,7 +180,7 @@ export class Timeline {
     const loop = () => {
       if (this.editor.isPlaying()) {
         this.needsDraw = true;
-        if (this.followPlayhead) {
+        if (this.followPlayhead && settings().follow) {
           const beat = this.editor.playhead();
           const width = this.trackWidth / this.pxPerBeat;
           if (beat > this.viewStart + width * 0.85 || beat < this.viewStart) this.viewStart = beat - width * 0.15;
@@ -1114,7 +1117,7 @@ export class Timeline {
         disabled: target === null,
         action: () => target !== null && editor.paste(at, target.key),
       },
-      { label: 'Как было — в свои строки', hint: 'Ctrl+V — у курсора песни', action: () => editor.paste(at) },
+      { label: 'Как было — в свои строки', hint: settings().paste === 'own' ? 'Ctrl+V — у курсора песни' : '', action: () => editor.paste(at) },
     ]);
   }
 
@@ -1736,8 +1739,20 @@ export class Timeline {
       } else if (event.shiftKey || x < GUTTER) {
         // (Shift+wheel comes as a sideways wheel on some systems)
         this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
+      } else if (settings().wheel === 'cursor' && event.deltaX === 0) {
+        // (as in ChroMapper: the wheel moves the song cursor a grid step — up: later in the song)
+        this.cursorWheel += event.deltaY * settings().wheelSpeed;
+        if (Math.abs(this.cursorWheel) >= 40) {
+          const editor = this.editor;
+          const step = editor.snap || 0.25;
+          const beat = Math.max(0, editor.snapBeat(editor.playhead()) + (this.cursorWheel < 0 ? step : -step));
+          this.cursorWheel = 0;
+          editor.seek(beat);
+          const width = this.trackWidth / this.pxPerBeat;
+          if (beat > this.viewStart + width * 0.9 || beat < this.viewStart) this.viewStart = beat - width * 0.5;
+        }
       } else {
-        this.viewStart += ((event.deltaX !== 0 ? event.deltaX : event.deltaY) / this.pxPerBeat) * 0.9;
+        this.viewStart += ((event.deltaX !== 0 ? event.deltaX : event.deltaY) / this.pxPerBeat) * 0.9 * settings().wheelSpeed;
         this.followPlayhead = false;
       }
       this.needsDraw = true;
@@ -2208,6 +2223,15 @@ export class Timeline {
 
   hoverBeat() {
     return this.hover === null ? null : this.xToBeat(this.hover.x);
+  }
+
+  /** Where the mouse is over the timeline's rows: its beat, and the light (or other events') row under
+   *  it if any; null when it's elsewhere. */
+  pointer(): { beat: number; row: string | null } | null {
+    const hover = this.hover;
+    if (hover === null || hover.x < GUTTER || hover.x > this.width || hover.y < this.rowsTop || hover.y >= this.rowsBottom) return null;
+    const row = this.rowAt(hover.y)?.row;
+    return { beat: Math.max(0, this.xToBeat(hover.x)), row: row !== undefined && (isLightRow(row) || row.kind === 'raw') ? row.key : null };
   }
 }
 

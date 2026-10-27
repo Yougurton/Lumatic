@@ -12,7 +12,8 @@ import type { MapFolder } from './platform';
  * A map folder in and out: Info.dat and its difficulties read with ChroPaper's parsers; a
  * difficulty written back in its own format (v2 or v3) with its events replaced by the editor's —
  * notes, walls and everything else in the file stay exactly as they were. The editor's own work
- * (clips, layers, groups) goes next to it in "<difficulty>.chroeditor.json".
+ * (clips, layers, groups) goes next to it in "<difficulty>.lumatic.json" (read from
+ * "<difficulty>.chroeditor.json" too — the name it had when the editor was ChroEditor).
  */
 
 export interface LoadedMap {
@@ -42,15 +43,18 @@ export function difficultyFile(row: DifficultyRow): string {
 }
 
 export function projectFileName(difficulty: string) {
-  return `${difficulty.replace(/\.(dat|json)$/iu, '')}.chroeditor.json`;
+  return `${difficulty.replace(/\.(dat|json)$/iu, '')}.lumatic.json`;
 }
 
+const formerProjectFileName = (difficulty: string) => `${difficulty.replace(/\.(dat|json)$/iu, '')}.chroeditor.json`;
+
 export async function loadProject(folder: MapFolder, difficulty: string): Promise<Project | null> {
-  const name = projectFileName(difficulty);
-  if (!folder.files.includes(name)) return null;
+  const name = [projectFileName(difficulty), formerProjectFileName(difficulty)].find((file) => folder.files.includes(file));
+  if (name === undefined) return null;
   try {
     const project = JSON.parse(await folder.readText(name)) as Project;
-    return project.format === 'chroeditor' ? project : null;
+    if (project.format !== 'lumatic' && project.format !== 'chroeditor') return null;
+    return { ...project, format: 'lumatic' };
   } catch {
     return null;
   }

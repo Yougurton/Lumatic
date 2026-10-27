@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="color-scheme" content="dark" />
-    <title>ChroEditor</title>
+    <title>Lumatic</title>
     <link rel="icon" href="data:," />
     <style>
       :root {
@@ -835,6 +835,72 @@
         padding: 6px 8px;
         font: inherit;
       }
+      .settings-dialog {
+        width: min(760px, 96vw);
+        max-height: 92vh;
+        display: flex;
+        flex-direction: column;
+      }
+      .set-body {
+        display: grid;
+        grid-template-columns: 170px 1fr;
+        gap: 16px;
+        min-height: 340px;
+        overflow: hidden;
+      }
+      .set-tabs {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .set-tabs button {
+        text-align: left;
+      }
+      .set-tabs button.active {
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .set-main {
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding-right: 4px;
+      }
+      .set-row {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        align-items: center;
+        gap: 4px 12px;
+      }
+      .set-row > .set-hint {
+        grid-column: 2;
+        white-space: normal;
+      }
+      .set-name {
+        color: var(--text);
+      }
+      .set-row .steps-buttons {
+        flex-wrap: wrap;
+      }
+      .set-slider {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .set-slider input {
+        flex: 1;
+      }
+      .ce-dialog input.set-number {
+        width: 110px;
+      }
+      .set-restart {
+        margin-top: 10px;
+        white-space: normal;
+      }
+      .set-restart button {
+        margin-left: 6px;
+      }
       .ce-dialog-buttons {
         display: flex;
         justify-content: flex-end;
@@ -1655,7 +1721,7 @@
         <button id="zoom-out" title="Отдалить (Ctrl+колесо)">−</button>
         <button id="zoom-fit" title="Вся песня">⇔</button>
         <button id="zoom-in" title="Приблизить (Ctrl+колесо)">+</button>
-        <button id="hotkeys" title="Горячие клавиши: посмотреть и назначить свои">⌨</button>
+        <button id="app-settings" title="Настройки: язык, вставка, вид, звук, сохранение, горячие клавиши">⚙</button>
         <span class="grow"></span>
       </header>
       <section id="main">

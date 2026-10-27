@@ -24,7 +24,9 @@ export interface MapColors {
 }
 
 /** The name of the scheme the editor writes (found again by it). */
-const SCHEME = 'ChroEditor';
+const SCHEME = 'Lumatic';
+/** (the name written before, when the editor was ChroEditor) */
+const OURS = new Set([SCHEME, 'ChroEditor']);
 
 export function schemeOf(colors: MapColors): InfoColorScheme {
   return {
@@ -92,7 +94,7 @@ type Json = Record<string, unknown>;
 export function readMapColors(text: string): MapColors | null {
   const info = JSON.parse(text) as Json;
   if (typeof info.version === 'string' && info.version.startsWith('4')) {
-    const scheme = ((info.colorSchemes ?? []) as Json[]).find((item) => item.colorSchemeName === SCHEME);
+    const scheme = ((info.colorSchemes ?? []) as Json[]).find((item) => OURS.has(String(item.colorSchemeName)));
     if (scheme === undefined) return null;
     const get = (key: string, fallback: Rgb) => fromHex(scheme[key]) ?? fallback;
     const left = get('environmentColor0', [1, 0, 0]);
@@ -100,7 +102,7 @@ export function readMapColors(text: string): MapColors | null {
     const white = get('environmentColorW', [0.7, 0.7, 0.7]);
     return { left, right, white, leftBoost: get('environmentColor0Boost', left), rightBoost: get('environmentColor1Boost', right), whiteBoost: get('environmentColorWBoost', white), notes: scheme.overrideNotes === true, leftNote: get('saberAColor', left), rightNote: get('saberBColor', right), obstacle: get('obstaclesColor', right) };
   }
-  const scheme = ((info._colorSchemes ?? []) as Json[]).find((item) => (item.colorScheme as Json | undefined)?.colorSchemeId === SCHEME);
+  const scheme = ((info._colorSchemes ?? []) as Json[]).find((item) => OURS.has(String((item.colorScheme as Json | undefined)?.colorSchemeId)));
   if (scheme !== undefined) {
     const colors = scheme.colorScheme as Json;
     const get = (key: string, fallback: Rgb) => fromObject(colors[key]) ?? fallback;
@@ -130,7 +132,7 @@ export function writeMapColors(text: string, colors: MapColors | null): string {
   const info = JSON.parse(text) as Json;
   if (typeof info.version === 'string' && info.version.startsWith('4')) {
     const schemes = ((info.colorSchemes ?? []) as Json[]).slice();
-    const at = schemes.findIndex((item) => item.colorSchemeName === SCHEME);
+    const at = schemes.findIndex((item) => OURS.has(String(item.colorSchemeName)));
     const entries = (info.difficultyBeatmaps ?? []) as Json[];
     if (colors === null) {
       if (at >= 0) {
@@ -169,7 +171,7 @@ export function writeMapColors(text: string, colors: MapColors | null): string {
   const difficulties = ((info._difficultyBeatmapSets ?? []) as Json[]).flatMap((set) => (set._difficultyBeatmaps ?? []) as Json[]);
   if (schemed) {
     const schemes = (info._colorSchemes as Json[]).slice();
-    const at = schemes.findIndex((item) => (item.colorScheme as Json | undefined)?.colorSchemeId === SCHEME);
+    const at = schemes.findIndex((item) => OURS.has(String((item.colorScheme as Json | undefined)?.colorSchemeId)));
     if (colors === null) {
       if (at >= 0) {
         schemes.splice(at, 1);

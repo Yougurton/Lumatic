@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { backupFile } from './backup';
 
 /**
- * ChroEditor's window. The page (dist/) is served from app://local so it can fetch its environment
+ * Lumatic's window (the editor was called ChroEditor before). The page (dist/) is served from app://local so it can fetch its environment
  * data like a website; map folders are read and written through IPC (preload.ts), and only inside
  * folders the user opened.
  */
@@ -15,6 +16,15 @@ protocol.registerSchemesAsPrivileged([
 
 const distRoot = path.join(__dirname, '..', 'dist');
 const allowedRoots = new Set<string>();
+// (settings, recent folders and the rest of the page's storage stay where ChroEditor kept them)
+{
+  const before = path.join(app.getPath('appData'), 'ChroEditor');
+  if (existsSync(before)) app.setPath('userData', before);
+}
+// the window's own questions in the editor's language (the page says which)
+let english = false;
+const say = (russian: string, englishText: string) => (english ? englishText : russian);
+
 const recentFile = () => path.join(app.getPath('userData'), 'recent-folders.json');
 
 function allowed(target: string) {
@@ -59,7 +69,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#101114',
-    title: 'ChroEditor',
+    title: 'Lumatic',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -96,10 +106,10 @@ function createWindow() {
       if (unsaved !== null) {
         const { response } = await dialog.showMessageBox(window, {
           type: 'question',
-          title: 'ChroEditor',
-          message: 'Сохранить изменения перед выходом?',
+          title: 'Lumatic',
+          message: say('Сохранить изменения перед выходом?', 'Save the changes before quitting?'),
           detail: unsaved,
-          buttons: ['Сохранить', 'Не сохранять', 'Отмена'],
+          buttons: [say('Сохранить', 'Save'), say('Не сохранять', "Don't save"), say('Отмена', 'Cancel')],
           defaultId: 0,
           cancelId: 2,
           noLink: true,
@@ -108,7 +118,7 @@ function createWindow() {
         if (response === 0) {
           const saved = (await window.webContents.executeJavaScript('window.chroeditorSave ? window.chroeditorSave() : false').catch(() => false)) as boolean;
           if (!saved) {
-            await dialog.showMessageBox(window, { type: 'error', title: 'ChroEditor', message: 'Не получилось сохранить — окно остаётся открытым.', buttons: ['OK'] });
+            await dialog.showMessageBox(window, { type: 'error', title: 'Lumatic', message: say('Не получилось сохранить — окно остаётся открытым.', "Couldn't save — the window stays open."), buttons: ['OK'] });
             return;
           }
         }
@@ -131,7 +141,7 @@ void app.whenReady().then(() => {
   });
 
   ipcMain.handle('open-folder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: 'Папка карты (с Info.dat)' });
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: say('Папка карты (с Info.dat)', 'Map folder (with Info.dat)') });
     if (result.canceled || result.filePaths[0] === undefined) return null;
     return openFolder(result.filePaths[0]);
   });
@@ -149,8 +159,8 @@ void app.whenReady().then(() => {
     const recent = await readRecent();
     const parent = recent[0] === undefined ? app.getPath('documents') : path.dirname(recent[0]);
     const result = await dialog.showSaveDialog({
-      title: 'Папка новой карты',
-      buttonLabel: 'Создать',
+      title: say('Папка новой карты', "The new map's folder"),
+      buttonLabel: say('Создать', 'Create'),
       defaultPath: path.join(parent, suggested),
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     });
@@ -158,7 +168,7 @@ void app.whenReady().then(() => {
     const folder = result.filePath;
     await fs.mkdir(folder, { recursive: true });
     const existing = await listFolder(folder);
-    if (existing.some((name) => name.toLowerCase() === 'info.dat')) throw new Error('В этой папке уже есть карта (Info.dat)');
+    if (existing.some((name) => name.toLowerCase() === 'info.dat')) throw new Error(say('В этой папке уже есть карта (Info.dat)', 'This folder already has a map (Info.dat)'));
     return openFolder(folder);
   });
   ipcMain.handle('list-folder', async (_event, folder: string) => {
@@ -173,6 +183,13 @@ void app.whenReady().then(() => {
   ipcMain.handle('write-file', async (_event, file: string, data: ArrayBuffer | string) => {
     if (!allowed(file)) throw new Error('not in an opened folder');
     await fs.writeFile(file, typeof data === 'string' ? data : Buffer.from(data));
+  });
+  ipcMain.handle('backup-file', async (_event, file: string, keep: number) => {
+    if (!allowed(file)) throw new Error('not in an opened folder');
+    await backupFile(file, keep);
+  });
+  ipcMain.on('set-language', (_event, language: string) => {
+    english = language === 'en';
   });
 
   createWindow();

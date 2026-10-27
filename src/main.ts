@@ -13,9 +13,16 @@ import { Preview } from './editor/preview';
 import { MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
 import { adjustDialog } from './editor/adjust-dialog';
 import { actionFor, comboOf } from './editor/hotkeys';
-import { hotkeysDialog } from './editor/hotkeys-dialog';
 import { ask } from './editor/menu';
 import type { StartMode } from './editor/model';
+import { installTranslation, language, tr } from './editor/i18n';
+import { Clicks } from './editor/clicks';
+import { onSettings, settings } from './editor/settings';
+import { settingsDialog } from './editor/settings-dialog';
+
+// (in English: everything shown from here on goes through the dictionary)
+installTranslation();
+window.chroeditorNative?.setLanguage?.(language());
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -70,7 +77,7 @@ function refreshToolbar() {
 function tick() {
   editor.tickTrial();
   const seconds = editor.clock?.currentTime() ?? 0;
-  timeLabel.textContent = `${formatTime(seconds)} · доля ${editor.playhead().toFixed(3)}`;
+  timeLabel.textContent = tr('{0} · доля {1}', formatTime(seconds), editor.playhead().toFixed(3));
   playButton.textContent = editor.isPlaying() ? '❚❚' : '▶';
   requestAnimationFrame(tick);
 }
@@ -156,6 +163,76 @@ async function save() {
   }
 }
 
+// ----- the settings (settings.ts): what applies at once, the window, a restart for the rest ----------
+
+new Clicks(editor);
+const applyScale = () => window.chroeditorNative?.setZoom?.(settings().uiScale);
+applyScale();
+onSettings((now, before) => {
+  if (now.volume !== before.volume) editor.clock?.setVolume(now.volume);
+  if (now.uiScale !== before.uiScale) applyScale();
+  if (now.notes !== before.notes) editor.rebuildPreview(true);
+  if (now.paste !== before.paste || now.follow !== before.follow) timeline.redraw();
+});
+
+/** The editor started again (the language, the reflections): with the same map and difficulty open
+ *  when it can be (the desktop app), the changes saved first if the user wants. */
+async function restart() {
+  if (editor.dirty) {
+    if (!window.confirm('Сохранить изменения и перезапустить редактор?')) return;
+    await save();
+    if (editor.dirty) return;
+  }
+  try {
+    if (editor.map !== null && isDesktop()) sessionStorage.setItem(REOPEN, JSON.stringify({ folder: editor.map.folder.name, difficulty: editor.row?.key ?? '' }));
+  } catch {
+    // (opened again by hand then)
+  }
+  window.location.reload();
+}
+const REOPEN = 'lumatic.reopen';
+{
+  let again: { folder: string; difficulty: string } | null = null;
+  try {
+    again = JSON.parse(sessionStorage.getItem(REOPEN) ?? 'null') as typeof again;
+    sessionStorage.removeItem(REOPEN);
+  } catch {
+    again = null;
+  }
+  if (again !== null) {
+    const { folder, difficulty } = again;
+    void openRecentFolder(folder)
+      .then(openFolder)
+      .then(async () => {
+        const row = editor.difficulties().find((item) => item.key === difficulty);
+        if (row !== undefined && row !== editor.row) await editor.openDifficulty(row);
+      });
+  }
+}
+byId('app-settings').addEventListener('click', () => settingsDialog(() => void restart()));
+
+// saved by itself every so many minutes while there are changes (not while a window is open or
+// something is being tried)
+{
+  let dirtySince: number | null = null;
+  let saving = false;
+  window.setInterval(() => {
+    const minutes = settings().autosave;
+    if (!editor.dirty || editor.project === null || minutes <= 0) {
+      dirtySince = null;
+      return;
+    }
+    dirtySince ??= Date.now();
+    const busy = saving || document.querySelector('.ce-shade') !== null || editor.previewExtra !== null || editor.isTrying();
+    if (busy || Date.now() - dirtySince < minutes * 60_000) return;
+    saving = true;
+    void save().finally(() => {
+      saving = false;
+      dirtySince = null;
+    });
+  }, 5000);
+}
+
 // the keys (hotkeys.ts: by their place on the keyboard — with a Russian layout Ctrl+Z is Ctrl+Я; the
 // user's own from "⌨")
 const brushStart = (mode: StartMode, name: string) => {
@@ -217,7 +294,14 @@ const ACTIONS_RUN: Record<string, () => void> = {
     editor.copy();
     editor.deleteSelection();
   },
-  paste: () => editor.paste(editor.snapBeat(editor.playhead())),
+  paste: () => {
+    // (as the settings say: into the rows the events came from or the row under the mouse — the picked
+    // row when the mouse isn't over the timeline; at the song cursor or the mouse)
+    const { paste, pasteAt } = settings();
+    const over = timeline.pointer();
+    const at = editor.snapBeat(pasteAt === 'mouse' && over !== null ? over.beat : editor.playhead());
+    editor.paste(at, paste === 'row' ? (over?.row ?? editor.libraryRow()?.key ?? null) : null);
+  },
   duplicate: () => editor.duplicateSelection(),
   delete: () => editor.deleteSelection(),
   selectAll: () => editor.selectAll(),
@@ -281,7 +365,6 @@ window.addEventListener('keydown', (event) => {
   ACTIONS_RUN[action]?.();
   event.preventDefault();
 });
-byId('hotkeys').addEventListener('click', () => void hotkeysDialog());
 
 // (a clicked button gives the focus back: Space is play, not "press that button again")
 document.addEventListener('click', (event) => {

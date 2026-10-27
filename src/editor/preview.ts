@@ -1,5 +1,6 @@
+import { onSettings, settings } from './settings';
 import type { InfoColorScheme } from '../engine/core/beatmap/info';
-import { createDifficulty, type BasicEvent, type BpmEvent } from '../engine/core/beatmap/types';
+import { createDifficulty, type BasicEvent, type BpmEvent, type Difficulty } from '../engine/core/beatmap/types';
 import type { NoodleBeatmapData } from '../engine/core/noodle-data';
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
 import type { ChromaEnvironmentData } from '../engine/core/chroma-environment';
@@ -34,12 +35,20 @@ export class Preview {
 
   constructor(canvas: HTMLCanvasElement) {
     this.lifecycle.attach(canvas);
-    this.view = new MapView({ mirrorQuality: 'medium' });
+    // (the floor's reflections are made with the view: a change waits for a restart)
+    this.view = new MapView({ mirrorQuality: settings().mirror });
     this.lifecycle.setView(this.view);
-    this.view.setLightshowMode('full-lightshow');
-    this.view.setShowPlayerPlatform(true);
-    this.view.setScreenDisplacementEffects(true);
+    this.applySettings();
+    onSettings(() => this.applySettings());
     this.view.setReplayCameraSettings({ ...DEFAULT_REPLAY_CAMERA_SETTINGS });
+  }
+
+  /** The settings' 3D view: the platform, the screen distortion, the notes and walls. */
+  private applySettings() {
+    const { platform, distortion, notes } = settings();
+    this.view.setLightshowMode(notes ? 'full' : 'full-lightshow');
+    this.view.setShowPlayerPlatform(platform);
+    this.view.setScreenDisplacementEffects(distortion);
   }
 
   setTiming(songBpm: number, bpmEvents: BpmEvent[], colorScheme: InfoColorScheme | undefined) {
@@ -83,12 +92,20 @@ export class Preview {
     this.noodle = noodle;
   }
 
+  /** The difficulty's notes, walls, arcs and chains: shown when the settings ask for them. */
+  private objects: Pick<Difficulty, 'notes' | 'obstacles' | 'arcs' | 'chains'> | null = null;
+
+  setObjects(difficulty: Difficulty | null) {
+    this.objects = difficulty === null ? null : { notes: difficulty.notes, obstacles: difficulty.obstacles, arcs: difficulty.arcs, chains: difficulty.chains };
+  }
+
   /** The lightshow as events (jsonTime beats). */
   setEvents(events: readonly OutEvent[]) {
     const toSong = createBpmConverter(this.bpmEvents, this.songBpm);
     const difficulty = createDifficulty('3.3.0');
     difficulty.bpmEvents = this.bpmEvents;
     if (this.noodle !== null) difficulty.noodle = this.noodle;
+    if (this.objects !== null && settings().notes) Object.assign(difficulty, this.objects);
     difficulty.events = events.map((event): BasicEvent => {
       const customData: Record<string, unknown> = { ...(event.customData ?? {}) };
       if (event.color !== undefined) customData.color = event.color;
