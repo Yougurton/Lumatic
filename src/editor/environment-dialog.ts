@@ -2,6 +2,7 @@ import type { Editor } from './editor';
 import { environmentGallery } from './environment-gallery';
 import { environmentParts, findPreset, fitsV2, modsFragment, ringSystemParts, type EnvironmentMods, type RingLook } from './environment-mods';
 import { difficultyFile, difficultyVersion } from './map-io';
+import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
 
 /**
  * "Environment": a ready-made environment for the map (MadChase's, Phøenix's, Lonely's), or the environment as it is
@@ -26,7 +27,7 @@ export async function environmentDialog(editor: Editor): Promise<void> {
     box.className = 'ce-dialog env-dialog';
     box.innerHTML = `
       <div class="ce-dialog-title">Окружение карты</div>
-      <div class="env-tabs"><button type="button" data-tab="presets">Готовые окружения</button><button type="button" data-tab="parts">Детали и кольца</button></div>
+      <div class="env-tabs"><button type="button" data-tab="presets">Окружения</button><button type="button" data-tab="parts">Детали и кольца</button></div>
       <div class="env-page" data-page="presets"></div>
       <div class="env-page" data-page="parts"></div>
       <div class="nm-status" data-id="status"></div>
@@ -66,16 +67,23 @@ export async function environmentDialog(editor: Editor): Promise<void> {
     const presets = el<HTMLElement>('[data-page="presets"]');
     const note = document.createElement('div');
     note.className = 'nm-dim env-note';
-    note.textContent = 'Окружение целиком из Chroma (у некоторых — и Noodle Extensions): карта будет их требовать. Окружение карты сменится на то, на котором оно построено. Номера света (light ID) — в описании у каждого.';
+    note.textContent = 'Окружения игры — меняют окружение карты (Info.dat). Готовые — окружение целиком из Chroma (у некоторых — и Noodle Extensions): карта будет их требовать. Окружение карты сменится на то, на котором оно построено. Номера света (light ID) — в описании у каждого.';
     presets.append(note);
     presets.append(
       environmentGallery({
         mode: 'apply',
         current: { environment, preset: mods.preset },
-        standard: [],
+        standard: [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS],
         version,
         choose: (choice) => {
           const preset = findPreset(choice.preset);
+          if (preset === undefined && choice.environment !== environment) {
+            // another of the game's environments: the parts taken away and the rings changed were this one's
+            const current = findPreset(mods.preset);
+            const off = current !== undefined ? ` Окружение «${current.name}» будет убрано.` : (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 ? ' Убранные детали и настройки колец сбросятся.' : '';
+            if (window.confirm(`Сменить окружение карты на ${choice.environment}?${off} Карта будет сохранена.`)) void apply({ ...mods, preset: undefined, hidden: [], rings: {} }, choice.environment);
+            return;
+          }
           if (preset === undefined) {
             const current = findPreset(mods.preset);
             if (window.confirm(`Убрать окружение «${current?.name ?? ''}»? Карта будет сохранена.`)) void apply({ ...mods, preset: undefined });

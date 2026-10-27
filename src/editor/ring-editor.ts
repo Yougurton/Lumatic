@@ -2,7 +2,7 @@ import type { Editor } from './editor';
 import { button, check, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { ringSystemName } from './library';
 import { newId } from './model';
-import { dataFirstRing, DEFAULT_STEPS, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, ringObjectNames, SHAPES, stepPoses, zoomPositions, type StepTransition, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { dataFirstRing, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -27,9 +27,6 @@ export class RingEditor {
   private dock: HTMLElement | null = null;
   private blockId = '';
   private poseId: string | null = null;
-  /** The step transition's settings (kept between blocks) and whether its form is open. */
-  private steps: StepTransition = { ...DEFAULT_STEPS };
-  private stepsOpen = false;
   private laneDrag: { id: string; startX: number; moved: boolean; origin: number } | null = null;
   private barDrag: { angles: number[]; last: number | null } | null = null;
   private keyHandler = (event: KeyboardEvent) => this.onKey(event);
@@ -37,7 +34,7 @@ export class RingEditor {
   private raf = 0;
 
   constructor(private readonly editor: Editor) {
-    editor.ringEditorHook = (id, options) => this.open(id, options?.steps === true);
+    editor.ringEditorHook = (id) => this.open(id);
     editor.onChange((what) => {
       if (this.dock === null) return;
       if (this.block() === undefined) {
@@ -72,12 +69,10 @@ export class RingEditor {
     return pose.duration + Math.max(ringDelay(pose, 0, rings), ringDelay(pose, rings - 1, rings));
   }
 
-  /** `steps`: with the step transition's form open. */
-  open(id: string, steps = false) {
+  open(id: string) {
     const block = this.editor.ringBlockById(id);
     if (block === undefined) return;
     this.close();
-    if (steps) this.stepsOpen = true;
     this.blockId = id;
     this.poseId = block.poses[0]?.id ?? null;
     const dock = document.createElement('div');
@@ -164,7 +159,11 @@ export class RingEditor {
 
   /** One change to the block: an undo step, the view updated. */
   private change(patch: (block: RingBlock) => void) {
-    this.editor.updateRingBlock(this.blockId, patch);
+    this.editor.updateRingBlock(this.blockId, (block) => {
+      patch(block);
+      // (changed by hand: no longer the steps it was made from)
+      delete block.steps;
+    });
     this.showPose();
   }
 
@@ -253,7 +252,6 @@ export class RingEditor {
     hint.className = 'gls-note';
     hint.textContent = 'Клик по дорожке — новая поза, перетаскивание — сдвинуть, Delete — удалить. Выбранная поза видна в окне просмотра.';
     col.append(hint);
-    if (!isZoom(block)) col.append(this.stepsForm(block));
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-lane ring-lane';
     col.append(canvas);
@@ -289,49 +287,6 @@ export class RingEditor {
       );
     } else if (!isZoom(block) && block.mode === 'tracks') col.append(this.gameRings());
     return col;
-  }
-
-  /** A turn from one form to another in even steps: the block's poses made anew. */
-  private stepsForm(block: RingBlock) {
-    const box = document.createElement('details');
-    box.className = 'ring-steps';
-    box.open = this.stepsOpen;
-    box.addEventListener('toggle', () => (this.stepsOpen = box.open));
-    const summary = document.createElement('summary');
-    summary.textContent = 'Переход по шагам';
-    summary.title = 'Кольца переходят из начальной формы в конечную за несколько шагов, замирая между ними';
-    box.append(summary);
-    const values = this.steps;
-    const field = (label: string, key: keyof StepTransition, step: number, title: string) => {
-      const wrap = labeled(label, numberInput(values[key], step, (value) => (values[key] = value)));
-      wrap.title = title;
-      return wrap;
-    };
-    const grid = document.createElement('div');
-    grid.className = 'ring-steps-grid';
-    grid.append(
-      field('Угол в начале, °', 'fromAngle', 1, 'Угол первого кольца в начальной форме'),
-      field('Угол в конце, °', 'toAngle', 1, 'Угол первого кольца в конечной форме'),
-      field('Спираль в начале, °', 'fromStep', 1, 'На сколько каждое следующее кольцо повёрнуто дальше (0 — ровно)'),
-      field('Спираль в конце, °', 'toStep', 1, 'То же в конечной форме'),
-      field('Шагов', 'steps', 1, 'За сколько шагов кольца дойдут до конечной формы'),
-      field('Шаг каждые, долей', 'every', this.editor.snap || 0.25, 'Сколько долей от одного шага до следующего'),
-      field('Поворот длится, долей', 'turn', 0.125, 'Скорость: сколько долей длится каждый поворот (0 — сразу)'),
-    );
-    const make = button('Построить позы', 'Заменить позы блока шагами перехода (длина блока — по шагам)', () => {
-      values.steps = Math.max(1, Math.min(64, Math.round(values.steps)));
-      this.change((item) => {
-        item.poses = stepPoses(values);
-        const last = item.poses.at(-1)!;
-        item.end = item.start + Math.max(1, last.beat + last.duration);
-      });
-      this.poseId = this.block()?.poses[0]?.id ?? null;
-      this.render();
-    });
-    make.classList.add('primary');
-    box.append(grid, make);
-    if (block.mode === 'event') box.append(note('Событиями колец: каждый шаг — спираль, как в игре. Повороты по отдельным кольцам — в режиме «Каждое кольцо отдельно».'));
-    return box;
   }
 
   /** Where the game puts its rings for this player (Chroma finds each ring by its place there). */

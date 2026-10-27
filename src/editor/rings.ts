@@ -70,6 +70,8 @@ export interface RingBlock {
   start: number;
   end: number;
   poses: RingPose[];
+  /** Made by "Rings in steps" from these settings (gone once its poses are changed by hand). */
+  steps?: StepTransition;
 }
 
 /** What making ring poses needs to know about the environment's ring systems. */
@@ -176,7 +178,7 @@ export function stepPoses(transition: StepTransition): RingPose[] {
 export function newStepsBlock(system: string, mode: RingBlock['mode'], start: number, transition: StepTransition = DEFAULT_STEPS): RingBlock {
   const poses = stepPoses(transition);
   const length = Math.max(1, poses.at(-1)!.beat + poses.at(-1)!.duration);
-  return { id: newId('k'), name: 'Кольца по шагам', system, mode, start, end: start + length, poses };
+  return { id: newId('k'), name: 'Кольца по шагам', system, mode, start, end: start + length, poses, steps: { ...transition } };
 }
 
 export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {

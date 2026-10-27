@@ -1,10 +1,11 @@
+import { ringStepsDialog } from './ring-steps-dialog';
 import type { SchemeColors } from './bake';
 import type { Editor } from './editor';
 import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectKind, type EffectParams } from './effects';
 import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
-import { newRingBlock, newStepsBlock, newZoomBlock } from './rings';
+import { newRingBlock, newZoomBlock } from './rings';
 
 /**
  * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
@@ -265,19 +266,12 @@ export class Library {
       this.body.append(poses);
     }
     if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
-      // a turn in steps: its block at the cursor, its editor opened on the steps
+      // a turn in steps: a small window of its own, the block at the cursor
       const steps = document.createElement('button');
       steps.className = 'lib-poses';
       steps.textContent = '⟳ Кольца по шагам…';
       steps.title = 'Кольца переходят из начального угла в конечный за несколько шагов: число шагов и скорость поворота настраиваются';
-      steps.addEventListener('click', () => {
-        const editor = this.editor;
-        if (editor.project === null) return;
-        const system = editor.ringInfo.find((item) => editor.geometryRings.has(item.name))?.name ?? editor.ringInfo[0]!.name;
-        const block = newStepsBlock(system, editor.geometryRings.has(system) ? 'tracks' : 'event', editor.snapBeat(editor.playhead()));
-        editor.addRingBlock(block);
-        editor.ringEditorHook?.(block.id, { steps: true });
-      });
+      steps.addEventListener('click', () => ringStepsDialog(this.editor, null));
       this.body.append(steps);
     }
     if (this.tab === 'rings' && this.editor.zoomInfo.length > 0) {

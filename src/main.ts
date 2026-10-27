@@ -1,7 +1,6 @@
 import { Editor } from './editor/editor';
 import { Inspector } from './editor/inspector';
 import { encodeOgg, findBpm } from './editor/audio-tools';
-import { MiniMap } from './editor/minimap';
 import { GlsEditor } from './editor/gls-editor';
 import { RingEditor } from './editor/ring-editor';
 import { Library } from './editor/library';
@@ -19,7 +18,6 @@ const preview = new Preview(byId<HTMLCanvasElement>('preview'));
 const editor = new Editor(preview);
 const timeline = new Timeline(editor, byId('timeline'));
 new Inspector(editor, byId('inspector'));
-new MiniMap(editor, byId<HTMLCanvasElement>('minimap'));
 const library = new Library(editor, byId('library'));
 const presets = library.presets;
 new GlsEditor(editor);

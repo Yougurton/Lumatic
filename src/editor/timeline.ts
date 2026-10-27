@@ -1,5 +1,6 @@
 import { adjustDialog, selectByDialog } from './adjust-dialog';
 import { soundDialog } from './sound-dialog';
+import { ringStepsDialog } from './ring-steps-dialog';
 import { resolveRgb } from './bake';
 import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
@@ -67,7 +68,8 @@ interface EffectOrigin {
 }
 
 type Drag =
-  | { kind: 'create'; row: Row; from: number; to: number }
+  /** Drawing a new event: it is made only when the mouse has moved (a click alone makes nothing). */
+  | { kind: 'create'; row: Row; from: number; to: number; x0: number; moved: boolean }
   | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number }>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
   | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number; poses: Map<string, number> }>; anchor: number }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
@@ -413,7 +415,7 @@ export class Timeline {
       else for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
     }
     // the clip being drawn
-    const creating = this.drag?.kind === 'create' ? this.drag : null;
+    const creating = this.drag?.kind === 'create' && this.drag.moved ? this.drag : null;
     if (creating !== null) {
       const item = this.layout().find((entry) => entry.row.key === creating.row.key);
       if (item !== undefined && item.row.kind === 'poses') {
@@ -1640,18 +1642,8 @@ export class Timeline {
           this.drag = { kind: 'box', x0: x, y0: y, x1: x, y1: y, additive: event.shiftKey || event.ctrlKey || event.metaKey };
           return;
         }
-        if (item.row.kind === 'raw') {
-          // a marker for the other events: one at the snapped beat
-          const project = this.editor.project;
-          this.editor.checkpoint();
-          const raw: RawEvent = { id: newId('r'), beat: this.editor.snapBeat(beat), type: item.row.type, value: item.row.type === 5 ? 1 : 0, floatValue: 1 };
-          project.raw.push(raw);
-          this.editor.selection = new Set([raw.id]);
-          this.editor.changed();
-          return;
-        }
         const from = this.editor.snapBeat(beat);
-        this.drag = { kind: 'create', row: item.row, from, to: from };
+        this.drag = { kind: 'create', row: item.row, from, to: from, x0: x, moved: false };
         this.needsDraw = true;
         return;
       }
@@ -1695,7 +1687,9 @@ export class Timeline {
       }
       const hit = this.hit(x, y);
       if (hit !== null && 'block' in hit) {
-        this.editor.ringEditorHook?.(hit.block.id);
+        // (a block made by "Rings in steps": its simple window; others: the pose editor)
+        if (hit.block.steps !== undefined) ringStepsDialog(this.editor, hit.block.id);
+        else this.editor.ringEditorHook?.(hit.block.id);
         return;
       }
       if (hit === null || !('clip' in hit)) return;
@@ -1773,6 +1767,7 @@ export class Timeline {
         this.editor.seek(Math.max(0, beat));
       } else if (drag.kind === 'create') {
         drag.to = snap(beat);
+        if (Math.abs(x - drag.x0) > 4) drag.moved = true;
       } else if (drag.kind === 'box') {
         drag.x1 = x;
         drag.y1 = y;
@@ -1886,6 +1881,23 @@ export class Timeline {
       }
       if (drag.kind === 'create') {
         const row = drag.row;
+        // (a click on an empty place: nothing made, what was selected let go)
+        if (!drag.moved) {
+          if (this.editor.selection.size > 0) this.editor.select([]);
+          this.needsDraw = true;
+          return;
+        }
+        if (row.kind === 'raw') {
+          // a marker for the other events: one at the snapped beat where the drag started
+          const project = this.editor.project;
+          if (project === null) return;
+          this.editor.checkpoint();
+          const raw: RawEvent = { id: newId('r'), beat: drag.from, type: row.type, value: row.type === 5 ? 1 : 0, floatValue: 1 };
+          project.raw.push(raw);
+          this.editor.selection = new Set([raw.id]);
+          this.editor.changed();
+          return;
+        }
         if (row.kind === 'poses') {
           const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
           const block = this.newBlockFor(row, a, Math.max(b, a + 1));

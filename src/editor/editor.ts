@@ -169,7 +169,7 @@ export class Editor {
   /** The song list's preview as Info.dat has it (seconds of the song). */
   songPreview: { start: number; duration: number } | null = null;
   /** Opens a ring pose block's editor (set by the app). */
-  ringEditorHook: ((id: string, options?: { steps?: boolean }) => void) | null = null;
+  ringEditorHook: ((id: string) => void) | null = null;
   status = '';
   dirty = false;
   private undoStack: string[] = [];
@@ -1538,6 +1538,18 @@ export class Editor {
     for (const clip of added) this.selection.add(clip.id);
     this.changed();
     return clips.length + added.length;
+  }
+
+  /** One try of a ring block (the steps dialog): the blocks as they were before the tries, and this
+   *  one put in (or in place of the one with its id). */
+  tryRingBlock(block: RingBlock) {
+    const project = this.project;
+    const trying = this.trying;
+    if (project === null || trying === null) return;
+    this.restore(trying.state, false);
+    project.ringBlocks = [...this.ringBlocks.filter((item) => item.id !== block.id), structuredClone(block)];
+    this.selection = new Set([block.id]);
+    this.changed();
   }
 
   /** One try of new clips (the hits of the song): the clips as they were before the tries, and these

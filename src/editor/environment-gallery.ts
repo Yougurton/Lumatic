@@ -57,7 +57,7 @@ export function environmentGallery(options: GalleryOptions): HTMLElement {
   bar.className = 'env-filter';
   const group = document.createElement('select');
   const groups: [string, string][] = [
-    ...(options.mode === 'pick' ? ([['standard', 'Окружения игры']] as [string, string][]) : []),
+    ['standard', 'Окружения игры'],
     ['all', 'Все готовые'],
     ...PRESET_COLLECTIONS.map((collection): [string, string] => [collection.id, `${collection.name} — ${collection.author}`]),
   ];
@@ -75,7 +75,7 @@ export function environmentGallery(options: GalleryOptions): HTMLElement {
   const credits = document.createElement('div');
   credits.className = 'nm-dim env-note env-credits';
   root.append(bar, grid, credits);
-  group.value = options.current.preset !== undefined ? (findPreset(options.current.preset)?.collection ?? 'all') : options.mode === 'pick' ? 'standard' : 'all';
+  group.value = options.current.preset !== undefined ? (findPreset(options.current.preset)?.collection ?? 'all') : 'standard';
 
   const card = (image: string, name: string, lines: string[], active: boolean, notes: string, action: { label: string; disabled?: string | null; run: () => void }) => {
     const element = document.createElement('div');
@@ -118,7 +118,11 @@ export function environmentGallery(options: GalleryOptions): HTMLElement {
       for (const [id, name] of options.standard) {
         if (query !== '' && !`${id} ${name}`.toLowerCase().includes(query)) continue;
         const active = options.current.preset === undefined && options.current.environment === id;
-        grid.append(card(standardImage(id), name, ['окружение игры'], active, '', { label: active ? 'Выбрано' : 'Выбрать', run: () => options.choose({ environment: id }) }));
+        const action =
+          options.mode === 'pick'
+            ? { label: active ? 'Выбрано' : 'Выбрать', run: () => options.choose({ environment: id }) }
+            : { label: active ? 'Стоит сейчас' : 'Поставить', disabled: active ? 'Это окружение уже стоит' : options.version === '4' ? 'Карты v4 редактор пока не сохраняет.' : null, run: () => options.choose({ environment: id }) };
+        grid.append(card(standardImage(id), name, ['окружение игры'], active, '', action));
       }
       credits.textContent = 'Картинки окружений игры — кадры из 3D-вида редактора.';
       return;
