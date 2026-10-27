@@ -33,6 +33,27 @@ const RULER_H = 30;
 const GUTTER = 14;
 /** The song overview under the spectrogram. */
 const NAV_H = 26;
+/** How tall the spectrogram's name area must be for the grid and speed to stand in it. */
+const PLAY_ROOM = 74;
+/** The grids offered (beats; 0: none) — down to 1/64, triplets too. */
+export const GRIDS: [number, string][] = [
+  [1, '1'],
+  [0.5, '1/2'],
+  [1 / 3, '1/3'],
+  [0.25, '1/4'],
+  [1 / 6, '1/6'],
+  [0.125, '1/8'],
+  [1 / 12, '1/12'],
+  [0.0625, '1/16'],
+  [1 / 24, '1/24'],
+  [0.03125, '1/32'],
+  [1 / 48, '1/48'],
+  [0.015625, '1/64'],
+  [0, 'без сетки'],
+];
+/** The playback speed's range. */
+export const MIN_RATE = 0.1;
+export const MAX_RATE = 2;
 /** Grips at the ends of a scrollbar's thumb (dragged: zoom). */
 const GRIP = 7;
 const GROUP_H = 28;
@@ -135,6 +156,8 @@ export class Timeline {
     this.context = this.canvas.getContext('2d')!;
     new ResizeObserver(() => this.resize()).observe(this.canvas.parentElement!);
     this.resize();
+    // (the grid and speed controls follow keys and other changes)
+    editor.onChange(() => this.syncPlayControls());
     editor.onChange((what) => {
       if (what === 'rows' || what === 'all') this.renderHeaders(true);
       this.needsDraw = true;
@@ -478,10 +501,6 @@ export class Timeline {
         ctx.fillRect(Math.max(GUTTER, x0), RULER_H - 9, x1 - Math.max(GUTTER, x0), 8);
         ctx.fillStyle = 'rgba(255,205,90,0.9)';
         ctx.fillRect(x0, RULER_H - 9, Math.max(1, x1 - x0), 2);
-        if (x1 - x0 > 50) {
-          ctx.font = '10px system-ui, sans-serif';
-          ctx.fillText('превью', Math.max(GUTTER + 2, x0 + 3), RULER_H - 11);
-        }
       }
     }
     const range = editor.songRange;
@@ -530,6 +549,9 @@ export class Timeline {
       list.scrollTop = this.scrollY;
       const spectro = this.headers.querySelector<HTMLElement>('.th-spectro');
       if (spectro !== null) spectro.style.height = `${String(this.spectroHeight)}px`;
+      // (the grid and speed: moved when the spectrogram grows or shrinks past their room)
+      if ((this.spectroHeight >= PLAY_ROOM) !== this.playPlacedRoomy) this.renderHeaders(true);
+      else this.syncPlayControls();
     }
   }
 
@@ -1043,6 +1065,58 @@ export class Timeline {
     ]);
   }
 
+  /** Where the grid and speed stand now (under the spectrogram's name or in the overview line). */
+  private playPlacedRoomy = true;
+
+  /** The grid and the playback speed (a slider; double click — 1×). */
+  private playControls(compact: boolean) {
+    const editor = this.editor;
+    const box = document.createElement('div');
+    box.className = `th-play${compact ? ' compact' : ''}`;
+    const grid = document.createElement('select');
+    grid.className = 'th-grid';
+    grid.title = 'Сетка: к каким долям прилипают события';
+    for (const [value, label] of GRIDS) grid.append(Object.assign(document.createElement('option'), { value: String(value), textContent: label }));
+    grid.addEventListener('change', () => {
+      editor.snap = Number(grid.value);
+      this.redraw();
+      grid.blur();
+    });
+    const speed = document.createElement('input');
+    speed.type = 'range';
+    speed.className = 'th-speed';
+    speed.min = String(MIN_RATE);
+    speed.max = String(MAX_RATE);
+    speed.step = '0.05';
+    speed.title = 'Скорость воспроизведения (высота звука меняется вместе с ней). Двойной клик — обычная';
+    const value = document.createElement('span');
+    value.className = 'th-speed-value';
+    speed.addEventListener('input', () => editor.setRate(Number(speed.value)));
+    speed.addEventListener('dblclick', () => editor.setRate(1));
+    const label = (text: string, ...items: HTMLElement[]) => {
+      const wrap = document.createElement('label');
+      wrap.append(Object.assign(document.createElement('span'), { className: 'th-play-name', textContent: text }), ...items);
+      return wrap;
+    };
+    box.append(label('Сетка', grid), label(compact ? '' : 'Скорость', speed, value));
+    queueMicrotask(() => this.syncPlayControls());
+    return box;
+  }
+
+  /** The grid and speed controls showing what the editor has. */
+  syncPlayControls() {
+    const editor = this.editor;
+    const grid = this.headers.querySelector<HTMLSelectElement>('.th-grid');
+    if (grid !== null && document.activeElement !== grid) {
+      const known = GRIDS.find(([value]) => Math.abs(value - editor.snap) < 1e-9);
+      grid.value = String(known?.[0] ?? 0.25);
+    }
+    const speed = this.headers.querySelector<HTMLInputElement>('.th-speed');
+    if (speed !== null && document.activeElement !== speed) speed.value = String(editor.rate);
+    const value = this.headers.querySelector<HTMLElement>('.th-speed-value');
+    if (value !== null) value.textContent = `${String(Math.round(editor.rate * 100) / 100)}×`;
+  }
+
   /** The spectrogram's settings: height, frequencies, level floor, contrast. */
   openSpectroPanel(x: number, y: number) {
     const body = document.createElement('div');
@@ -1152,8 +1226,15 @@ export class Timeline {
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
         this.openSpectroPanel(rect.right + 4, rect.top);
       });
-      spectro.append(Object.assign(document.createElement('span'), { textContent: 'Спектрограмма' }), settings);
+      const head = document.createElement('div');
+      head.className = 'th-spectro-head';
+      head.append(Object.assign(document.createElement('span'), { textContent: 'Спектрограмма' }), settings);
+      spectro.append(head);
     }
+    // the grid and the playback speed: under the rows' names (in the overview line when there is no room)
+    const roomy = spectroHeight >= PLAY_ROOM;
+    this.playPlacedRoomy = roomy;
+    if (roomy) spectro.append(this.playControls(false));
     spectro.title = 'Верхний край спектрограммы тянется мышью; ПКМ — настройки';
     spectro.addEventListener('contextmenu', (event) => {
       event.preventDefault();
@@ -1162,7 +1243,8 @@ export class Timeline {
     const nav = document.createElement('div');
     nav.className = 'th-nav';
     nav.style.height = `${String(NAV_H)}px`;
-    nav.textContent = 'Вся песня';
+    if (roomy) nav.textContent = 'Вся песня';
+    else nav.append(this.playControls(true));
     if (spectroHeight <= 0) {
       // (the spectrogram hidden: brought back from here)
       const show = document.createElement('button');

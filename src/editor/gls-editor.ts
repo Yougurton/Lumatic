@@ -183,7 +183,7 @@ export class GlsEditor {
     shade.replaceChildren();
     const dialog = document.createElement('div');
     dialog.className = 'gls-dialog';
-    dialog.append(this.header(effect));
+    dialog.append(this.header(effect), scrubStrip(this.editor, () => this.effect() ?? null));
     const body = document.createElement('div');
     body.className = 'gls-body';
     body.append(this.boxList(effect), this.boxSettings(), this.laneColumn(effect));
@@ -826,4 +826,94 @@ function fromHex(value: string): Rgb {
 
 function rgba(rgb: readonly number[], alpha: number) {
   return `rgba(${rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')},${String(Math.max(0, Math.min(1, alpha)))})`;
+}
+
+/**
+ * A strip of the song around a block (the GLS and ring pose windows cover the timeline): the block
+ * marked, the cursor on it; dragging along it — the song goes there (the 3D view shows that moment),
+ * the wheel — a grid step at a time.
+ */
+export function scrubStrip(editor: Editor, range: () => { start: number; end: number } | null) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'scrub-strip';
+  canvas.title = 'Тяните по полосе — курсор песни идёт за мышью (в окне просмотра — этот момент); колесо — на шаг сетки';
+  let drawn = '';
+  const span = () => {
+    const block = range();
+    if (block === null) return null;
+    const pad = Math.max(1, (block.end - block.start) * 0.15);
+    return { block, from: Math.max(0, block.start - pad), to: block.end + pad };
+  };
+  const draw = () => {
+    if (!canvas.isConnected) return;
+    requestAnimationFrame(draw);
+    const view = span();
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    const beat = editor.playhead();
+    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)}`;
+    if (view === null || width === 0 || key === drawn) return;
+    drawn = key;
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const x = (value: number) => ((value - view.from) / (view.to - view.from)) * width;
+    ctx.fillStyle = '#121318';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(90,130,220,0.22)';
+    ctx.fillRect(x(view.block.start), 0, x(view.block.end) - x(view.block.start), height);
+    ctx.fillStyle = 'rgba(120,160,255,0.9)';
+    ctx.fillRect(x(view.block.start), height - 3, x(view.block.end) - x(view.block.start), 3);
+    // (beats; their numbers where there's room)
+    const step = [0.25, 0.5, 1, 2, 4, 8, 16, 32].find((value) => (value * width) / (view.to - view.from) >= 8) ?? 64;
+    const label = [1, 2, 4, 8, 16, 32, 64].find((value) => (value * width) / (view.to - view.from) >= 44) ?? 128;
+    ctx.font = '10px system-ui, sans-serif';
+    for (let at = Math.ceil(view.from / step) * step; at <= view.to; at += step) {
+      const whole = Math.abs(at / label - Math.round(at / label)) < 1e-6;
+      ctx.fillStyle = whole ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
+      ctx.fillRect(Math.round(x(at)), whole ? 0 : height * 0.55, 1, height);
+      if (whole) {
+        ctx.fillStyle = '#9aa0b4';
+        ctx.fillText(String(Math.round(at * 100) / 100), x(at) + 3, 11);
+      }
+    }
+    const cursor = x(beat);
+    ctx.fillStyle = '#ff5a5a';
+    ctx.fillRect(Math.round(cursor) - 1, 0, 2, height);
+    ctx.fillStyle = '#fff';
+    const text = `доля ${String(Math.round((beat - view.block.start) * 1000) / 1000)} в блоке`;
+    ctx.fillText(text, Math.min(width - ctx.measureText(text).width - 4, cursor + 5), height - 7);
+  };
+  const seekAt = (clientX: number) => {
+    const view = span();
+    if (view === null) return;
+    const rect = canvas.getBoundingClientRect();
+    editor.seek(Math.max(0, view.from + ((clientX - rect.left) / rect.width) * (view.to - view.from)));
+  };
+  canvas.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    if (editor.previewExtra !== null) editor.stopTrial();
+    if (editor.isPlaying()) editor.togglePlay();
+    seekAt(event.clientX);
+    const move = (next: MouseEvent) => seekAt(next.clientX);
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+  canvas.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault();
+      const step = editor.snap || 0.25;
+      editor.seek(Math.max(0, editor.snapBeat(editor.playhead()) + (event.deltaY > 0 ? step : -step)));
+    },
+    { passive: false },
+  );
+  requestAnimationFrame(draw);
+  return canvas;
 }

@@ -1,4 +1,5 @@
 import type { Editor } from './editor';
+import { scrubStrip } from './gls-editor';
 import { ringSystemName } from './library';
 import { DEFAULT_STEPS, newStepsBlock, stepPoses, type RingBlock, type StepTransition } from './rings';
 
@@ -61,6 +62,8 @@ export function ringStepsDialog(editor: Editor, blockId: string | null) {
   document.body.append(shade);
   const el = <T extends HTMLElement>(name: string) => box.querySelector<T>(`[data-id="${name}"]`)!;
   el('system-row').hidden = editor.ringInfo.length < 2;
+  // (the song moved along the block: the 3D view shows the rings at that moment)
+  el('summary').before(scrubStrip(editor, () => current));
   el<HTMLSelectElement>('system').value = system;
 
   /** The block as the settings are. */

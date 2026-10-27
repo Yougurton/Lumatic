@@ -10,7 +10,12 @@ import { environmentDialog } from './editor/environment-dialog';
 import { newMapDialog } from './editor/new-map';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
-import { Timeline } from './editor/timeline';
+import { GRIDS, MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
+import { adjustDialog } from './editor/adjust-dialog';
+import { actionFor, comboOf } from './editor/hotkeys';
+import { hotkeysDialog } from './editor/hotkeys-dialog';
+import { ask } from './editor/menu';
+import type { StartMode } from './editor/model';
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -137,12 +142,7 @@ byId('map-colors').addEventListener('click', () => void colorsDialog(editor));
 byId('undo').addEventListener('click', () => editor.undo());
 byId('redo').addEventListener('click', () => editor.redo());
 playButton.addEventListener('click', () => editor.togglePlay());
-byId<HTMLSelectElement>('snap').addEventListener('change', (event) => {
-  editor.snap = Number((event.target as HTMLSelectElement).value);
-  timeline.redraw();
-});
 byId('zoom-in').addEventListener('click', () => timeline.zoom(1.5));
-byId<HTMLSelectElement>('speed').addEventListener('change', (event) => editor.setRate(Number((event.target as HTMLSelectElement).value)));
 byId('bookmark').addEventListener('click', () => void timeline.addBookmarkHere());
 byId('zoom-out').addEventListener('click', () => timeline.zoom(1 / 1.5));
 byId('zoom-fit').addEventListener('click', () => timeline.fit());
@@ -156,38 +156,99 @@ async function save() {
   }
 }
 
-// (keys by their place on the keyboard — with a Russian layout Ctrl+Z is Ctrl+Я)
+// the keys (hotkeys.ts: by their place on the keyboard — with a Russian layout Ctrl+Z is Ctrl+Я; the
+// user's own from "⌨")
+const brushStart = (mode: StartMode, name: string) => {
+  editor.brush.startMode = mode;
+  editor.emit('selection');
+  editor.setStatus(`Кисть: ${name}`);
+};
+const brushColor = (ref: 'left' | 'right' | 'white', name: string) => {
+  editor.brush.color = { ...editor.brush.color, ref };
+  delete editor.brush.color.rgb;
+  editor.emit('selection');
+  editor.setStatus(`Кисть: ${name}`);
+};
+const stepGrid = (finer: boolean) => {
+  const grids = GRIDS.filter(([value]) => value > 0).map(([value]) => value);
+  const at = grids.findIndex((value) => Math.abs(value - editor.snap) < 1e-9);
+  const next = grids[Math.min(grids.length - 1, Math.max(0, (at < 0 ? grids.indexOf(0.25) : at) + (finer ? 1 : -1)))]!;
+  editor.snap = next;
+  timeline.redraw();
+  timeline.syncPlayControls();
+  editor.setStatus(`Сетка: ${GRIDS.find(([value]) => value === next)?.[1] ?? ''}`);
+};
+const stepRate = (up: boolean) => {
+  const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, Math.round((editor.rate + (up ? 0.1 : -0.1)) * 100) / 100));
+  editor.setRate(rate);
+  editor.setStatus(`Скорость: ${String(rate)}×`);
+};
+const ACTIONS_RUN: Record<string, () => void> = {
+  play: () => editor.togglePlay(),
+  start: () => editor.seek(0),
+  back: () => editor.seek(Math.max(0, editor.snapBeat(editor.playhead()) - (editor.snap || 0.25))),
+  forward: () => editor.seek(editor.snapBeat(editor.playhead()) + (editor.snap || 0.25)),
+  goto: () =>
+    void ask('Перейти к доле', String(Math.round(editor.playhead() * 1000) / 1000)).then((text) => {
+      const beat = Number(text?.replace(',', '.'));
+      if (text !== null && Number.isFinite(beat)) editor.seek(Math.max(0, beat));
+    }),
+  faster: () => stepRate(true),
+  slower: () => stepRate(false),
+  finer: () => stepGrid(true),
+  coarser: () => stepGrid(false),
+  zoomIn: () => timeline.zoom(1.5),
+  zoomOut: () => timeline.zoom(1 / 1.5),
+  fit: () => timeline.fit(),
+  rowsUp: () => timeline.scrollRows(-60),
+  rowsDown: () => timeline.scrollRows(60),
+  bookmark: () => void timeline.addBookmarkHere(),
+  prevBookmark: () => {
+    const bookmark = editor.nextBookmark(-1);
+    if (bookmark !== undefined) editor.seek(bookmark.beat);
+  },
+  nextBookmark: () => {
+    const bookmark = editor.nextBookmark(1);
+    if (bookmark !== undefined) editor.seek(bookmark.beat);
+  },
+  on: () => brushStart('on', 'включить'),
+  flash: () => brushStart('flash', 'вспышка'),
+  fade: () => brushStart('fade', 'угасание'),
+  fadeIn: () => brushStart('fadeIn', 'нарастание'),
+  left: () => brushColor('left', 'левый цвет'),
+  right: () => brushColor('right', 'правый цвет'),
+  white: () => brushColor('white', 'белый цвет'),
+  undo: () => editor.undo(),
+  redo: () => editor.redo(),
+  copy: () => editor.copy(),
+  cut: () => {
+    editor.copy();
+    editor.deleteSelection();
+  },
+  paste: () => editor.paste(editor.snapBeat(editor.playhead())),
+  duplicate: () => editor.duplicateSelection(),
+  delete: () => editor.deleteSelection(),
+  selectAll: () => editor.selectAll(),
+  mirror: () => {
+    const moved = editor.mirrorAcrossRows();
+    editor.setStatus(moved > 0 ? `Отзеркалено по строкам: ${String(moved)} событий` : 'Для зеркала по строкам выделите события на двух строках и больше');
+  },
+  mirrorTime: () => editor.mirrorInTime(),
+  adjust: () => adjustDialog(editor),
+  group: () => void timeline.groupSelected(),
+  preset: () => void presets.saveSelection(),
+  save: () => void save(),
+  open: () => void openMapFolder().then(openFolder),
+  new: () => void newMap(),
+};
 window.addEventListener('keydown', (event) => {
   const target = event.target as HTMLElement;
   if (document.querySelector('.ce-shade') !== null) return;
   const typing = target.tagName === 'TEXTAREA' || (target instanceof HTMLInputElement && ['text', 'number', 'search'].includes(target.type));
   if (typing) return;
   const ctrl = event.ctrlKey || event.metaKey;
-  const code = event.code;
   if (target.tagName === 'SELECT' && !ctrl) return;
-  if (ctrl && code === 'KeyO') void openMapFolder().then(openFolder);
-  else if (ctrl && code === 'KeyN') void newMap();
-  else if (ctrl && code === 'KeyS') void save();
-  else if (ctrl && code === 'KeyZ' && !event.shiftKey) editor.undo();
-  else if (ctrl && (code === 'KeyY' || (code === 'KeyZ' && event.shiftKey))) editor.redo();
-  else if (ctrl && code === 'KeyC') editor.copy();
-  else if (ctrl && code === 'KeyX') {
-    editor.copy();
-    editor.deleteSelection();
-  } else if (ctrl && code === 'KeyV') editor.paste(editor.snapBeat(editor.playhead()));
-  else if (ctrl && code === 'KeyD') editor.duplicateSelection();
-  else if (ctrl && code === 'KeyA') editor.selectAll();
-  else if (ctrl && (code === 'ArrowLeft' || code === 'ArrowRight')) {
-    const bookmark = editor.nextBookmark(code === 'ArrowLeft' ? -1 : 1);
-    if (bookmark !== undefined) editor.seek(bookmark.beat);
-  }
-  else if (ctrl && code === 'KeyG') void timeline.groupSelected();
-  else if (ctrl && event.shiftKey && code === 'KeyP') void presets.saveSelection();
-  else if (ctrl) return;
-  else if (code === 'Space') editor.togglePlay();
-  else if (code === 'KeyB') void timeline.addBookmarkHere();
-  else if (code === 'Delete' || code === 'Backspace') editor.deleteSelection();
-  else if (code === 'Escape') {
+  if (event.code === 'Escape' && !ctrl) {
     if (editor.previewExtra !== null) editor.stopTrial();
     else if (editor.songRange !== null) editor.setSongRange(null);
     else if (editor.tool.kind !== 'clip') {
@@ -198,12 +259,16 @@ window.addEventListener('keydown', (event) => {
     else if (editor.openEffect !== null) editor.enterEffect(null);
     else if (editor.lightSelection.size > 0) editor.selectLights([]);
     else if (editor.focus !== null) editor.enterGroup(editor.focusPath().at(-2)?.id ?? null);
-  } else if (code === 'ArrowLeft' || code === 'ArrowRight') editor.seek(editor.snapBeat(editor.playhead()) + (code === 'ArrowLeft' ? -1 : 1) * (editor.snap || 0.25));
-  else if (code === 'ArrowUp' || code === 'ArrowDown') timeline.scrollRows(code === 'ArrowUp' ? -60 : 60);
-  else if (code === 'Home') editor.seek(0);
-  else return;
+    event.preventDefault();
+    return;
+  }
+  const combo = comboOf(event);
+  const action = combo === null ? null : actionFor(combo);
+  if (action === null) return;
+  ACTIONS_RUN[action]?.();
   event.preventDefault();
 });
+byId('hotkeys').addEventListener('click', () => void hotkeysDialog());
 
 // (a clicked button gives the focus back: Space is play, not "press that button again")
 document.addEventListener('click', (event) => {
@@ -242,8 +307,9 @@ window.addEventListener('beforeunload', (event) => {
   window.addEventListener('mouseup', () => (dragging = false));
   window.addEventListener('mousemove', (event) => {
     if (!dragging) return;
-    const top = Math.min(window.innerHeight - 220, Math.max(140, event.clientY - 40));
-    app.style.gridTemplateRows = `40px ${String(top)}px 6px 1fr`;
+    const bar = byId('toolbar').getBoundingClientRect().bottom;
+    const top = Math.min(window.innerHeight - 220, Math.max(140, event.clientY - bar));
+    app.style.gridTemplateRows = `auto ${String(top)}px 6px 1fr`;
   });
 }
 

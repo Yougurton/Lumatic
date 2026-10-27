@@ -1,5 +1,5 @@
 import type { Editor } from './editor';
-import { button, check, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
+import { button, check, scrubStrip, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { ringSystemName } from './library';
 import { newId } from './model';
 import { dataFirstRing, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
@@ -198,7 +198,7 @@ export class RingEditor {
     const block = this.block();
     if (dock === null || block === undefined) return;
     const scroll = [...dock.querySelectorAll<HTMLElement>('.gls-col')].map((col) => col.scrollTop);
-    dock.replaceChildren(this.header(block));
+    dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null));
     const body = document.createElement('div');
     body.className = 'gls-body ring-body';
     body.append(this.laneColumn(block), isZoom(block) ? this.zoomColumn(block) : this.poseColumn(block), isZoom(block) ? this.zoomView(block) : this.viewColumn(block));

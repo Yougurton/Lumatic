@@ -95,6 +95,9 @@
         text-overflow: ellipsis;
         max-width: 38vw;
         min-width: 0;
+        /* (it takes what room is left on the line rather than a line of its own) */
+        flex: 1 1 0;
+        text-align: right;
       }
       #time {
         font-variant-numeric: tabular-nums;
@@ -511,8 +514,121 @@
         flex-shrink: 0;
         box-sizing: border-box;
       }
-      .th-spectro span {
+      .scrub-strip {
+        display: block;
+        width: 100%;
+        height: 30px;
+        flex: none;
+        cursor: ew-resize;
+        border-bottom: 1px solid var(--line);
+      }
+      .keys-dialog {
+        width: min(640px, 94vw);
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .keys-dialog > .nm-dim,
+      .keys-dialog > .ce-dialog-buttons {
+        flex: none;
+      }
+      .keys-list {
+        overflow: auto;
+        min-height: 0;
+        flex: 1;
+      }
+      .keys-group {
+        color: #fff;
+        font-weight: 600;
+        margin: 10px 0 4px;
+      }
+      .keys-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 3px 0;
+        border-bottom: 1px solid #23252e;
+        font-size: 13px;
+      }
+      .keys-chips {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 4px;
+      }
+      .keys-chip {
+        display: inline-flex;
+      }
+      .keys-chip button,
+      .keys-add {
+        padding: 1px 8px;
+        font-size: 12px;
+      }
+      .keys-chip button:first-child {
+        border-radius: 5px 0 0 5px;
+        min-width: 34px;
+      }
+      .keys-remove {
+        border-left: none !important;
+        border-radius: 0 5px 5px 0 !important;
+        color: var(--dim);
+      }
+      .th-spectro {
+        flex-direction: column;
+        justify-content: flex-start;
+      }
+      .th-spectro-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        align-self: stretch;
+      }
+      .th-spectro-head span {
         padding-top: 7px;
+      }
+      .th-play {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-self: stretch;
+        padding-right: 4px;
+      }
+      .th-play label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .th-play-name {
+        width: 56px;
+        flex: none;
+      }
+      .th-play select {
+        padding: 1px 4px;
+        font-size: 11px;
+      }
+      .th-speed {
+        flex: 1;
+        min-width: 50px;
+      }
+      .th-speed-value {
+        width: 34px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+      }
+      .th-play.compact {
+        flex-direction: row;
+        margin-top: -4px;
+      }
+      .th-play.compact .th-play-name:empty {
+        display: none;
+      }
+      .th-play.compact .th-play-name {
+        width: auto;
       }
       .th-spectro button {
         margin-top: 4px;
@@ -1419,28 +1535,12 @@
         <button id="play" title="Играть / пауза (Пробел)">▶</button>
         <span id="time">0:00.000 · доля 0.000</span>
         <span class="sep"></span>
-        <label>Сетка <select id="snap">
-          <option value="1">1</option>
-          <option value="0.5">1/2</option>
-          <option value="0.25" selected>1/4</option>
-          <option value="0.125">1/8</option>
-          <option value="0.0625">1/16</option>
-          <option value="0">без сетки</option>
-        </select></label>
-        <label title="Скорость воспроизведения (высота звука меняется вместе с ней)">Скорость <select id="speed">
-          <option value="0.25">0.25×</option>
-          <option value="0.5">0.5×</option>
-          <option value="0.75">0.75×</option>
-          <option value="1" selected>1×</option>
-          <option value="1.25">1.25×</option>
-          <option value="1.5">1.5×</option>
-          <option value="2">2×</option>
-        </select></label>
         <button id="bookmark" title="Метка у курсора (B). Метки — флажки на линейке: клик — перейти, тянуть — сдвинуть, двойной клик — переименовать, ПКМ — меню. Ctrl+←/→ — к предыдущей/следующей">⚑ Метка</button>
         <span class="sep"></span>
         <button id="zoom-out" title="Отдалить (Ctrl+колесо)">−</button>
         <button id="zoom-fit" title="Вся песня">⇔</button>
         <button id="zoom-in" title="Приблизить (Ctrl+колесо)">+</button>
+        <button id="hotkeys" title="Горячие клавиши: посмотреть и назначить свои">⌨</button>
         <span class="grow"></span>
         <span id="status"></span>
       </header>
