@@ -1099,4 +1099,12 @@ export const EN: Record<string, string> = {
   "Вернуть все настройки по умолчанию? Горячие клавиши останутся как есть.": "Reset all settings to defaults? Hotkeys stay as they are.",
   "Сохранить изменения и перезапустить редактор?": "Save the changes and restart the editor?",
   "Настройки: язык, вставка, вид, звук, сохранение, горячие клавиши": "Settings: language, pasting, view, sound, saving, hotkeys",
+  "Тяните по полосе — курсор песни идёт за мышью (в окне просмотра — этот момент); колесо — на шаг сетки, Ctrl+колесо — масштаб, Shift+колесо — вдоль песни": "Drag along the strip — the song cursor follows the mouse (the view window shows that moment); wheel — one grid step, Ctrl+wheel — zoom, Shift+wheel — along the song",
+  "Весь блок": "The whole block",
+  "Позы — на полосе с песней сверху: клик по нижней дорожке в блоке — новая поза, перетаскивание — сдвинуть, Delete — удалить. Ctrl+колесо или −/+ — масштаб, Shift+колесо — вдоль песни. Выбранная поза видна в окне просмотра.": "Poses are on the song strip above: a click on its lower lane inside the block — a new pose, drag — move, Delete — delete. Ctrl+wheel or −/+ — zoom, Shift+wheel — along the song. The picked pose shows in the view window.",
+  "Шаг — от прошлой позы (+ / −)": "Step from the previous pose (+ / −)",
+  "Прибавить к шагу, °": "Add to the step, °",
+  "Шаг до неё — {0}°, после — {1}°.{2}": "The step before it is {0}°, after it {1}°.{2}",
+  "· шаг {0}{1}° от прошлой": "· step {0}{1}° from the previous",
+  "В игре — к шагу последнего события колец перед ней.": "In the game — added to the step of the last ring event before it.",
 };

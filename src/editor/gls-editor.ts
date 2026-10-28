@@ -828,30 +828,91 @@ function rgba(rgb: readonly number[], alpha: number) {
   return `rgba(${rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')},${String(Math.max(0, Math.min(1, alpha)))})`;
 }
 
+/** A lane under the song in a scrub strip: what a window puts on the song's own time (ring poses). */
+export interface StripLane {
+  /** Its height (px). */
+  height: number;
+  /** What it shows now: it's drawn again when this changes. */
+  key(): string;
+  /** Drawn at `top` (`x`: a song beat's place). */
+  draw(ctx: CanvasRenderingContext2D, x: (beat: number) => number, top: number, height: number, width: number): void;
+  /** A press on it at `beat` (`x`: its place): what dragging from there does, or nothing (the song's
+   *  cursor is moved then, as on the strip above it). */
+  press(beat: number, x: number, place: (beat: number) => number): { move(beat: number, x: number): void; up(): void } | null;
+}
+
+/** How far each block's strip is zoomed (by its id): kept while the window is drawn again. */
+const stripViews = new Map<string, { from: number; to: number }>();
+
 /**
  * A strip of the song around a block (the GLS and ring pose windows cover the timeline): the block
  * marked, the cursor on it; dragging along it — the song goes there (the 3D view shows that moment),
- * the wheel — a grid step at a time.
+ * the wheel — a grid step at a time, Ctrl+wheel (or −/+) — zoom, Shift+wheel — along the song. A lane
+ * under it (ring poses) can be given.
  */
-export function scrubStrip(editor: Editor, range: () => { start: number; end: number } | null) {
+export function scrubStrip(editor: Editor, range: () => { id?: string; start: number; end: number } | null, lane: StripLane | null = null) {
+  const SONG = 44;
+  const wrap = document.createElement('div');
+  wrap.className = 'scrub-wrap';
   const canvas = document.createElement('canvas');
   canvas.className = 'scrub-strip';
-  canvas.title = 'Тяните по полосе — курсор песни идёт за мышью (в окне просмотра — этот момент); колесо — на шаг сетки';
+  canvas.style.height = `${String(SONG + (lane?.height ?? 0))}px`;
+  canvas.title = 'Тяните по полосе — курсор песни идёт за мышью (в окне просмотра — этот момент); колесо — на шаг сетки, Ctrl+колесо — масштаб, Shift+колесо — вдоль песни';
+  wrap.append(canvas);
   let drawn = '';
+  /** The block's own view (it and a little around it). */
+  const whole = (block: { start: number; end: number }) => {
+    const pad = Math.max(1, (block.end - block.start) * 0.15);
+    return { from: Math.max(0, block.start - pad), to: block.end + pad };
+  };
   const span = () => {
     const block = range();
     if (block === null) return null;
-    const pad = Math.max(1, (block.end - block.start) * 0.15);
-    return { block, from: Math.max(0, block.start - pad), to: block.end + pad };
+    const kept = block.id === undefined ? undefined : stripViews.get(block.id);
+    return { block, ...(kept ?? whole(block)) };
   };
+  const setView = (from: number, to: number) => {
+    const block = range();
+    if (block?.id === undefined) return;
+    const length = Math.min(4000, Math.max(0.25, to - from));
+    const start = Math.max(0, from);
+    stripViews.set(block.id, { from: start, to: start + length });
+  };
+  /** Zoomed by `factor` (under 1: closer) around `beat`. */
+  const zoom = (factor: number, beat?: number) => {
+    const view = span();
+    if (view === null) return;
+    const at = beat ?? Math.min(view.to, Math.max(view.from, editor.playhead()));
+    setView(at - (at - view.from) * factor, at + (view.to - at) * factor);
+  };
+  const controls = document.createElement('div');
+  controls.className = 'scrub-zoom';
+  const control = (label: string, title: string, action: () => void) => {
+    const item = Object.assign(document.createElement('button'), { type: 'button', textContent: label, title });
+    item.addEventListener('mousedown', (event) => event.stopPropagation());
+    item.addEventListener('click', action);
+    controls.append(item);
+  };
+  control('−', 'Отдалить (Ctrl+колесо)', () => zoom(1.5));
+  control('+', 'Приблизить (Ctrl+колесо)', () => zoom(1 / 1.5));
+  control('⤢', 'Весь блок', () => {
+    const block = range();
+    if (block?.id !== undefined) stripViews.delete(block.id);
+  });
+  wrap.append(controls);
+
   const draw = () => {
     if (!canvas.isConnected) return;
     requestAnimationFrame(draw);
+    const beat = editor.playhead();
+    // (zoomed in while the song plays: the view goes along with it)
+    const block = range();
+    const kept = block?.id === undefined ? undefined : stripViews.get(block.id);
+    if (kept !== undefined && editor.isPlaying() && (beat > kept.to || beat < kept.from)) setView(beat - (kept.to - kept.from) * 0.1, beat + (kept.to - kept.from) * 0.9);
     const view = span();
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
-    const beat = editor.playhead();
-    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)} ${editor.spectrogram === null ? '' : 's'}`;
+    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)} ${editor.spectrogram === null ? '' : 's'} ${lane?.key() ?? ''}`;
     if (view === null || width === 0 || key === drawn) return;
     drawn = key;
     const ratio = window.devicePixelRatio || 1;
@@ -875,46 +936,74 @@ export function scrubStrip(editor: Editor, range: () => { start: number; end: nu
         // (one canvas column per frame; the stretch shown placed where its beats are)
         const left = ((first - from) / (to - from)) * width;
         const right = ((last - from) / (to - from)) * width;
-        ctx.drawImage(picture.image, first, 0, last - first, picture.image.height, left, 0, right - left, height);
+        ctx.drawImage(picture.image, first, 0, last - first, picture.image.height, left, 0, right - left, SONG);
         ctx.globalAlpha = 1;
       }
     }
     ctx.fillStyle = 'rgba(90,130,220,0.22)';
-    ctx.fillRect(x(view.block.start), 0, x(view.block.end) - x(view.block.start), height);
+    ctx.fillRect(x(view.block.start), 0, x(view.block.end) - x(view.block.start), SONG);
     ctx.fillStyle = 'rgba(120,160,255,0.9)';
-    ctx.fillRect(x(view.block.start), height - 3, x(view.block.end) - x(view.block.start), 3);
+    ctx.fillRect(x(view.block.start), SONG - 3, x(view.block.end) - x(view.block.start), 3);
+    if (lane !== null) {
+      ctx.fillStyle = '#0f1014';
+      ctx.fillRect(0, SONG, width, height - SONG);
+      ctx.fillStyle = 'rgba(90,130,220,0.08)';
+      ctx.fillRect(x(view.block.start), SONG, x(view.block.end) - x(view.block.start), height - SONG);
+    }
     // (beats; their numbers where there's room)
-    const step = [0.25, 0.5, 1, 2, 4, 8, 16, 32].find((value) => (value * width) / (view.to - view.from) >= 8) ?? 64;
-    const label = [1, 2, 4, 8, 16, 32, 64].find((value) => (value * width) / (view.to - view.from) >= 44) ?? 128;
+    const step = [1 / 16, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32].find((value) => (value * width) / (view.to - view.from) >= 8) ?? 64;
+    const label = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64].find((value) => (value * width) / (view.to - view.from) >= 44) ?? 128;
     ctx.font = '10px system-ui, sans-serif';
     for (let at = Math.ceil(view.from / step) * step; at <= view.to; at += step) {
       const whole = Math.abs(at / label - Math.round(at / label)) < 1e-6;
       ctx.fillStyle = whole ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)';
-      ctx.fillRect(Math.round(x(at)), whole ? 0 : height * 0.55, 1, height);
+      ctx.fillRect(Math.round(x(at)), whole ? 0 : SONG * 0.55, 1, height - (whole ? 0 : SONG * 0.55));
       if (whole) {
         ctx.fillStyle = '#d6d9e4';
         ctx.fillText(String(Math.round(at * 100) / 100), x(at) + 3, 11);
       }
     }
+    if (lane !== null) lane.draw(ctx, x, SONG, height - SONG, width);
     const cursor = x(beat);
     ctx.fillStyle = '#ff5a5a';
     ctx.fillRect(Math.round(cursor) - 1, 0, 2, height);
     ctx.fillStyle = '#fff';
     const text = `доля ${String(Math.round((beat - view.block.start) * 1000) / 1000)} в блоке`;
-    ctx.fillText(text, Math.min(width - ctx.measureText(text).width - 4, cursor + 5), height - 7);
+    ctx.fillText(text, Math.min(width - ctx.measureText(text).width - 70, cursor + 5), SONG - 7);
   };
-  const seekAt = (clientX: number) => {
+  const beatAt = (clientX: number) => {
     const view = span();
-    if (view === null) return;
+    if (view === null) return 0;
     const rect = canvas.getBoundingClientRect();
-    editor.seek(Math.max(0, view.from + ((clientX - rect.left) / rect.width) * (view.to - view.from)));
+    return view.from + ((clientX - rect.left) / rect.width) * (view.to - view.from);
+  };
+  const place = (beat: number) => {
+    const view = span();
+    if (view === null) return 0;
+    return ((beat - view.from) / (view.to - view.from)) * canvas.clientWidth;
   };
   canvas.addEventListener('mousedown', (event) => {
     event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    // the lane: what it does with a press (a pose picked, moved, made)
+    if (lane !== null && event.clientY - rect.top >= SONG) {
+      const drag = lane.press(beatAt(event.clientX), event.clientX - rect.left, place);
+      if (drag !== null) {
+        const move = (next: MouseEvent) => drag.move(beatAt(next.clientX), next.clientX - rect.left);
+        const up = () => {
+          window.removeEventListener('mousemove', move);
+          window.removeEventListener('mouseup', up);
+          drag.up();
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
+        return;
+      }
+    }
     if (editor.previewExtra !== null) editor.stopTrial();
     if (editor.isPlaying()) editor.togglePlay();
-    seekAt(event.clientX);
-    const move = (next: MouseEvent) => seekAt(next.clientX);
+    editor.seek(Math.max(0, beatAt(event.clientX)));
+    const move = (next: MouseEvent) => editor.seek(Math.max(0, beatAt(next.clientX)));
     const up = () => {
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
@@ -926,11 +1015,23 @@ export function scrubStrip(editor: Editor, range: () => { start: number; end: nu
     'wheel',
     (event) => {
       event.preventDefault();
+      const view = span();
+      if (view === null) return;
+      if (event.ctrlKey || event.metaKey) {
+        zoom(Math.exp(event.deltaY * 0.0015), beatAt(event.clientX));
+        return;
+      }
+      if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
+        const shift = (delta / Math.max(1, canvas.clientWidth)) * (view.to - view.from);
+        setView(view.from + shift, view.to + shift);
+        return;
+      }
       const step = editor.snap || 0.25;
       editor.seek(Math.max(0, editor.snapBeat(editor.playhead()) + (event.deltaY > 0 ? step : -step)));
     },
     { passive: false },
   );
   requestAnimationFrame(draw);
-  return canvas;
+  return wrap;
 }

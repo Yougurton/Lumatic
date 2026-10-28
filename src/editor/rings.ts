@@ -61,6 +61,8 @@ export interface RingPose {
   /** `angle` is a turn from where the first ring was headed before it (+15: 15° further
    *  counterclockwise), not where it ends up. */
   relative?: boolean;
+  /** A spiral's `step` is added to the step the rings had before it (+5 after 10: 15). */
+  relativeStep?: boolean;
 }
 
 export interface RingBlock {
@@ -345,17 +347,37 @@ function relativeTurn(pose: RingPose) {
  * left out; the map's events count them.)
  */
 export function poseBase(blocks: readonly RingBlock[], block: RingBlock, pose: RingPose) {
-  let current = 0;
-  for (const item of timedPoses(blocks.filter((other) => isTurn(other) && other.system === block.system && other.mode === block.mode))) {
-    if (item.pose.id === pose.id) return current;
-    current = item.pose.relative === true ? current + item.pose.angle : item.pose.angle;
-  }
-  return current;
+  return poseBefore(blocks, block, pose).angle;
 }
 
-/** The pose with its first ring's angle where it ends up (`base`: where it was headed before). */
-export function absolutePose(pose: RingPose, base: number): RingPose {
-  return pose.relative === true ? { ...pose, angle: base + pose.angle, relative: false } : pose;
+/** How the rings stand before `pose`, by the poses of the same rings before it: the first ring's angle
+ *  and the step from ring to ring (0 and 0 at the start). */
+export function poseBefore(blocks: readonly RingBlock[], block: RingBlock, pose: RingPose): { angle: number; step: number } {
+  let angle = 0;
+  let step = 0;
+  for (const item of timedPoses(blocks.filter((other) => isTurn(other) && other.system === block.system && other.mode === block.mode))) {
+    if (item.pose.id === pose.id) break;
+    angle = item.pose.relative === true ? angle + item.pose.angle : item.pose.angle;
+    step = stepAfter(item.pose, step);
+  }
+  return { angle, step };
+}
+
+/** The step from ring to ring a pose leaves (`before`: the one before it): a spiral its own (or the one
+ *  before plus its own), the rings in line none, other shapes their own spread. */
+function stepAfter(pose: RingPose, before: number) {
+  if (pose.shape === 'same' || pose.shape === 'manual') return 0;
+  return pose.shape === 'spiral' && pose.relativeStep === true ? before + pose.step : pose.step;
+}
+
+/** The pose with its first ring's angle and its step as they end up (`before`: how the rings stood). */
+export function absolutePose(pose: RingPose, before: number | { angle: number; step: number }): RingPose {
+  const base = typeof before === 'number' ? { angle: before, step: 0 } : before;
+  if (pose.relative !== true && pose.relativeStep !== true) return pose;
+  const out: RingPose = { ...pose, angle: pose.relative === true ? base.angle + pose.angle : pose.angle, step: pose.relativeStep === true && pose.shape === 'spiral' ? base.step + pose.step : pose.step };
+  delete out.relative;
+  delete out.relativeStep;
+  return out;
 }
 
 /** The poses of blocks in time order (each with its block), only those inside its block. */
@@ -397,6 +419,23 @@ export function ringBase(events: readonly { songBeat: number; customData?: Recor
   return base;
 }
 
+/** The step from ring to ring the last ring event before `songBeat` set for a system (its custom step,
+ *  with its multiplier); 0 when that event had none, or there was none. */
+export function ringStepBase(events: readonly { songBeat: number; customData?: Record<string, unknown> }[], system: RingSystemInfo, songBeat: number) {
+  let step = 0;
+  for (const event of events) {
+    if (event.songBeat >= songBeat - 1e-9) break;
+    const custom = event.customData;
+    const get = (key: string) => custom?.[`_${key}`] ?? custom?.[key];
+    const nameFilter = get('nameFilter');
+    if (nameFilter !== undefined && !matchesRingName(system.rotation.name, String(nameFilter))) continue;
+    const own = get('step');
+    const mult = get('stepMult');
+    step = own === undefined ? 0 : Number(own) * (mult === undefined ? 1 : Number(mult));
+  }
+  return step;
+}
+
 /**
  * The ring events of 'event' blocks. `others`: the show's other events of the rings' event type
  * (sorted); `toSong`: map beats → song BPM beats; `secondsPerBeat` of the song.
@@ -410,7 +449,7 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     const songBeat = toSong(beat);
     const base = ringBase(known, system, songBeat);
     const rotation = pose.relative === true ? relativeTurn(pose) : turn(base, pose.angle, pose.way, pose.loops);
-    const step = pose.shape === 'spiral' ? pose.step : 0;
+    const step = pose.shape !== 'spiral' ? 0 : pose.relativeStep === true ? ringStepBase(known, system, songBeat) + pose.step : pose.step;
     const count = system.rings;
     // the wave: rings per 0.02 s tick (the game's fixed step); the turn's time: how fast each ring
     // closes in on its angle (99 % of the way by the end)
@@ -542,7 +581,9 @@ export function ringAnimations(blocks: readonly RingBlock[], systems: readonly R
   for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'tracks'))) {
     const system = systems.find((item) => item.name === block.system);
     if (system === undefined) continue;
-    const angles = poseAngles(pose, system.rings, 'tracks');
+    // (a spiral's step added to the one before: worked out from the poses before it)
+    const spread = pose.shape === 'spiral' && pose.relativeStep === true ? { ...pose, step: poseBefore(blocks, block, pose).step + pose.step } : pose;
+    const angles = poseAngles(spread, system.rings, 'tracks');
     angles.forEach((target, i) => steps.push({ track: ringTrack(system.name, i), beat: beat + ringDelay(pose, i, system.rings), pose, at: beat, first: ringTrack(system.name, 0), target }));
   }
   steps.sort((a, b) => a.beat - b.beat);

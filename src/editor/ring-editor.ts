@@ -1,8 +1,8 @@
 import type { Editor } from './editor';
-import { button, check, scrubStrip, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
+import { button, check, scrubStrip, type StripLane, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { ringSystemName } from './library';
 import { newId } from './model';
-import { absolutePose, dataFirstRing, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { absolutePose, dataFirstRing, poseBefore, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -27,11 +27,9 @@ export class RingEditor {
   private dock: HTMLElement | null = null;
   private blockId = '';
   private poseId: string | null = null;
-  private laneDrag: { id: string; startX: number; moved: boolean; origin: number } | null = null;
   private barDrag: { angles: number[]; last: number | null } | null = null;
   private keyHandler = (event: KeyboardEvent) => this.onKey(event);
   private resizeHandler = () => this.place();
-  private raf = 0;
 
   constructor(private readonly editor: Editor) {
     editor.ringEditorHook = (id) => this.open(id);
@@ -84,18 +82,12 @@ export class RingEditor {
     window.addEventListener('keydown', this.keyHandler, true);
     this.render();
     this.showPose();
-    const tick = () => {
-      this.drawLanePlayhead();
-      this.raf = requestAnimationFrame(tick);
-    };
-    this.raf = requestAnimationFrame(tick);
   }
 
   close() {
     if (this.dock === null) return;
     this.dock.remove();
     this.dock = null;
-    cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.resizeHandler);
     window.removeEventListener('keydown', this.keyHandler, true);
     this.editor.stopTrial();
@@ -199,7 +191,7 @@ export class RingEditor {
     const block = this.block();
     if (dock === null || block === undefined) return;
     const scroll = [...dock.querySelectorAll<HTMLElement>('.gls-col')].map((col) => col.scrollTop);
-    dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null));
+    dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null, this.stripLane()));
     const body = document.createElement('div');
     body.className = 'gls-body ring-body';
     body.append(this.laneColumn(block), isZoom(block) ? this.zoomColumn(block) : this.poseColumn(block), isZoom(block) ? this.zoomView(block) : this.viewColumn(block));
@@ -251,13 +243,8 @@ export class RingEditor {
     col.append(heading('Позы'));
     const hint = document.createElement('div');
     hint.className = 'gls-note';
-    hint.textContent = 'Клик по дорожке — новая поза, перетаскивание — сдвинуть, Delete — удалить. Выбранная поза видна в окне просмотра.';
+    hint.textContent = 'Позы — на полосе с песней сверху: клик по нижней дорожке в блоке — новая поза, перетаскивание — сдвинуть, Delete — удалить. Ctrl+колесо или −/+ — масштаб, Shift+колесо — вдоль песни. Выбранная поза видна в окне просмотра.';
     col.append(hint);
-    const canvas = document.createElement('canvas');
-    canvas.className = 'gls-lane ring-lane';
-    col.append(canvas);
-    requestAnimationFrame(() => this.drawLane(canvas, block));
-    this.bindLane(canvas, block);
     const list = document.createElement('div');
     list.className = 'ring-list';
     [...block.poses].sort((a, b) => a.beat - b.beat).forEach((pose, index) => {
@@ -265,7 +252,7 @@ export class RingEditor {
       row.className = `gls-box${pose.id === this.poseId ? ' active' : ''}`;
       const label = document.createElement('div');
       label.className = 'gls-box-name';
-      label.textContent = isZoom(block) ? `${String(index + 1)}. Расстояние ${String(round(pose.step))}` : `${String(index + 1)}. ${SHAPES.find(([shape]) => shape === shapeOf(pose, block))?.[1] ?? ''} · ${pose.relative === true && pose.shape !== 'manual' ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round(pose.angle)))}° от прошлой` : `${String(round(pose.angle))}°`}${pose.shape === 'spiral' ? ` +${String(round(pose.step))}°` : ''}`;
+      label.textContent = isZoom(block) ? `${String(index + 1)}. Расстояние ${String(round(pose.step))}` : `${String(index + 1)}. ${SHAPES.find(([shape]) => shape === shapeOf(pose, block))?.[1] ?? ''} · ${pose.relative === true && pose.shape !== 'manual' ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round(pose.angle)))}° от прошлой` : `${String(round(pose.angle))}°`}${pose.shape === 'spiral' ? (pose.relativeStep === true ? ` · шаг ${pose.step >= 0 ? '+' : '−'}${String(Math.abs(round(pose.step)))}° от прошлой` : ` +${String(round(pose.step))}°`) : ''}`;
       const info = document.createElement('div');
       info.className = 'gls-dim';
       info.textContent = isZoom(block) ? `доля ${String(round(pose.beat))} · переход ${String(round(pose.duration))}` : `доля ${String(round(pose.beat))} · поворот ${String(round(pose.duration))}${pose.delay > 0 ? ` · волна ${String(round(pose.delay))}` : ''}`;
@@ -351,8 +338,9 @@ export class RingEditor {
     col.append(toggle(shapes, shapeOf(pose, block), (value) => this.changePose((item) => {
       if (value === 'manual' && item.shape !== 'manual') {
         // (by hand: each ring's own angle, where it ends up)
-        item.manual = poseAngles(absolutePose(item, poseBase(this.editor.ringBlocks, block, item)), this.system(block)?.rings ?? 1, block.mode).map(round);
+        item.manual = poseAngles(absolutePose(item, poseBefore(this.editor.ringBlocks, block, item)), this.system(block)?.rings ?? 1, block.mode).map(round);
         delete item.relative;
+        delete item.relativeStep;
       }
       item.shape = value;
     })));
@@ -386,7 +374,25 @@ export class RingEditor {
         col.append(note(`До неё первое кольцо стоит на ${String(round(base))}°, после — на ${String(round(base + pose.angle))}°.${events ? ' В игре поворот прибавляется к тому, где кольца остались, — и после обычных событий вращения тоже.' : ''}`));
       }
     }
-    if (shape === 'spiral') col.append(labeled('Шаг от кольца к кольцу, °', numberInput(pose.step, 1, (value) => this.changePose((item) => (item.step = value)))));
+    if (shape === 'spiral') {
+      const relativeStep = pose.relativeStep === true;
+      // (switching keeps the step the rings end up with: the step becomes what's added, or the other way)
+      col.append(
+        check('Шаг — от прошлой позы (+ / −)', relativeStep, (on) => {
+          const before = poseBefore(this.editor.ringBlocks, block, pose).step;
+          this.changePose((item) => {
+            item.step = round(on ? item.step - before : before + item.step);
+            if (on) item.relativeStep = true;
+            else delete item.relativeStep;
+          });
+        }),
+      );
+      col.append(labeled(relativeStep ? 'Прибавить к шагу, °' : 'Шаг от кольца к кольцу, °', numberInput(pose.step, 1, (value) => this.changePose((item) => (item.step = value)))));
+      if (relativeStep) {
+        const before = poseBefore(this.editor.ringBlocks, block, pose).step;
+        col.append(note(`Шаг до неё — ${String(round(before))}°, после — ${String(round(before + pose.step))}°.${events ? ' В игре — к шагу последнего события колец перед ней.' : ''}`));
+      }
+    }
     if (shape === 'wave' || shape === 'alternate' || shape === 'random') col.append(labeled(shape === 'alternate' ? 'Каждое второе повёрнуто на, °' : 'Размах, °', numberInput(pose.step, 1, (value) => this.changePose((item) => (item.step = value)))));
     if (shape === 'wave') {
       col.append(labeled('Волн по кольцам', numberInput(pose.periods, 0.25, (value) => this.changePose((item) => (item.periods = value)))));
@@ -550,143 +556,111 @@ export class RingEditor {
 
   // ----- the lane --------------------------------------------------------------------------------------
 
-  private laneGeometry(canvas: HTMLCanvasElement, block: RingBlock) {
-    const width = canvas.clientWidth;
-    const length = Math.max(0.25, block.end - block.start);
-    const pad = 12;
-    return { width, height: canvas.clientHeight, length, toX: (beat: number) => pad + (beat / length) * (width - pad * 2), toBeat: (x: number) => ((x - pad) / (width - pad * 2)) * length };
+  /** The poses on the strip of the song above: drawn on the song's own beats, picked, moved and made
+   *  there. */
+  private stripLane(): StripLane {
+    const snap = (beat: number) => {
+      const step = this.editor.snap > 0 ? this.editor.snap : 0;
+      return Math.max(0, step > 0 ? Math.round(beat / step) * step : beat);
+    };
+    return {
+      height: 56,
+      key: () => {
+        const block = this.block();
+        return block === undefined ? '' : `${JSON.stringify(block.poses)} ${String(this.poseId)} ${String(block.start)} ${String(block.end)}`;
+      },
+      draw: (ctx, x, top, height) => {
+        const block = this.block();
+        if (block !== undefined) this.drawPoses(ctx, block, x, top, height);
+      },
+      press: (beat, at, place) => {
+        const block = this.block();
+        if (block === undefined) return null;
+        const hit = block.poses.map((pose) => ({ pose, d: Math.abs(place(block.start + pose.beat) - at) })).filter((entry) => entry.d <= 11).sort((a, b) => a.d - b.d)[0];
+        if (hit !== undefined) {
+          // picked; dragged — moved (one undo step when let go)
+          const id = hit.pose.id;
+          const origin = hit.pose.beat;
+          this.poseId = id;
+          let moved = false;
+          return {
+            move: (next, x) => {
+              if (!moved && Math.abs(x - at) < 4) return;
+              moved = true;
+              const pose = this.block()?.poses.find((item) => item.id === id);
+              if (pose !== undefined) pose.beat = Math.min(block.end - block.start, snap(next - block.start));
+            },
+            up: () => {
+              if (!moved) {
+                this.render();
+                this.showPose();
+                return;
+              }
+              const pose = this.block()?.poses.find((item) => item.id === id);
+              const to = pose?.beat ?? origin;
+              if (pose !== undefined) pose.beat = origin;
+              this.changePose((item) => (item.beat = to));
+              this.render();
+            },
+          };
+        }
+        // outside the block: the song's cursor goes there, as on the strip above
+        if (beat < block.start - 1e-6 || beat > block.end + 1e-6) return null;
+        // a new pose here: like the one before it
+        const local = Math.min(block.end - block.start, snap(beat - block.start));
+        const before = [...block.poses].filter((pose) => pose.beat <= local).sort((a, b) => b.beat - a.beat)[0];
+        const pose = before === undefined ? newPose(local, isZoom(block) ? { step: round(this.zoomSystem(block)?.initialStep ?? 2) } : {}) : { ...structuredClone(before), id: newId('p'), beat: local };
+        this.poseId = pose.id;
+        this.change((item) => item.poses.push(pose));
+        this.render();
+        return { move: () => undefined, up: () => undefined };
+      },
+    };
   }
 
-  private laneCanvas: { canvas: HTMLCanvasElement; image: ImageData | null; block: RingBlock } | null = null;
-
-  private drawLane(canvas: HTMLCanvasElement, block: RingBlock) {
-    if (!canvas.isConnected || canvas.clientWidth === 0) return;
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(canvas.clientWidth * ratio);
-    canvas.height = Math.round(canvas.clientHeight * ratio);
-    const ctx = canvas.getContext('2d')!;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    const g = this.laneGeometry(canvas, block);
-    ctx.fillStyle = '#101116';
-    ctx.fillRect(0, 0, g.width, g.height);
-    ctx.font = '10px system-ui, sans-serif';
-    const snap = this.editor.snap > 0 ? this.editor.snap : 0.25;
-    for (let beat = 0; beat <= g.length + 1e-6; beat += snap) {
-      const whole = Math.abs(beat - Math.round(beat)) < 1e-6;
-      ctx.fillStyle = whole ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.05)';
-      ctx.fillRect(Math.round(g.toX(beat)), 14, 1, g.height - 18);
-      if (whole) {
-        ctx.fillStyle = '#7d8394';
-        ctx.fillText(String(Math.round(beat)), g.toX(beat) + 2, 10);
-      }
-    }
-    const cy = g.height / 2 + 6;
+  /** The block's poses on the strip's lane: each at its beat, its turn's time after it, its angle. */
+  private drawPoses(ctx: CanvasRenderingContext2D, block: RingBlock, x: (beat: number) => number, top: number, height: number) {
+    const cy = top + height / 2 - 4;
     const widest = Math.max(1e-3, ...block.poses.map((pose) => Math.abs(pose.step)));
+    ctx.font = '10px system-ui, sans-serif';
     for (const pose of [...block.poses].sort((a, b) => a.beat - b.beat)) {
-      const x = g.toX(pose.beat);
-      const span = this.reached(block, pose) * ((g.width - 24) / g.length);
+      const px = x(block.start + pose.beat);
+      const span = x(block.start + pose.beat + this.reached(block, pose)) - px;
       ctx.fillStyle = isZoom(block) ? 'rgba(120,210,255,0.25)' : 'rgba(183,140,255,0.25)';
-      ctx.fillRect(x, cy - 2, span, 4);
+      ctx.fillRect(px, cy - 2, Math.max(0, span), 4);
       const selected = pose.id === this.poseId;
       if (isZoom(block)) {
         // (bars a pose's spacing apart)
         const gap = 2 + (Math.abs(pose.step) / widest) * 6;
         ctx.fillStyle = selected ? '#ffffff' : '#7fd4ff';
-        for (let k = 0; k < 4; k++) ctx.fillRect(x - 1 + k * gap, cy - 9, selected ? 2 : 1.5, 18);
+        for (let k = 0; k < 4; k++) ctx.fillRect(px - 1 + k * gap, cy - 9, selected ? 2 : 1.5, 18);
         ctx.fillStyle = '#c9cdd8';
-        ctx.fillText(String(round(pose.step)), x + 4 * gap + 2, cy + 20);
+        ctx.fillText(String(round(pose.step)), px + 4 * gap + 2, cy + 20);
         continue;
       }
+      ctx.fillStyle = '#0f1014';
       ctx.strokeStyle = selected ? '#ffffff' : '#b78cff';
       ctx.lineWidth = selected ? 2.5 : 1.5;
       ctx.beginPath();
-      ctx.arc(x, cy, 10, 0, Math.PI * 2);
+      ctx.arc(px, cy, 10, 0, Math.PI * 2);
+      ctx.fill();
       ctx.stroke();
       const relative = pose.relative === true && pose.shape !== 'manual';
       const angle = ((relative ? poseBase(this.editor.ringBlocks, block, pose) + pose.angle : pose.angle) * Math.PI) / 180;
       ctx.beginPath();
-      ctx.moveTo(x, cy);
-      ctx.lineTo(x - Math.sin(angle) * 10, cy - Math.cos(angle) * 10);
+      ctx.moveTo(px, cy);
+      ctx.lineTo(px - Math.sin(angle) * 10, cy - Math.cos(angle) * 10);
       ctx.stroke();
       ctx.fillStyle = '#c9cdd8';
-      ctx.fillText(relative ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round(pose.angle)))}°` : `${String(round(pose.angle))}°`, x + 13, cy + 20);
+      ctx.fillText(relative ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round(pose.angle)))}°` : `${String(round(pose.angle))}°`, px - 8, cy + 23);
     }
-    this.laneCanvas = { canvas, image: ctx.getImageData(0, 0, canvas.width, canvas.height), block };
-  }
-
-  /** The cursor over the lane while the song moves. */
-  private drawLanePlayhead() {
-    const lane = this.laneCanvas;
-    if (lane === null || lane.image === null || !lane.canvas.isConnected) return;
-    const ctx = lane.canvas.getContext('2d')!;
-    ctx.putImageData(lane.image, 0, 0);
-    const g = this.laneGeometry(lane.canvas, lane.block);
-    const x = g.toX(this.editor.playhead() - lane.block.start);
-    if (x < 0 || x > lane.canvas.clientWidth) return;
-    const ratio = window.devicePixelRatio || 1;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.fillStyle = '#ff4d6d';
-    ctx.fillRect(x, 0, 1.5, lane.canvas.clientHeight);
-  }
-
-  private bindLane(canvas: HTMLCanvasElement, block: RingBlock) {
-    const local = (event: MouseEvent) => event.clientX - canvas.getBoundingClientRect().left;
-    const snap = (beat: number) => {
-      const step = this.editor.snap > 0 ? this.editor.snap : 0;
-      return Math.max(0, step > 0 ? Math.round(beat / step) * step : beat);
-    };
-    const move = (event: MouseEvent) => {
-      const drag = this.laneDrag;
-      if (drag === null) return;
-      const x = local(event);
-      if (!drag.moved && Math.abs(x - drag.startX) < 4) return;
-      drag.moved = true;
-      const g = this.laneGeometry(canvas, block);
-      const pose = block.poses.find((item) => item.id === drag.id);
-      if (pose !== undefined) pose.beat = Math.min(g.length, snap(g.toBeat(x)));
-      this.drawLane(canvas, block);
-    };
-    const up = () => {
-      const drag = this.laneDrag;
-      this.laneDrag = null;
-      window.removeEventListener('mousemove', move);
-      if (drag === null) return;
-      if (!drag.moved) {
-        this.render();
-        this.showPose();
-        return;
-      }
-      const pose = block.poses.find((item) => item.id === drag.id);
-      const beat = pose?.beat ?? drag.origin;
-      if (pose !== undefined) pose.beat = drag.origin;
-      this.changePose((item) => (item.beat = beat));
-    };
-    canvas.addEventListener('mousedown', (event) => {
-      const g = this.laneGeometry(canvas, block);
-      const x = local(event);
-      const hit = block.poses.map((pose) => ({ pose, d: Math.abs(g.toX(pose.beat) - x) })).filter((entry) => entry.d <= 11).sort((a, b) => a.d - b.d)[0];
-      if (hit !== undefined) {
-        this.poseId = hit.pose.id;
-        this.laneDrag = { id: hit.pose.id, startX: x, moved: false, origin: hit.pose.beat };
-        this.drawLane(canvas, block);
-        window.addEventListener('mousemove', move);
-        window.addEventListener('mouseup', up, { once: true });
-        return;
-      }
-      // a new pose here: like the one before it
-      const beat = Math.min(g.length, snap(g.toBeat(x)));
-      const before = [...block.poses].filter((pose) => pose.beat <= beat).sort((a, b) => b.beat - a.beat)[0];
-      const pose = before === undefined ? newPose(beat, isZoom(block) ? { step: round(this.zoomSystem(block)?.initialStep ?? 2) } : {}) : { ...structuredClone(before), id: newId('p'), beat };
-      this.poseId = pose.id;
-      this.change((item) => item.poses.push(pose));
-    });
   }
 
   // ----- the rings -------------------------------------------------------------------------------------
 
   /** The angles the picked pose gives the rings (as they will stand), or the bars being dragged. */
   private angles(block: RingBlock, pose: RingPose, system: RingSystemInfo) {
-    return this.barDrag?.angles ?? poseAngles(absolutePose(pose, poseBase(this.editor.ringBlocks, block, pose)), system.rings, block.mode);
+    return this.barDrag?.angles ?? poseAngles(absolutePose(pose, poseBefore(this.editor.ringBlocks, block, pose)), system.rings, block.mode);
   }
 
   private drawSketch(canvas: HTMLCanvasElement, block: RingBlock, pose: RingPose, system: RingSystemInfo) {
@@ -804,13 +778,14 @@ export class RingEditor {
         item.shape = 'manual';
         item.manual = angles;
         delete item.relative;
+        delete item.relativeStep;
       });
     };
     canvas.addEventListener('mousedown', (event) => {
       const pose = this.pose();
       if (pose === undefined) return;
       // (starting from what the pose has now: its own shape's angles, not where the rings ended up)
-      this.barDrag = { angles: poseAngles(absolutePose(pose, poseBase(this.editor.ringBlocks, this.block() ?? block, pose)), system.rings, 'tracks'), last: null };
+      this.barDrag = { angles: poseAngles(absolutePose(pose, poseBefore(this.editor.ringBlocks, this.block() ?? block, pose)), system.rings, 'tracks'), last: null };
       paint(event);
       window.addEventListener('mousemove', paint);
       window.addEventListener('mouseup', up, { once: true });
