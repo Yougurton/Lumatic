@@ -1131,4 +1131,10 @@ export const EN: Record<string, string> = {
   "Оттенок": "Hue",
   "Сдвиг, °": "Shift, °",
   "Каждому следующему, °": "Each next one, °",
+  "Тяните или крутите колесом (кликните, чтобы колесо крутило барабан); ← → — на шаг": "Drag or turn with the wheel (click it so the wheel turns the drum); ← → — one step",
+  "весь эффект": "whole effect",
+  "Выделение снято": "Selection cleared",
+  "Выделено событий в куске: {0}": "Events selected in the stretch: {0}",
+  "Клик — выделить все его события (в выделенном куске песни — только там) и его лампы; ещё клик — снять. ПКМ — действия": "Click — select all its events (only inside the picked stretch of the song, if any) and its lights; click again — clear. Right click — actions",
+  "{0}: {1} ламп. Клик — выделить все её события (в выделенном куске песни — только там) и её лампы, ещё клик — снять; двойной — войти, ПКМ — действия": "{0}: {1} lights. Click — select all its events (only inside the picked stretch of the song, if any) and its lights, click again — clear; double — enter, right click — actions",
 };

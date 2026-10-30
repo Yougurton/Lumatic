@@ -247,7 +247,7 @@ export class Inspector {
           fit(params, item);
         });
       root.append(this.section('Каждая вспышка длится, долей', gridSelect(p.pulse, (value) => wave((params) => (params.pulse = value)), [2, 4, 8])));
-      root.append(this.section('Следующая лампа через, долей', gridSelect(p.spacing ?? 0, (value) => wave((params) => (params.spacing = value)), [2, 4], 'растянуть на весь эффект')));
+      root.append(this.section('Следующая лампа через, долей', gridSelect(p.spacing ?? 0, (value) => wave((params) => (params.spacing = value)), [2, 4], 'весь эффект')));
       root.append(this.numberField('Сколько раз пройти', p.repeats, 1, (value) => wave((params) => (params.repeats = Math.max(1, Math.round(value))))));
       if ((p.spacing ?? 0) > 0) root.append(this.note('Длина эффекта считается сама: (ламп − 1) × шаг + вспышка, на каждый проход. Растянете эффект на таймлайне — добавятся проходы.'));
     }

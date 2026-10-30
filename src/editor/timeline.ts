@@ -183,6 +183,27 @@ export class Timeline {
     requestAnimationFrame(loop);
   }
 
+  /** A group's row clicked: all its own events selected — only those in the picked stretch of the song
+   *  if there is one — and its lights picked (they flash); clicked again, with them still selected:
+   *  nothing selected. */
+  private pickRow(row: Row, lights: string[], parent: string | null = null) {
+    const editor = this.editor;
+    const range = editor.songRange;
+    const from = range === null ? -Infinity : Math.min(range.start, range.end);
+    const to = range === null ? Infinity : Math.max(range.start, range.end);
+    const ids = [...new Set(editor.rowClips(row).filter((shown) => shown.role === 'own' && shown.clip.end > from + 1e-9 && shown.clip.start < to - 1e-9).map((shown) => shown.clip.id))];
+    const again = ids.length > 0 && ids.length === editor.selection.size && ids.every((id) => editor.selection.has(id));
+    if (again) {
+      editor.select([]);
+      editor.selectLights([]);
+      editor.setStatus('Выделение снято');
+      return;
+    }
+    editor.selectLights(lights, 'replace', parent);
+    editor.select(ids);
+    editor.setStatus(range === null ? `Выделено событий: ${String(ids.length)}` : `Выделено событий в куске: ${String(ids.length)}`);
+  }
+
   /** The mouse's last move while dragging (dragged up to an edge, the timeline scrolls on its own). */
   private lastMove: MouseEvent | null = null;
 
@@ -1569,9 +1590,9 @@ export class Timeline {
         text(row.label, 'th-name'),
         text(row.lights.length > 0 ? String(row.lights.length) : '', 'th-count'),
       );
-      item.title = 'Клик — выбрать все его лампы, ПКМ — действия';
+      item.title = 'Клик — выделить все его события (в выделенном куске песни — только там) и его лампы; ещё клик — снять. ПКМ — действия';
       item.addEventListener('click', () => {
-        if (!this.headerDragged) editor.selectLights(editor.rowLights(row).map((light) => lightKey(light.type, light.id)));
+        if (!this.headerDragged) this.pickRow(row, editor.rowLights(row).map((light) => lightKey(light.type, light.id)));
       });
       item.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -1609,9 +1630,9 @@ export class Timeline {
         text(String(lights.length), 'th-count'),
       );
       if (editor.focus !== group.id) item.append(enter);
-      item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выбрать его лампы, двойной — войти, ПКМ — действия`;
+      item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выделить все её события (в выделенном куске песни — только там) и её лампы, ещё клик — снять; двойной — войти, ПКМ — действия`;
       item.addEventListener('click', () => {
-        if (!this.headerDragged) editor.selectLights(lights.map((light) => lightKey(light.type, light.id)), 'replace', row.parent);
+        if (!this.headerDragged) this.pickRow(row, lights.map((light) => lightKey(light.type, light.id)), row.parent);
       });
       item.addEventListener('dblclick', () => editor.enterGroup(group.id));
       item.addEventListener('contextmenu', (event) => {
