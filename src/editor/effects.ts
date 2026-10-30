@@ -31,6 +31,8 @@ export interface EffectParams {
   fadeIn: number;
   /** wave: how long each item stays lit; fill: how long the filling takes (beats). */
   pulse: number;
+  /** wave: beats from one item's flash to the next one's (none / 0: spread over the effect's length). */
+  spacing?: number;
   /** wave: how many times it runs through. */
   repeats: number;
   direction: Direction;
@@ -142,7 +144,7 @@ function stepsOf(count: number, direction: Direction): number[] {
   });
 }
 
-function mixColor(a: ClipColor, b: ClipColor | null, t: number, hsv: boolean, scheme: SchemeColors): ClipColor {
+export function mixColor(a: ClipColor, b: ClipColor | null, t: number, hsv: boolean, scheme: SchemeColors): ClipColor {
   if (b === null || t <= 0) return { ...a };
   if (t >= 1) return { ...b };
   if (a.ref === b.ref && a.ref !== 'custom') return { ref: a.ref, brightness: a.brightness + (b.brightness - a.brightness) * t };
@@ -150,6 +152,16 @@ function mixColor(a: ClipColor, b: ClipColor | null, t: number, hsv: boolean, sc
   const to = resolveRgb(b, scheme);
   const rgb: Rgb = hsv ? lerpHsv(from, to, t) : [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
   return { ref: 'custom', rgb, brightness: a.brightness + (b.brightness - a.brightness) * t };
+}
+
+/** A wave's length with a set time from item to item: `passes` passes over `steps` steps. */
+export function waveLength(p: EffectParams, steps: number, passes = Math.max(1, Math.round(p.repeats))) {
+  return passes * ((Math.max(1, steps) - 1) * (p.spacing ?? 0) + Math.max(1 / 64, p.pulse));
+}
+
+/** How many steps a wave goes through for `count` items (items side by side from the middle are one). */
+export function waveSteps(count: number, direction: Direction) {
+  return count === 0 ? 0 : Math.max(...stepsOf(count, direction === 'pingpong' ? 'forward' : direction)) + 1;
 }
 
 /** A small seeded random (the same twinkle every time it is made). */
@@ -290,10 +302,15 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
   const colorAt = (step: number) => mixColor(p.color, p.color2, stepCount <= 1 ? 0 : step / (stepCount - 1), p.hsv, scheme);
 
   if (effect.kind === 'wave') {
-    const passes = Math.max(1, Math.round(p.repeats));
-    const pass = duration / passes;
-    const pulse = Math.max(1 / 64, Math.min(p.pulse, pass));
-    const delay = stepCount > 1 ? Math.max(0, pass - pulse) / (stepCount - 1) : 0;
+    // (the next item after a set time: a pass as long as that makes it, as many passes as fit; else
+    // the passes spread over the effect)
+    const spaced = (p.spacing ?? 0) > 0;
+    const pulse0 = Math.max(1 / 64, p.pulse);
+    const passLength = spaced ? waveLength(p, stepCount, 1) : 0;
+    const passes = spaced ? Math.max(1, Math.round(duration / passLength + 1e-6)) : Math.max(1, Math.round(p.repeats));
+    const pass = spaced ? passLength : duration / passes;
+    const pulse = spaced ? pulse0 : Math.min(pulse0, pass);
+    const delay = spaced ? p.spacing! : stepCount > 1 ? Math.max(0, pass - pulse) / (stepCount - 1) : 0;
     for (let r = 0; r < passes; r++) {
       items.forEach((item, index) => {
         const step = p.direction === 'pingpong' && r % 2 === 1 ? stepCount - 1 - steps[index]! : steps[index]!;

@@ -225,7 +225,8 @@ function framesToClips(frames: Frame[], end: number, scheme: SchemeColors, make:
   // extend: holds what was before until here (a fade after it starts from here)
   const resolved: Frame[] = [];
   for (const frame of frames) {
-    if (frame.beat >= end - 1e-6) break;
+    // (a fade that arrives right at the block's end still counts: the light gets there as it ends)
+    if (frame.beat > end + 1e-6 || (frame.beat >= end - 1e-6 && frame.transition !== 'fade')) break;
     const previous = resolved.at(-1);
     if (frame.transition === 'extend') {
       if (previous !== undefined) resolved.push({ ...previous, beat: frame.beat, transition: 'instant' });
@@ -291,6 +292,23 @@ export interface GlsContext {
   /** Rings per ring system, for rotation boxes (name → count; '' : all). */
   ringCount: (system: string) => number;
   secondsPerBeat: number;
+}
+
+/**
+ * How long the block has to be for all its boxes' events to fit (beats): each element's last event
+ * where the time spread puts it, a ring turn's beat (and a hair, so it's inside).
+ */
+export function glsNeededLength(data: GlsData, items: number): number {
+  let needed = 0;
+  for (const box of data.boxes) {
+    if (box.kind === 'color') {
+      const last = Math.max(0, ...box.events.map((event) => event.beat));
+      if (box.events.length === 0) continue;
+      const m = filterUnits(box.filter, items).length;
+      for (let k = 0; k < m; k++) needed = Math.max(needed, spreadOf(box.beatSpread, box.beatValue, k, m, null, false) + last);
+    } else if (box.rotations.length > 0) needed = Math.max(needed, Math.max(...box.rotations.map((event) => event.beat)) + 1 / 64);
+  }
+  return needed;
 }
 
 /** The block's events: light clips for its colour boxes, ring events for its rotation boxes. */

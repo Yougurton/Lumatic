@@ -16,10 +16,11 @@ export const GRIDS: [number, string][] = [
 ];
 
 /** A list to pick a grid step from (beats): every grid, and — `longer` — steps of several beats too. */
-export function gridSelect(value: number, change: (value: number) => void, longer: number[] = []): HTMLSelectElement {
+export function gridSelect(value: number, change: (value: number) => void, longer: number[] = [], none: string | null = null): HTMLSelectElement {
   const select = document.createElement('select');
   select.className = 'grid-select';
-  const options: [number, string][] = [...[...longer].sort((a, b) => b - a).map((beats): [number, string] => [beats, String(beats)]), ...GRIDS.filter(([beats]) => beats > 0)];
+  // (`none`: a first choice that is no step at all — 0)
+  const options: [number, string][] = [...(none === null ? [] : [[0, none] as [number, string]]), ...[...longer].sort((a, b) => b - a).map((beats): [number, string] => [beats, String(beats)]), ...GRIDS.filter(([beats]) => beats > 0)];
   // (a value none of them has — made before — is shown as it is)
   if (!options.some(([beats]) => Math.abs(beats - value) < 1e-6)) options.push([value, String(Math.round(value * 10000) / 10000)]);
   for (const [beats, label] of options) select.append(Object.assign(document.createElement('option'), { value: String(beats), textContent: label }));

@@ -4,7 +4,8 @@ import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
 import { holdWhileTyping } from './gls-editor';
 import { gridSelect } from './grids';
-import { KIND_NAMES, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
+import { resolveRgb, shiftHue } from './bake';
+import { KIND_NAMES, mixColor, waveLength, waveSteps, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
 import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
 
 /**
@@ -25,6 +26,15 @@ const END_MODES: [EndMode, string, string][] = [
   ['fade', 'Затухание', 'Плавно гаснет к концу (или перетекает в слой ниже)'],
   ['stay', 'Остаётся', 'Остаётся гореть до следующего события'],
 ];
+
+/** A colour's hue (degrees). */
+function rgbHue([r, g, b]: Rgb) {
+  const max = Math.max(r, g, b);
+  const delta = max - Math.min(r, g, b);
+  if (delta === 0) return 0;
+  const hue = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4;
+  return (hue * 60 + 360) % 360;
+}
 
 function toHex(rgb: Rgb) {
   return `#${rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
@@ -227,10 +237,19 @@ export class Inspector {
       root.append(this.section('Направление', this.buttons(effect.kind === 'wave' ? directions : directions.filter(([key]) => key !== 'pingpong'), p.direction, (value) => change((params) => (params.direction = value)))));
     }
     if (effect.kind === 'wave') {
-      root.append(
-        this.numberField('Длина вспышки, долей', p.pulse, 0.125, (value) => change((params) => (params.pulse = Math.max(1 / 32, value)))),
-        this.numberField('Сколько раз пройти', p.repeats, 1, (value) => change((params) => (params.repeats = Math.max(1, Math.round(value))))),
-      );
+      // (the next item after a set time: the effect as long as its passes take)
+      const fit = (params: EffectParams, item: Effect) => {
+        if ((params.spacing ?? 0) > 0) item.end = item.start + waveLength(params, waveSteps(editor.effectItemsOf(item).length, params.direction));
+      };
+      const wave = (patch: (params: EffectParams) => void) =>
+        change((params, item) => {
+          patch(params);
+          fit(params, item);
+        });
+      root.append(this.section('Каждая вспышка длится, долей', gridSelect(p.pulse, (value) => wave((params) => (params.pulse = value)), [2, 4, 8])));
+      root.append(this.section('Следующая лампа через, долей', gridSelect(p.spacing ?? 0, (value) => wave((params) => (params.spacing = value)), [2, 4], 'растянуть на весь эффект')));
+      root.append(this.numberField('Сколько раз пройти', p.repeats, 1, (value) => wave((params) => (params.repeats = Math.max(1, Math.round(value))))));
+      if ((p.spacing ?? 0) > 0) root.append(this.note('Длина эффекта считается сама: (ламп − 1) × шаг + вспышка, на каждый проход. Растянете эффект на таймлайне — добавятся проходы.'));
     }
     if (effect.kind === 'fill') root.append(this.numberField('Время заполнения, долей', p.pulse, 0.25, (value) => change((params) => (params.pulse = Math.max(0, value)))));
     if (effect.kind === 'strobe' || effect.kind === 'twinkle') {
@@ -276,8 +295,7 @@ export class Inspector {
     if (p.startMode === 'fadeIn') root.append(this.numberField('Нарастание, долей', p.fadeIn, 0.0625, (value) => change((params) => (params.fadeIn = Math.max(0.01, value)))));
     root.append(this.section('Конец вспышки', this.buttons(END_MODES, p.endMode, (mode) => change((params) => (params.endMode = mode)))));
     if (p.endMode === 'fade') root.append(this.numberField('Затухание, долей (0 — вся вспышка)', p.fadeOut ?? 0, 0.0625, (value) => change((params) => (params.fadeOut = Math.max(0, value)))));
-    root.append(this.numberField('Сдвиг оттенка, °', p.hueShift ?? 0, 15, (value) => change((params) => (params.hueShift = value))));
-    root.append(this.numberField('Каждому следующему ещё, °', p.hueStep ?? 0, 5, (value) => change((params) => (params.hueStep = value))));
+    root.append(this.hueControls(effect, (patch) => change((params) => patch(params))));
     if ((p.hueStep ?? 0) !== 0) {
       const by: [string, string, string][] = [
         ['item', 'По элементам', 'Каждый следующий элемент группы — дальше по кругу оттенков'],
@@ -473,6 +491,71 @@ export class Inspector {
       clear.addEventListener('click', () => editor.updateRaw(ids, (event) => delete event.customData));
       this.root.append(clear);
     }
+  }
+
+  private note(text: string) {
+    const note = document.createElement('div');
+    note.className = 'ins-note';
+    note.textContent = text;
+    return note;
+  }
+
+  /** The effect's hue: turned round the circle, each next one further — sliders over the hues
+   *  themselves, and the colours the first items (or flashes) come out with, as they're dragged. */
+  private hueControls(effect: Effect, change: (patch: (params: EffectParams) => void) => void) {
+    const p = effect.params;
+    const box = document.createElement('div');
+    box.className = 'ins-section ins-hue';
+    const name = Object.assign(document.createElement('div'), { className: 'ins-label', textContent: 'Оттенок' });
+    const preview = document.createElement('div');
+    preview.className = 'ins-hue-preview';
+    const scheme = this.editor.scheme();
+    const count = Math.max(2, Math.min(12, effect.kind === 'strobe' || effect.kind === 'twinkle' || p.hueBy === 'time' ? 8 : this.editor.effectItemsOf(effect).length));
+    let shift = p.hueShift ?? 0;
+    let step = p.hueStep ?? 0;
+    const drawPreview = () => {
+      preview.replaceChildren(
+        ...Array.from({ length: count }, (_, k) => {
+          const base = mixColor(p.color, p.color2, count <= 1 ? 0 : k / (count - 1), p.hsv, scheme);
+          const rgb = shiftHue(resolveRgb(base, scheme), shift + step * k);
+          const swatch = document.createElement('span');
+          swatch.style.background = toHex(rgb);
+          return swatch;
+        }),
+      );
+    };
+    const slider = (label: string, value: number, min: number, max: number, track: string, input: (value: number) => void, commit: (value: number) => void) => {
+      const row = document.createElement('label');
+      row.className = 'ins-hue-row';
+      const range = Object.assign(document.createElement('input'), { type: 'range', min: String(min), max: String(max), step: '1', value: String(value) });
+      range.style.background = track;
+      const number = Object.assign(document.createElement('input'), { type: 'number', min: String(min * 2), max: String(max * 2), step: '5', value: String(value) });
+      range.addEventListener('input', () => {
+        number.value = range.value;
+        input(Number(range.value));
+        drawPreview();
+      });
+      range.addEventListener('change', () => commit(Number(range.value)));
+      number.addEventListener('change', () => {
+        const next = Number(number.value);
+        if (!Number.isFinite(next)) return;
+        input(next);
+        commit(next);
+      });
+      row.append(Object.assign(document.createElement('span'), { textContent: label }), range, number);
+      return row;
+    };
+    // (the track: the hues the base colour goes through as the slider moves)
+    const baseHue = rgbHue(resolveRgb(p.color, scheme));
+    const hues = (from: number, to: number) => `linear-gradient(90deg, ${Array.from({ length: 13 }, (_, k) => `hsl(${String(baseHue + from + ((to - from) * k) / 12)} 85% 55%)`).join(', ')})`;
+    box.append(
+      name,
+      slider('Сдвиг, °', shift, -180, 180, hues(-180, 180), (value) => (shift = value), (value) => change((params) => (params.hueShift = value))),
+      slider('Каждому следующему, °', step, -60, 60, hues(-60, 60), (value) => (step = value), (value) => change((params) => (params.hueStep = value))),
+      preview,
+    );
+    drawPreview();
+    return box;
   }
 
   private section(label: string, content: HTMLElement) {

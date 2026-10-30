@@ -173,6 +173,7 @@ export class Timeline {
           if (beat > this.viewStart + width * 0.85 || beat < this.viewStart) this.viewStart = beat - width * 0.15;
         }
       }
+      this.autoScroll();
       if (this.needsDraw) {
         this.needsDraw = false;
         this.draw();
@@ -180,6 +181,49 @@ export class Timeline {
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  /** The mouse's last move while dragging (dragged up to an edge, the timeline scrolls on its own). */
+  private lastMove: MouseEvent | null = null;
+
+  /** Dragging (a box, events, a new event, an edge, a stretch of the song) with the mouse near the
+   *  timeline's left or right edge — or near the top or bottom of the rows: it scrolls that way, faster
+   *  the nearer, and the drag goes on as if the mouse moved. */
+  private autoScroll() {
+    const drag = this.drag;
+    const event = this.lastMove;
+    if (drag === null || event === null || !['box', 'move', 'create', 'resize', 'range'].includes(drag.kind)) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const EDGE = 36;
+    const left = GUTTER + EDGE - x;
+    const right = x - (this.width - EDGE);
+    const push = left > 0 ? -Math.min(1.5, left / EDGE) : right > 0 ? Math.min(1.5, right / EDGE) : 0;
+    let dy = 0;
+    if (drag.kind === 'box' || drag.kind === 'move') {
+      const up = this.rowsTop + EDGE * 0.6 - y;
+      const down = y - (this.rowsBottom - EDGE * 0.6);
+      dy = up > 0 ? -Math.min(1.5, up / (EDGE * 0.6)) * 10 : down > 0 ? Math.min(1.5, down / (EDGE * 0.6)) * 10 : 0;
+    }
+    if (push === 0 && dy === 0) return;
+    const pixels = push * 14;
+    if (pixels !== 0) {
+      const before = this.viewStart;
+      this.viewStart = Math.max(-1, this.viewStart + pixels / this.pxPerBeat);
+      const moved = (this.viewStart - before) * this.pxPerBeat;
+      // (the box keeps its first corner where it was on the song)
+      if (drag.kind === 'box') drag.x0 -= moved;
+      this.followPlayhead = false;
+    }
+    if (dy !== 0) {
+      const before = this.scrollY;
+      this.scrollRows(dy);
+      if (drag.kind === 'box') drag.y0 -= this.scrollY - before;
+    }
+    this.needsDraw = true;
+    // (the drag updated for where the mouse now is on the song)
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: event.clientX, clientY: event.clientY, altKey: event.altKey, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey }));
   }
 
   private get width() {
@@ -1802,6 +1846,7 @@ export class Timeline {
     }, { passive: false });
 
     canvas.addEventListener('mousedown', (event) => {
+      this.lastMove = event;
       if (this.editor.project === null) return;
       const { x, y } = local(event);
       const beat = this.xToBeat(x);
@@ -1958,6 +2003,7 @@ export class Timeline {
     window.addEventListener('mousemove', (event) => {
       const { x, y } = local(event);
       this.hover = { x, y };
+      if (event.isTrusted) this.lastMove = event;
       if (this.headerDrag !== null) {
         this.moveHeaderDrag(event.clientY);
         return;

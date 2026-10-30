@@ -1,7 +1,7 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import type { Effect } from './effects';
-import { defaultFilter, filterUnits, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
+import { defaultFilter, filterUnits, glsNeededLength, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
 import { ringSystemName } from './library';
 import { findGroup, newId, type ClipColor, type Rgb } from './model';
 
@@ -39,6 +39,8 @@ export class GlsEditor {
   private keyHandler = (event: KeyboardEvent) => this.onKey(event);
   private resizeHandler = () => this.place();
   private raf = 0;
+  /** What the box's lane and the result show (beats from the block's start); null: all of the block. */
+  private view: { from: number; to: number } | null = null;
 
   constructor(private readonly editor: Editor) {
     editor.glsEditorHook = (id) => this.open(id);
@@ -68,6 +70,7 @@ export class GlsEditor {
     this.effectId = id;
     this.boxId = effect.gls?.boxes[0]?.id ?? null;
     this.eventId = null;
+    this.view = null;
     const shade = document.createElement('div');
     shade.className = 'gls-dock';
     document.body.append(shade);
@@ -78,6 +81,7 @@ export class GlsEditor {
     this.render();
     const tick = () => {
       this.drawResultPlayhead();
+      this.drawLanePlayhead();
       this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
@@ -150,11 +154,20 @@ export class GlsEditor {
     event.stopImmediatePropagation();
   }
 
-  /** One change to the block: an undo step, its events made anew. */
+  /** One change to the block: an undo step, its events made anew — and the block made longer when its
+   *  events don't fit in it any more (to the next step of the grid). */
   private change(patch: (effect: Effect) => void) {
+    const current = this.effect();
+    if (current === undefined) return;
+    const items = this.editor.effectItemsOf(current).length;
     this.editor.updateEffect(this.effectId, (effect) => {
       effect.gls ??= { boxes: [] };
       patch(effect);
+      const needed = glsNeededLength(effect.gls, items);
+      if (effect.start + needed > effect.end + 1e-6) {
+        const step = this.editor.snap > 0 ? this.editor.snap : 1 / 64;
+        effect.end = effect.start + Math.ceil((needed - 1e-6) / step) * step;
+      }
     });
   }
 
@@ -346,10 +359,12 @@ export class GlsEditor {
     col.className = 'gls-col gls-lane-col';
     const box = this.box();
     if (box === undefined) return col;
-    col.append(heading(box.kind === 'color' ? 'События коробки' : 'Повороты'));
+    const title = heading(box.kind === 'color' ? 'События коробки' : 'Повороты');
+    title.append(this.zoomButtons(effect));
+    col.append(title);
     const hint = document.createElement('div');
     hint.className = 'gls-note';
-    hint.textContent = 'Клик по дорожке — новое событие, перетаскивание — сдвинуть, Delete — удалить.';
+    hint.textContent = 'Клик по дорожке — новое событие, перетаскивание — сдвинуть, Delete — удалить. Ctrl+колесо — масштаб, Shift+колесо — вдоль блока. Событие за концом блока удлиняет блок.';
     col.append(hint);
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-lane';
@@ -436,11 +451,96 @@ export class GlsEditor {
 
   // ----- the lane --------------------------------------------------------------------------------------
 
+  /** The beats shown (from the block's start): all of it, or as zoomed. */
+  private shown(effect: Effect) {
+    const length = Math.max(0.25, effect.end - effect.start);
+    const view = this.view;
+    return view === null ? { from: 0, to: length } : view;
+  }
+
+  /** Zoomed by `factor` (under 1: closer) around `beat` (from the block's start); null: all again. */
+  private zoomView(effect: Effect, factor: number | null, beat?: number) {
+    if (factor === null) {
+      this.view = null;
+    } else {
+      const { from, to } = this.shown(effect);
+      const at = beat ?? (from + to) / 2;
+      const length = Math.max(0.25, effect.end - effect.start);
+      const span = Math.min(length * 4, Math.max(1 / 16, (to - from) * factor));
+      const start = Math.max(-length * 0.05, at - (at - from) * (span / (to - from)));
+      this.view = { from: start, to: start + span };
+    }
+    this.redrawViews();
+  }
+
+  private panView(effect: Effect, beats: number) {
+    const { from, to } = this.shown(effect);
+    const length = Math.max(0.25, effect.end - effect.start);
+    const shift = Math.max(-length * 0.05 - from, beats);
+    this.view = { from: from + shift, to: to + shift };
+    this.redrawViews();
+  }
+
+  private redrawViews() {
+    const effect = this.effect();
+    const box = this.box();
+    if (effect === undefined) return;
+    const lane = this.shade?.querySelector<HTMLCanvasElement>('canvas.gls-lane');
+    if (lane !== undefined && lane !== null && box !== undefined) this.drawLane(lane, effect, box);
+    const result = this.shade?.querySelector<HTMLCanvasElement>('canvas.gls-result-canvas');
+    if (result !== undefined && result !== null) this.drawResult(result, effect);
+  }
+
+  /** Ctrl+wheel: zoom (around the mouse), Shift+wheel: along the block; the wheel alone: the song's
+   *  cursor a grid step. `beatAt`: the beat (from the block's start) under the mouse. */
+  private bindZoom(canvas: HTMLCanvasElement, beatAt: (x: number) => number) {
+    canvas.addEventListener(
+      'wheel',
+      (event) => {
+        const effect = this.effect();
+        if (effect === undefined) return;
+        event.preventDefault();
+        const x = event.clientX - canvas.getBoundingClientRect().left;
+        if (event.ctrlKey || event.metaKey) this.zoomView(effect, Math.exp(event.deltaY * 0.0015), beatAt(x));
+        else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+          const { from, to } = this.shown(effect);
+          this.panView(effect, ((event.deltaX !== 0 ? event.deltaX : event.deltaY) / Math.max(1, canvas.clientWidth)) * (to - from));
+        } else {
+          const step = this.editor.snap || 0.25;
+          this.editor.seek(Math.max(0, this.editor.snapBeat(this.editor.playhead()) + (event.deltaY > 0 ? step : -step)));
+        }
+      },
+      { passive: false },
+    );
+  }
+
+  /** −, +, ⤢ for the lane and the result. */
+  private zoomButtons(effect: Effect) {
+    const holder = document.createElement('span');
+    holder.className = 'gls-zoom';
+    holder.append(
+      button('−', 'Отдалить (Ctrl+колесо)', () => this.zoomView(effect, 1.5)),
+      button('+', 'Приблизить (Ctrl+колесо)', () => this.zoomView(effect, 1 / 1.5)),
+      button('⤢', 'Весь блок', () => this.zoomView(effect, null)),
+    );
+    return holder;
+  }
+
   private laneGeometry(canvas: HTMLCanvasElement, effect: Effect) {
     const width = canvas.clientWidth;
     const length = Math.max(0.25, effect.end - effect.start);
+    const { from, to } = this.shown(effect);
     const pad = 12;
-    return { width, height: canvas.clientHeight, pad, length, toX: (beat: number) => pad + (beat / length) * (width - pad * 2), toBeat: (x: number) => ((x - pad) / (width - pad * 2)) * length };
+    return {
+      width,
+      height: canvas.clientHeight,
+      pad,
+      length,
+      from,
+      to,
+      toX: (beat: number) => pad + ((beat - from) / (to - from)) * (width - pad * 2),
+      toBeat: (x: number) => from + ((x - pad) / (width - pad * 2)) * (to - from),
+    };
   }
 
   private drawLane(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
@@ -455,17 +555,29 @@ export class GlsEditor {
     ctx.fillRect(0, 0, g.width, g.height);
     const top = 16;
     const bottom = g.height - 8;
-    // beats
+    // beats (as fine as the zoom allows; their numbers where there's room)
     ctx.font = '10px system-ui, sans-serif';
+    const span = g.to - g.from;
+    const inner = g.width - g.pad * 2;
     const snap = this.editor.snap > 0 ? this.editor.snap : 0.25;
-    for (let beat = 0; beat <= g.length + 1e-6; beat += snap) {
-      const whole = Math.abs(beat - Math.round(beat)) < 1e-6;
+    const step = [snap, 1 / 16, 0.125, 0.25, 0.5, 1, 2, 4, 8].filter((value) => value >= snap - 1e-9).find((value) => (value * inner) / span >= 6) ?? 16;
+    const label = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16].find((value) => (value * inner) / span >= 40) ?? 32;
+    for (let beat = Math.max(0, Math.ceil(g.from / step) * step); beat <= g.to + 1e-6; beat += step) {
+      const whole = Math.abs(beat / label - Math.round(beat / label)) < 1e-6;
       ctx.fillStyle = whole ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.05)';
       ctx.fillRect(Math.round(g.toX(beat)), top, 1, bottom - top);
       if (whole) {
         ctx.fillStyle = '#7d8394';
-        ctx.fillText(String(Math.round(beat)), g.toX(beat) + 2, 11);
+        ctx.fillText(String(Math.round(beat * 1000) / 1000), g.toX(beat) + 2, 11);
       }
+    }
+    // past the block's end: dimmed
+    const endX = g.toX(g.length);
+    if (endX < g.width) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(endX, 0, g.width - endX, g.height);
+      ctx.fillStyle = 'rgba(120,160,255,0.7)';
+      ctx.fillRect(endX, 0, 1.5, g.height);
     }
     const scheme = this.editor.scheme();
     if (box.kind === 'color') {
@@ -489,7 +601,7 @@ export class GlsEditor {
         }
         last = { x, y: y(value), b: value };
       }
-      if (last !== null) ctx.lineTo(g.toX(g.length), last.y);
+      if (last !== null) ctx.lineTo(g.toX(Math.max(g.length, g.to)), last.y);
       ctx.stroke();
       for (const event of events) {
         const x = g.toX(event.beat);
@@ -525,9 +637,28 @@ export class GlsEditor {
         ctx.fillText(`${event.direction === 'cw' ? '↺' : '↻'}${String(event.angle + event.loops * 360)}°`, x + 13, cy + 4);
       }
     }
+    this.laneCanvas = { canvas, image: ctx.getImageData(0, 0, canvas.width, canvas.height), effect };
+  }
+
+  private laneCanvas: { canvas: HTMLCanvasElement; image: ImageData; effect: Effect } | null = null;
+
+  /** The song's cursor over the box's lane (drawn every frame over its picture). */
+  private drawLanePlayhead() {
+    const lane = this.laneCanvas;
+    if (lane === null || !lane.canvas.isConnected) return;
+    const ctx = lane.canvas.getContext('2d')!;
+    ctx.putImageData(lane.image, 0, 0);
+    const g = this.laneGeometry(lane.canvas, lane.effect);
+    const x = g.toX(this.editor.playhead() - lane.effect.start);
+    if (x < 0 || x > g.width) return;
+    const ratio = window.devicePixelRatio || 1;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.fillStyle = '#ff4d6d';
+    ctx.fillRect(x, 0, 1.5, g.height);
   }
 
   private bindLane(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
+    this.bindZoom(canvas, (x) => this.laneGeometry(canvas, this.effect() ?? effect).toBeat(x));
     const local = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -547,7 +678,7 @@ export class GlsEditor {
       const g = this.laneGeometry(canvas, effect);
       const item = list().find((entry) => entry.id === drag.id);
       // (moved on screen while dragging; one undo step when let go)
-      if (item !== undefined) item.beat = Math.min(g.length, snap(g.toBeat(x)));
+      if (item !== undefined) item.beat = Math.min(Math.max(g.length, g.to), snap(g.toBeat(x)));
       this.drawLane(canvas, effect, box);
     };
     const up = () => {
@@ -583,7 +714,8 @@ export class GlsEditor {
         return;
       }
       // a new event here: like the one before it (a colour event fades in to it after the first)
-      const beat = Math.min(g.length, snap(g.toBeat(x)));
+      // (past the block's end too: the block grows to take it)
+      const beat = Math.min(Math.max(g.length, g.to), snap(g.toBeat(x)));
       const id = newId('v');
       this.eventId = id;
       this.changeBox((item) => {
@@ -602,10 +734,16 @@ export class GlsEditor {
   private result(effect: Effect) {
     const wrap = document.createElement('div');
     wrap.className = 'gls-result';
-    wrap.append(heading('Что получается: элементы группы во времени блока'));
+    const title = heading('Что получается: элементы группы во времени блока');
+    title.append(this.zoomButtons(effect));
+    wrap.append(title);
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-result-canvas';
     wrap.append(canvas);
+    this.bindZoom(canvas, (x) => {
+      const { from, to } = this.shown(this.effect() ?? effect);
+      return from + ((x - 96) / Math.max(1, canvas.clientWidth - 96 - 8)) * (to - from);
+    });
     requestAnimationFrame(() => this.drawResult(canvas, effect));
     return wrap;
   }
@@ -626,7 +764,8 @@ export class GlsEditor {
     const items = this.editor.effectItemsOf(effect);
     const labelW = 96;
     const length = Math.max(0.25, effect.end - effect.start);
-    const toX = (beat: number) => labelW + ((beat - effect.start) / length) * (width - labelW - 8);
+    const { from, to } = this.shown(effect);
+    const toX = (beat: number) => labelW + ((beat - effect.start - from) / (to - from)) * (width - labelW - 8);
     const rowH = Math.max(3, Math.min(18, (height - 4) / Math.max(1, items.length)));
     const scheme = this.editor.scheme();
     ctx.font = `${String(Math.min(11, Math.max(8, rowH - 3)))}px system-ui, sans-serif`;
@@ -640,8 +779,13 @@ export class GlsEditor {
         ctx.fillText(name.slice(0, 14), 6, y + rowH - 3);
       }
     });
-    for (let beat = 0; beat <= length + 1e-6; beat += 1) {
-      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(labelW, 0, width - labelW, height);
+    ctx.clip();
+    const beatStep = [1 / 16, 0.125, 0.25, 0.5, 1, 2, 4, 8].find((value) => (value * (width - labelW)) / (to - from) >= 14) ?? 16;
+    for (let beat = Math.max(0, Math.ceil(from / beatStep) * beatStep); beat <= Math.min(length, to) + 1e-6; beat += beatStep) {
+      ctx.fillStyle = Math.abs(beat - Math.round(beat)) < 1e-6 ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.05)';
       ctx.fillRect(toX(effect.start + beat), 0, 1, height);
     }
     for (const clip of this.editor.effectChildren(effect.id)) {
@@ -673,6 +817,13 @@ export class GlsEditor {
       ctx.lineTo(x - 5, height - 5);
       ctx.fill();
     }
+    // past the block's end: dimmed
+    const endX = toX(effect.end);
+    if (endX < width) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(endX, 0, width - endX, height);
+    }
+    ctx.restore();
     this.resultCanvas = { canvas, image: ctx.getImageData(0, 0, canvas.width, canvas.height), toX };
   }
 

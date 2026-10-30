@@ -1337,6 +1337,59 @@
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
+      .ins-hue-row {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 3px;
+        margin: 6px 0;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .ins-hue-row {
+        grid-template-columns: minmax(0, 1fr) 64px;
+      }
+      .ins-hue-row > span {
+        grid-column: 1 / -1;
+      }
+      .ins-hue-row input[type='range'] {
+        -webkit-appearance: none;
+        appearance: none;
+        height: 10px;
+        border-radius: 5px;
+        margin: 4px 0;
+      }
+      .ins-hue-row input[type='range']::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #fff;
+        border: 2px solid #16171c;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+      }
+      .ins-hue-preview {
+        display: flex;
+        gap: 3px;
+        margin-top: 4px;
+      }
+      .ins-hue-preview span {
+        flex: 1;
+        height: 18px;
+        border-radius: 4px;
+        box-shadow: 0 0 8px rgba(0, 0, 0, 0.4) inset;
+      }
+      .gls-zoom {
+        float: right;
+        display: inline-flex;
+        gap: 2px;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .gls-zoom button {
+        padding: 0 7px;
+        line-height: 18px;
+        font-size: 12px;
+      }
       .gls-heading:first-child {
         margin-top: 0;
       }

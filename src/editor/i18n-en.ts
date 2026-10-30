@@ -1123,4 +1123,12 @@ export const EN: Record<string, string> = {
   "Мгновенно": "Instant",
   "Скорость и распространение 50: все кольца встают на место за один кадр игры": "Speed and propagation 50: every ring gets there within one game frame",
   "Пустые поля — как в игре по умолчанию. Нужен Chroma для своих значений. Кольца встают на место мгновенно, только если и скорость, и распространение — 50 и больше: при распространении 1 кольца начинают поворот по одному.": "Empty fields — the game's defaults. Chroma is needed for your own values. The rings jump into place only when both speed and propagation are 50 or more: with propagation 1 they start turning one by one.",
+  "Клик по дорожке — новое событие, перетаскивание — сдвинуть, Delete — удалить. Ctrl+колесо — масштаб, Shift+колесо — вдоль блока. Событие за концом блока удлиняет блок.": "Click the lane — new event, drag — move, Delete — delete. Ctrl+wheel — zoom, Shift+wheel — along the block. An event past the block's end makes the block longer.",
+  "Каждая вспышка длится, долей": "Each flash lasts, beats",
+  "Следующая лампа через, долей": "The next light after, beats",
+  "растянуть на весь эффект": "spread over the whole effect",
+  "Длина эффекта считается сама: (ламп − 1) × шаг + вспышка, на каждый проход. Растянете эффект на таймлайне — добавятся проходы.": "The effect's length is worked out: (lights − 1) × step + flash, for each pass. Stretch the effect on the timeline to add passes.",
+  "Оттенок": "Hue",
+  "Сдвиг, °": "Shift, °",
+  "Каждому следующему, °": "Each next one, °",
 };
