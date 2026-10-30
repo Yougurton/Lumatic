@@ -149,7 +149,7 @@ export class Inspector {
       if (value > 0) target.fadeOut = value;
       else delete target.fadeOut;
     })));
-    root.append(this.section('Цвет', this.colorPicker(source.color, (color) => this.apply((target) => (target.color = color)))));
+    root.append(this.section('Цвет', this.colorPicker(source.color, (color) => this.apply((target) => (target.color = color)), source.start ?? this.editor.playhead())));
     const gradient = document.createElement('label');
     gradient.className = 'ins-check';
     const box = document.createElement('input');
@@ -159,7 +159,7 @@ export class Inspector {
     gradient.append(box, ' Градиент к концу');
     root.append(gradient);
     if (source.endColor !== null) {
-      root.append(this.section('Цвет в конце', this.colorPicker(source.endColor, (color) => this.apply((target) => (target.endColor = color)))));
+      root.append(this.section('Цвет в конце', this.colorPicker(source.endColor, (color) => this.apply((target) => (target.endColor = color)), source.end ?? this.editor.playhead())));
       const hsv = document.createElement('label');
       hsv.className = 'ins-check';
       const hsvBox = document.createElement('input');
@@ -247,12 +247,12 @@ export class Inspector {
       return;
     }
     // the colour(s)
-    root.append(this.section('Цвет', this.colorPicker(p.color, (color) => change((params) => (params.color = color)))));
+    root.append(this.section('Цвет', this.colorPicker(p.color, (color) => change((params) => (params.color = color)), effect.start)));
     const secondLabel = effect.kind === 'strobe' ? ' Чередовать со вторым цветом' : effect.kind === 'twinkle' ? ' Случайные цвета до второго' : effect.kind === 'fire' ? ' Пламя колеблется до второго цвета' : ' Градиент по элементам';
     const second = this.check(secondLabel, p.color2 !== null, (on) => change((params) => (params.color2 = on ? { ...params.color, ref: params.color.ref === 'left' ? 'right' : 'left', rgb: undefined } : null)));
     root.append(second);
     if (p.color2 !== null) {
-      root.append(this.section('Второй цвет', this.colorPicker(p.color2, (color) => change((params) => (params.color2 = color)))));
+      root.append(this.section('Второй цвет', this.colorPicker(p.color2, (color) => change((params) => (params.color2 = color)), effect.start)));
       if (effect.kind !== 'strobe') root.append(this.check(' Через оттенки (HSV, радуга)', p.hsv, (on) => change((params) => (params.hsv = on))));
     }
 
@@ -633,15 +633,24 @@ export class Inspector {
     return row;
   }
 
-  private colorPicker(color: ClipColor, change: (color: ClipColor) => void) {
+  /** The scheme's colours (the boost's when the boost is on at `at` — what the game shows then), a
+   *  colour of its own, the brightness. */
+  private colorPicker(color: ClipColor, change: (color: ClipColor) => void, at: number) {
     const wrap = document.createElement('div');
     wrap.className = 'ins-color';
     const colors = this.editor.preview.colors;
-    const refs: [ClipColor['ref'], string, Rgb][] = [
-      ['left', 'Левый', [...colors.environmentLeft]],
-      ['right', 'Правый', [...colors.environmentRight]],
-      ['white', 'Белый', [...colors.environmentWhite]],
-    ];
+    const boosted = this.editor.boostAt(at);
+    const refs: [ClipColor['ref'], string, Rgb][] = boosted
+      ? [
+          ['left', 'Левый (буст)', [...colors.environmentLeftBoost]],
+          ['right', 'Правый (буст)', [...colors.environmentRightBoost]],
+          ['white', 'Белый (буст)', [...colors.environmentWhiteBoost]],
+        ]
+      : [
+          ['left', 'Левый', [...colors.environmentLeft]],
+          ['right', 'Правый', [...colors.environmentRight]],
+          ['white', 'Белый', [...colors.environmentWhite]],
+        ];
     for (const [ref, label, rgb] of refs) {
       const swatch = document.createElement('button');
       swatch.className = `ins-swatch${color.ref === ref ? ' active' : ''}`;
@@ -649,6 +658,13 @@ export class Inspector {
       swatch.style.background = toHex(rgb);
       swatch.addEventListener('click', () => change({ ...color, ref, rgb: undefined }));
       wrap.append(swatch);
+    }
+    if (boosted) {
+      const mark = document.createElement('span');
+      mark.className = 'ins-boost';
+      mark.textContent = '⚡ буст';
+      mark.title = 'Здесь включён буст цветов: цвета схемы в игре — цвета буста (свой цвет Chroma буст не меняет)';
+      wrap.append(mark);
     }
     const custom = document.createElement('input');
     custom.type = 'color';

@@ -1786,6 +1786,26 @@ export class Editor {
 
   private childrenCache: { version: number; clips: LightClip[]; count: number; byEffect: Map<string, LightClip[]> } | null = null;
 
+  /** Whether the colour boost is on at `beat` (the show's boost events, type 5: 1 on, 0 off). */
+  boostAt(beat: number): boolean {
+    const raw = this.project?.raw;
+    if (raw === undefined) return false;
+    const cache = this.boostCache;
+    let switches = cache !== null && cache.version === this.version && cache.raw === raw && cache.count === raw.length ? cache.switches : null;
+    if (switches === null) {
+      switches = raw.filter((event) => event.type === 5).map((event) => ({ beat: event.beat, on: event.value === 1 })).sort((a, b) => a.beat - b.beat);
+      this.boostCache = { version: this.version, raw, count: raw.length, switches };
+    }
+    let on = false;
+    for (const item of switches) {
+      if (item.beat > beat + 1e-9) break;
+      on = item.on;
+    }
+    return on;
+  }
+
+  private boostCache: { version: number; raw: RawEvent[]; count: number; switches: { beat: number; on: boolean }[] } | null = null;
+
   /** The ring events a GLS block made. */
   effectRaw(id: string) {
     return this.project?.raw.filter((event) => event.group === id) ?? [];

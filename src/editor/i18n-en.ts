@@ -1144,4 +1144,11 @@ export const EN: Record<string, string> = {
   "📋 В буфере: {0} ({1} стр.)": "📋 Copied: {0} ({1} rows)",
   "📋 В буфере: {0}": "📋 Copied: {0}",
   "Скопировано: {0}. Ctrl+V — вставить, правый клик по пустому месту таймлайна — куда вставить": "Copied: {0}. Ctrl+V — paste, a right click on an empty spot of the timeline — where to paste",
+  "Левый (буст)": "Left (boost)",
+  "Правый (буст)": "Right (boost)",
+  "Белый (буст)": "White (boost)",
+  "⚡ буст": "⚡ boost",
+  "Здесь включён буст цветов: цвета схемы в игре — цвета буста (свой цвет Chroma буст не меняет)": "The color boost is on here: in the game the scheme's colors are the boost's (a custom Chroma color isn't changed by the boost)",
+  "Клик — выбрать его лампы; если выделен кусок песни — ещё и выделить его события в куске (ещё клик — снять). ПКМ — действия": "Click — pick its lights; with a stretch of the song picked — also select its events in it (click again — clear). Right click — actions",
+  "{0}: {1} ламп. Клик — выбрать её лампы; если выделен кусок песни — ещё и выделить её события в куске (ещё клик — снять); двойной — войти, ПКМ — действия": "{0}: {1} lights. Click — pick its lights; with a stretch of the song picked — also select its events in it (click again — clear); double — enter, right click — actions",
 };

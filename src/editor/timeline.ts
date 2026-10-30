@@ -183,12 +183,16 @@ export class Timeline {
     requestAnimationFrame(loop);
   }
 
-  /** A group's row clicked: all its own events selected — only those in the picked stretch of the song
-   *  if there is one — and its lights picked (they flash); clicked again, with them still selected:
-   *  nothing selected. */
+  /** A group's row clicked: its lights picked (they flash) — and, when a stretch of the song is picked,
+   *  its own events in it selected; clicked again, with them still selected: nothing selected. */
   private pickRow(row: Row, lights: string[], parent: string | null = null) {
     const editor = this.editor;
     const range = editor.songRange;
+    // (no stretch of the song picked: only its lights, as before)
+    if (range === null) {
+      editor.selectLights(lights, 'replace', parent);
+      return;
+    }
     const from = range === null ? -Infinity : Math.min(range.start, range.end);
     const to = range === null ? Infinity : Math.max(range.start, range.end);
     const ids = [...new Set(editor.rowClips(row).filter((shown) => shown.role === 'own' && shown.clip.end > from + 1e-9 && shown.clip.start < to - 1e-9).map((shown) => shown.clip.id))];
@@ -201,7 +205,7 @@ export class Timeline {
     }
     editor.selectLights(lights, 'replace', parent);
     editor.select(ids);
-    editor.setStatus(range === null ? `Выделено событий: ${String(ids.length)}` : `Выделено событий в куске: ${String(ids.length)}`);
+    editor.setStatus(`Выделено событий в куске: ${String(ids.length)}`);
   }
 
   /** The mouse's last move while dragging (dragged up to an edge, the timeline scrolls on its own). */
@@ -442,10 +446,13 @@ export class Timeline {
 
   private readonly cssCache = new Map<string, string>();
 
+  /** The colours being drawn are the boost's (set while drawing a clip that starts with the boost on). */
+  private boosted = false;
+
   private colorCss(color: ClipColor, alpha = 1) {
     // (worked out once per colour: thousands of clips in view ask again and again)
     const colors = this.editor.preview.colors;
-    const key = `${color.ref}|${color.rgb?.join(',') ?? ''}|${String(color.brightness)}|${String(alpha)}|${colors.environmentLeft.join(',')}|${colors.environmentRight.join(',')}|${colors.environmentWhite.join(',')}`;
+    const key = `${this.boosted ? 'b' : ''}${color.ref}|${color.rgb?.join(',') ?? ''}|${String(color.brightness)}|${String(alpha)}|${colors.environmentLeft.join(',')}|${colors.environmentRight.join(',')}|${colors.environmentWhite.join(',')}|${colors.environmentLeftBoost.join(',')}|${colors.environmentRightBoost.join(',')}`;
     const known = this.cssCache.get(key);
     if (known !== undefined) return known;
     if (this.cssCache.size > 5000) this.cssCache.clear();
@@ -456,7 +463,13 @@ export class Timeline {
 
   private colorCssOf(color: ClipColor, alpha: number) {
     const colors = this.editor.preview.colors;
-    const rgb = resolveRgb(color, { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] });
+    // (the scheme's colours — the boost's while it's on: the game shows those then)
+    const rgb = resolveRgb(
+      color,
+      this.boosted
+        ? { left: [...colors.environmentLeftBoost], right: [...colors.environmentRightBoost], white: [...colors.environmentWhiteBoost] }
+        : { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] },
+    );
     const k = Math.min(1.25, 0.35 + 0.65 * Math.min(1.5, color.brightness));
     const c = rgb.map((v) => Math.round(Math.min(1, v * k) * 255));
     return `rgba(${String(c[0])},${String(c[1])},${String(c[2])},${String(alpha)})`;
@@ -731,7 +744,9 @@ export class Timeline {
     this.tinyColumns.set(y, column);
     const ctx = this.context;
     ctx.globalAlpha = shown.role === 'background' ? 0.28 : 1;
+    this.boosted = this.editor.boostAt(shown.clip.start);
     ctx.fillStyle = this.colorCss(shown.clip.color, 1);
+    this.boosted = false;
     ctx.fillRect(column, y, 1.5, h);
     ctx.globalAlpha = 1;
   }
@@ -749,6 +764,18 @@ export class Timeline {
       this.drawEffect(shown, x, y, w, h, ghost);
       return;
     }
+    // (with the boost on where it starts: in the boost's colours)
+    this.boosted = this.editor.boostAt(clip.start);
+    try {
+      this.drawPlainClip(shown, x, y, w, h, ghost);
+    } finally {
+      this.boosted = false;
+    }
+  }
+
+  private drawPlainClip(shown: ShownClip, x: number, y: number, w: number, h: number, ghost: boolean) {
+    const ctx = this.context;
+    const clip = shown.clip;
     const partial = shown.partial;
     const bpm = this.editor.songBpm;
     const gradient = ctx.createLinearGradient(x, 0, x + Math.max(1, w), 0);
@@ -838,7 +865,9 @@ export class Timeline {
     if (w < 16 && !ghost) {
       // (too narrow to make out its events: a plain block in its colour)
       ctx.globalAlpha = background ? 0.3 : inner ? 0.6 : 1;
+      this.boosted = this.editor.boostAt(effect.start);
       ctx.fillStyle = this.colorCss(effect.params.color, 0.85);
+      this.boosted = false;
       ctx.fillRect(x, y, Math.max(1.5, w), h);
       ctx.globalAlpha = 1;
       return;
@@ -865,6 +894,7 @@ export class Timeline {
       const slot = child.slot ?? 0;
       const ly = slot < 0 ? y + 2 : Math.floor(y + 2 + slot * laneH);
       const lh = slot < 0 ? h - 4 : Math.max(1.5, Math.round(laneH - (laneH > 3 ? 1 : 0)));
+      this.boosted = this.editor.boostAt(child.start);
       if (crowded && cw < 3) {
         const column = Math.floor(cx);
         if (lastColumn.get(ly) === column) continue;
@@ -882,6 +912,7 @@ export class Timeline {
       } else ctx.fillStyle = this.colorCss(child.color, 1);
       ctx.fillRect(cx, ly, cw, lh);
     }
+    this.boosted = false;
     if (shown.partial) {
       ctx.strokeStyle = 'rgba(0,0,0,0.5)';
       ctx.lineWidth = 3;
@@ -1590,7 +1621,7 @@ export class Timeline {
         text(row.label, 'th-name'),
         text(row.lights.length > 0 ? String(row.lights.length) : '', 'th-count'),
       );
-      item.title = 'Клик — выделить все его события (в выделенном куске песни — только там) и его лампы; ещё клик — снять. ПКМ — действия';
+      item.title = 'Клик — выбрать его лампы; если выделен кусок песни — ещё и выделить его события в куске (ещё клик — снять). ПКМ — действия';
       item.addEventListener('click', () => {
         if (!this.headerDragged) this.pickRow(row, editor.rowLights(row).map((light) => lightKey(light.type, light.id)));
       });
@@ -1630,7 +1661,7 @@ export class Timeline {
         text(String(lights.length), 'th-count'),
       );
       if (editor.focus !== group.id) item.append(enter);
-      item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выделить все её события (в выделенном куске песни — только там) и её лампы, ещё клик — снять; двойной — войти, ПКМ — действия`;
+      item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выбрать её лампы; если выделен кусок песни — ещё и выделить её события в куске (ещё клик — снять); двойной — войти, ПКМ — действия`;
       item.addEventListener('click', () => {
         if (!this.headerDragged) this.pickRow(row, lights.map((light) => lightKey(light.type, light.id)), row.parent);
       });
