@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
 import { scrubStrip } from './gls-editor';
+import { gridSelect } from './grids';
 import { ringSystemName } from './library';
 import { DEFAULT_STEPS, newStepsBlock, stepPoses, type RingBlock, type StepTransition } from './rings';
 
@@ -12,16 +13,10 @@ import { DEFAULT_STEPS, newStepsBlock, stepPoses, type RingBlock, type StepTrans
 
 /** How fast each turn is: its share of the time between steps. */
 const SPEEDS: [string, number][] = [
+  ['Мгновенно', 0],
   ['Рывком', 0.1],
   ['Быстро', 0.3],
   ['Плавно', 0.7],
-];
-const EVERY: [string, number][] = [
-  ['1/4', 0.25],
-  ['1/2', 0.5],
-  ['1', 1],
-  ['2', 2],
-  ['4', 4],
 ];
 
 let remembered: StepTransition = { ...DEFAULT_STEPS };
@@ -95,11 +90,14 @@ export function ringStepsDialog(editor: Editor, blockId: string | null) {
     draw();
   };
   const share = () => (values.every > 0 ? values.turn / values.every : 0.3);
-  buttons('every', EVERY, () => values.every, (value) => {
-    const part = share();
-    values.every = value;
-    values.turn = Math.round(value * part * 1000) / 1000;
-  });
+  el('every').replaceChildren(
+    gridSelect(values.every, (value) => {
+      const part = share();
+      values.every = value;
+      values.turn = Math.round(value * part * 100000) / 100000;
+      update();
+    }, [2, 4, 8]),
+  );
   buttons('speed', SPEEDS, () => SPEEDS.reduce((best, [, value]) => (Math.abs(value - share()) < Math.abs(best - share()) ? value : best), SPEEDS[0]![1]), (value) => (values.turn = Math.round(values.every * value * 1000) / 1000));
 
   for (const key of ['fromAngle', 'toAngle', 'steps', 'fromStep', 'toStep'] as const) {

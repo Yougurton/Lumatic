@@ -89,8 +89,9 @@ async function openFolder(folder: MapFolder | null) {
   if (folder === null) return;
   if (editor.dirty && !window.confirm('Несохранённые изменения пропадут. Открыть другую карту?')) return;
   try {
+    timeline.saveView();
     await editor.open(folder);
-    timeline.fit();
+    timeline.restoreView();
     void refreshRecent();
   } catch (error) {
     console.error(error);
@@ -140,8 +141,12 @@ difficultySelect.addEventListener('change', () => {
     refreshToolbar();
     return;
   }
-  void editor.openDifficulty(row);
+  timeline.saveView();
+  void editor.openDifficulty(row).then(() => timeline.restoreView());
 });
+// (where the timeline is: kept now and then, and when the window closes)
+window.setInterval(() => timeline.saveView(), 2000);
+window.addEventListener('beforeunload', () => timeline.saveView());
 saveButton.addEventListener('click', () => void save());
 byId('settings').addEventListener('click', () => void mapSettingsDialog(editor));
 byId('environment').addEventListener('click', () => void environmentDialog(editor));
@@ -206,6 +211,7 @@ const REOPEN = 'lumatic.reopen';
       .then(async () => {
         const row = editor.difficulties().find((item) => item.key === difficulty);
         if (row !== undefined && row !== editor.row) await editor.openDifficulty(row);
+        timeline.restoreView();
       });
   }
 }
@@ -365,6 +371,18 @@ window.addEventListener('keydown', (event) => {
   ACTIONS_RUN[action]?.();
   event.preventDefault();
 });
+
+// (a click anywhere else leaves the field being typed in — also on the timeline, which keeps the focus
+// where it is: the panels are drawn again only once their fields are left)
+window.addEventListener(
+  'mousedown',
+  (event) => {
+    const active = document.activeElement;
+    const typing = active instanceof HTMLTextAreaElement || (active instanceof HTMLInputElement && ['text', 'number', 'search'].includes(active.type));
+    if (typing && event.target instanceof Node && !active.contains(event.target)) active.blur();
+  },
+  true,
+);
 
 // (a clicked button gives the focus back: Space is play, not "press that button again")
 document.addEventListener('click', (event) => {

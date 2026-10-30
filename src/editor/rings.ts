@@ -172,12 +172,13 @@ export const DEFAULT_STEPS: StepTransition = { fromAngle: 0, toAngle: 90, fromSt
 /** The poses of a step transition (the first: its start form). */
 export function stepPoses(transition: StepTransition): RingPose[] {
   const steps = Math.max(1, Math.round(transition.steps));
-  const every = Math.max(1 / 16, transition.every);
+  const every = Math.max(1 / 64, transition.every);
+  // (0: at once — the rings jump there)
   const turn = Math.max(0, Math.min(transition.turn, every));
   return Array.from({ length: steps + 1 }, (_, k) => {
     const t = k / steps;
     const step = transition.fromStep + (transition.toStep - transition.fromStep) * t;
-    return newPose(round(k * every), {
+    return newPose(Math.round(k * every * 100000) / 100000, {
       shape: Math.abs(step) < 1e-6 ? 'same' : 'spiral',
       angle: round(transition.fromAngle + (transition.toAngle - transition.fromAngle) * t),
       step: round(step),
@@ -234,7 +235,7 @@ export function glitchPoses(glitch: RingGlitch, mode: RingBlock['mode']): RingPo
     const angle = round((random() * 2 - 1) * glitch.strength);
     const step = round((random() * 2 - 1) * glitch.chaos);
     const shape: PoseShape = Math.abs(step) < 0.5 ? 'same' : mode === 'tracks' && random() < 0.35 ? 'random' : 'spiral';
-    return newPose(round(time), { shape, angle, step: shape === 'random' ? Math.abs(step) : step, seed: Math.floor(random() * 1000), duration: round(Math.max(1 / 64, (next - time) * Math.min(1, Math.max(0.02, glitch.snap)))), easing: 'easeOutCubic' });
+    return newPose(round(time), { shape, angle, step: shape === 'random' ? Math.abs(step) : step, seed: Math.floor(random() * 1000), duration: glitch.snap <= 0 ? 0 : round(Math.max(1 / 64, (next - time) * Math.min(1, Math.max(0.02, glitch.snap)))), easing: 'easeOutCubic' });
   });
   if (glitch.back) poses.push(newPose(round(length), { shape: 'same', angle: 0, step: 0, duration: round(Math.min(0.5, length / 4)), easing: 'easeInOutQuad' }));
   return poses;

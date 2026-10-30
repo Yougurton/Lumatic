@@ -2,6 +2,8 @@ import type { Editor } from './editor';
 import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
+import { holdWhileTyping } from './gls-editor';
+import { gridSelect } from './grids';
 import { KIND_NAMES, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
 import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
 
@@ -50,7 +52,7 @@ export class Inspector {
     return { clips, source: { ...brush, color: brush.color, endColor: brush.endColor, hsv: brush.hsv } };
   }
 
-  private apply(change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; color: ClipColor; endColor: ClipColor | null; layer: number; hsv?: boolean }) => void) {
+  private apply(change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; layer: number; hsv?: boolean }) => void) {
     if (this.editor.selection.size > 0 && this.editor.selectedClips().length > 0) this.editor.updateSelected((clip) => change(clip));
     else {
       change(this.editor.brush);
@@ -58,15 +60,13 @@ export class Inspector {
     }
   }
 
-  /** Drawn again; the panel stays scrolled where it was, and the field being typed in keeps the keys. */
+  /** Drawn again, staying scrolled where it was — not while one of its fields is typed in (see
+   *  holdWhileTyping). */
   render() {
+    if (holdWhileTyping(this.root, () => this.render())) return;
     const scroll = this.root.scrollTop;
-    const fields = () => [...this.root.querySelectorAll<HTMLInputElement>('input[type="number"], input[type="text"]')];
-    const active = document.activeElement;
-    const typing = active instanceof HTMLInputElement && this.root.contains(active) ? fields().indexOf(active) : -1;
     this.draw();
     this.root.scrollTop = scroll;
-    if (typing >= 0) fields()[typing]?.focus({ preventScroll: true });
   }
 
   private draw() {
@@ -105,6 +105,10 @@ export class Inspector {
       root.append(this.numberField('Нарастание, долей', source.fadeIn, 0.0625, (value) => this.apply((target) => (target.fadeIn = Math.max(0.01, value)))));
     }
     root.append(this.section('Конец', this.buttons(END_MODES, source.endMode, (mode) => this.apply((target) => (target.endMode = mode)))));
+    if (source.endMode === 'fade') root.append(this.numberField('Затухание, долей (0 — всё событие)', source.fadeOut ?? 0, 0.0625, (value) => this.apply((target) => {
+      if (value > 0) target.fadeOut = value;
+      else delete target.fadeOut;
+    })));
     root.append(this.section('Цвет', this.colorPicker(source.color, (color) => this.apply((target) => (target.color = color)))));
     const gradient = document.createElement('label');
     gradient.className = 'ins-check';
@@ -230,14 +234,7 @@ export class Inspector {
     }
     if (effect.kind === 'fill') root.append(this.numberField('Время заполнения, долей', p.pulse, 0.25, (value) => change((params) => (params.pulse = Math.max(0, value)))));
     if (effect.kind === 'strobe' || effect.kind === 'twinkle') {
-      const rates: [string, string, string][] = [
-        ['1', '1', 'Раз в долю'],
-        ['0.5', '1/2', 'Два раза в долю'],
-        ['0.25', '1/4', 'Четыре раза в долю'],
-        ['0.125', '1/8', 'Восемь раз в долю'],
-        ['0.0625', '1/16', 'Шестнадцать раз в долю'],
-      ];
-      root.append(this.section('Частота', this.buttons(rates, String(p.rate), (value) => change((params) => (params.rate = Number(value))))));
+      root.append(this.section('Вспышка каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)), [2, 4])));
       root.append(this.slider(effect.kind === 'strobe' ? 'Горит, доля шага' : 'Длительность вспышки', p.duty, 0.05, effect.kind === 'strobe' ? 1 : 4, 0.05, (value) => change((params) => (params.duty = value))));
     }
     if (effect.kind === 'strobe') {
@@ -257,13 +254,7 @@ export class Inspector {
       root.append(this.section('Огонёк', this.buttons(shapes, p.shape ?? 'steady', (value) => change((params) => (params.shape = value)))));
       if ((p.shape ?? 'steady') !== 'steady') root.append(this.slider(p.shape === 'rise' ? 'С какой яркости' : 'До какой яркости', p.floor ?? 0.15, 0, 1, 0.05, (value) => change((params) => (params.floor = value))));
       root.append(this.slider('Дрожание', p.tremor ?? 0.3, 0, 1, 0.05, (value) => change((params) => (params.tremor = value))));
-      const steps: [string, string, string][] = [
-        ['0.5', '1/2', 'Меняется раз в полдоли'],
-        ['0.25', '1/4', 'Четыре раза в долю'],
-        ['0.125', '1/8', 'Восемь раз в долю'],
-        ['0.0625', '1/16', 'Шестнадцать раз в долю'],
-      ];
-      root.append(this.section('Как часто дрожит', this.buttons(steps, String(p.rate), (value) => change((params) => (params.rate = Number(value))))));
+      root.append(this.section('Дрожит каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)))));
       const together: [string, string, string][] = [
         ['each', 'Каждая сама', 'У каждой лампы (элемента) своё дрожание'],
         ['all', 'Все вместе', 'Все дрожат одинаково'],
@@ -284,6 +275,16 @@ export class Inspector {
     root.append(this.section('Начало вспышки', this.buttons(START_MODES, p.startMode, (mode) => change((params) => (params.startMode = mode)))));
     if (p.startMode === 'fadeIn') root.append(this.numberField('Нарастание, долей', p.fadeIn, 0.0625, (value) => change((params) => (params.fadeIn = Math.max(0.01, value)))));
     root.append(this.section('Конец вспышки', this.buttons(END_MODES, p.endMode, (mode) => change((params) => (params.endMode = mode)))));
+    if (p.endMode === 'fade') root.append(this.numberField('Затухание, долей (0 — вся вспышка)', p.fadeOut ?? 0, 0.0625, (value) => change((params) => (params.fadeOut = Math.max(0, value)))));
+    root.append(this.numberField('Сдвиг оттенка, °', p.hueShift ?? 0, 15, (value) => change((params) => (params.hueShift = value))));
+    root.append(this.numberField('Каждому следующему ещё, °', p.hueStep ?? 0, 5, (value) => change((params) => (params.hueStep = value))));
+    if ((p.hueStep ?? 0) !== 0) {
+      const by: [string, string, string][] = [
+        ['item', 'По элементам', 'Каждый следующий элемент группы — дальше по кругу оттенков'],
+        ['time', 'По времени', 'Каждая следующая вспышка во времени — дальше по кругу оттенков'],
+      ];
+      root.append(this.section('Следующий — это', this.buttons(by, p.hueBy ?? 'item', (value) => change((params) => (params.hueBy = value === 'time' ? 'time' : 'item')))));
+    }
     root.append(this.numberField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => {
       item.layer = Math.max(0, Math.round(value));
       for (const clip of editor.effectChildren(item.id)) clip.layer = item.layer;
@@ -447,7 +448,17 @@ export class Inspector {
           ),
         );
       }
-      note('Пустые поля — как в игре по умолчанию. Нужен Chroma для своих значений.');
+      // (the game turns a ring towards its angle at its speed, and starts only `prop` rings on it each
+      // 1/50 s: both at 50 — every ring there in one tick, a jump)
+      const instant = document.createElement('button');
+      instant.textContent = '⚡ Мгновенно';
+      instant.title = 'Скорость и распространение 50: все кольца встают на место за один кадр игры';
+      instant.addEventListener('click', () => {
+        set('speed', 50);
+        set('prop', 50);
+      });
+      this.root.append(instant);
+      note('Пустые поля — как в игре по умолчанию. Нужен Chroma для своих значений. Кольца встают на место мгновенно, только если и скорость, и распространение — 50 и больше: при распространении 1 кольца начинают поворот по одному.');
     } else if (type === 9) {
       const number = (key: string) => (typeof get(key) === 'number' ? (get(key) as number) : null);
       this.root.append(this.numberField('Расстояние между кольцами (step)', number('step') ?? 0, 0.5, (value) => set('step', value)), this.numberField('Скорость', number('speed') ?? 1, 0.25, (value) => set('speed', value)));

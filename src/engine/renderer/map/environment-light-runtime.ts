@@ -526,7 +526,47 @@ export class EnvironmentLightRuntime {
       sampled === null ? (this.lightshowMode === 'none' ? 0 : segment.alpha) : segment.alpha * sampled.alpha;
   }
 
+  /** Lights shown lit over whatever the show does (the editor's picked lights flashing): by event type,
+   *  the map's light IDs; the colour and how strongly (0–1+) it covers the show. */
+  private highlight: { ids: Map<number, Set<number>>; color: Rgb; strength: number } | null = null;
+
+  setHighlight(lights: readonly { type: number; id: number }[] | null, color: Rgb = [1, 1, 1], strength = 1) {
+    if (lights === null || lights.length === 0 || strength <= 0) {
+      this.highlight = null;
+      return;
+    }
+    const ids = new Map<number, Set<number>>();
+    for (const light of lights) (ids.get(light.type) ?? ids.set(light.type, new Set()).get(light.type)!).add(light.id);
+    const same = this.highlight !== null && [...ids].every(([type, set]) => this.highlight!.ids.get(type)?.size === set.size && [...set].every((id) => this.highlight!.ids.get(type)!.has(id)));
+    this.highlight = { ids: same ? this.highlight!.ids : ids, color, strength };
+  }
+
+  /** Whether a light's binding is one of the highlighted lights (a map light ID reaches it). */
+  private isHighlighted(binding: EnvironmentLightBinding) {
+    const highlight = this.highlight;
+    if (highlight === null) return false;
+    const ids = highlight.ids.get(binding.eventType);
+    if (ids === undefined) return false;
+    for (const id of ids) {
+      const target = binding.lightIdRemap.find(([source]) => source === id)?.[1] ?? id;
+      if (target === binding.lightId) return true;
+    }
+    return false;
+  }
+
   private sampleEnvironmentLight(bindings: EnvironmentLightBinding[], beat: number, boosted: boolean, songBpm: number) {
+    const sampled = this.sampleEnvironmentLightOwn(bindings, beat, boosted, songBpm);
+    const highlight = this.highlight;
+    if (highlight === null || !bindings.some((binding) => this.isHighlighted(binding))) return sampled;
+    // (over the show: its colour mixed towards the highlight's as strongly as the highlight shines)
+    const k = Math.min(1, highlight.strength);
+    const base = sampled?.color ?? [0, 0, 0];
+    const alpha = Math.max(sampled?.alpha ?? 0, highlight.strength);
+    const color: Rgb = [base[0] + (highlight.color[0] - base[0]) * k, base[1] + (highlight.color[1] - base[1]) * k, base[2] + (highlight.color[2] - base[2]) * k];
+    return { color, alpha, rawAlpha: alpha, stateAlpha: alpha, fading: false };
+  }
+
+  private sampleEnvironmentLightOwn(bindings: EnvironmentLightBinding[], beat: number, boosted: boolean, songBpm: number) {
     this.prepareBasicLightSamples(beat, boosted, songBpm);
     let binding: EnvironmentLightBinding | undefined;
     let latest = Number.NEGATIVE_INFINITY;

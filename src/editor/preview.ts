@@ -4,7 +4,7 @@ import { createDifficulty, type BasicEvent, type BpmEvent, type Difficulty } fro
 import type { NoodleBeatmapData } from '../engine/core/noodle-data';
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
 import type { ChromaEnvironmentData } from '../engine/core/chroma-environment';
-import type { ColorScheme } from '../engine/core/colors';
+import type { ColorScheme, Rgb } from '../engine/core/colors';
 import { buildMapRenderData } from '../engine/core/placement/map-render-data';
 import { DEFAULT_REPLAY_CAMERA_SETTINGS } from '../engine/core/viewer-settings';
 import { MapView } from '../engine/renderer/map-view';
@@ -78,6 +78,11 @@ export class Preview {
 
   get colors(): ColorScheme {
     return this.view.currentColors;
+  }
+
+  /** Lights lit over the show (the editor's picked lights flashing); null: none. */
+  setHighlight(lights: readonly { type: number; id: number }[] | null, color?: Rgb, strength?: number) {
+    this.view.setHighlight(lights, color, strength);
   }
 
   /** The beat (song time, in beats of the song's own BPM) the view shows. */

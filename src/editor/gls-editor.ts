@@ -179,6 +179,7 @@ export class GlsEditor {
     const shade = this.shade;
     const effect = this.effect();
     if (shade === null || effect === undefined) return;
+    if (holdWhileTyping(shade, () => this.render())) return;
     const scroll = [...shade.querySelectorAll<HTMLElement>('.gls-col')].map((col) => col.scrollTop);
     shade.replaceChildren();
     const dialog = document.createElement('div');
@@ -828,6 +829,39 @@ function rgba(rgb: readonly number[], alpha: number) {
   return `rgba(${rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')},${String(Math.max(0, Math.min(1, alpha)))})`;
 }
 
+let pointerDown = false;
+window.addEventListener('mousedown', () => (pointerDown = true), true);
+window.addEventListener('mouseup', () => window.setTimeout(() => (pointerDown = false), 0), true);
+
+/**
+ * Whether a panel shouldn't be drawn again now: one of its number or text fields is being typed in
+ * (drawn again, the field would be a new one — the keys lost, the arrows stepping in another). Then it
+ * is drawn when the field is left — after the click that left it, so that click isn't lost.
+ */
+export function holdWhileTyping(root: HTMLElement, redraw: () => void): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLInputElement) || !['number', 'text', 'search'].includes(active.type) || !root.contains(active)) return false;
+  const holding = (root as HTMLElement & { lumaticHolding?: boolean });
+  if (holding.lumaticHolding === true) return true;
+  holding.lumaticHolding = true;
+  active.addEventListener(
+    'blur',
+    () => {
+      const later = () => {
+        if (pointerDown) {
+          window.setTimeout(later, 30);
+          return;
+        }
+        holding.lumaticHolding = false;
+        redraw();
+      };
+      window.setTimeout(later, 0);
+    },
+    { once: true },
+  );
+  return true;
+}
+
 /** A lane under the song in a scrub strip: what a window puts on the song's own time (ring poses). */
 export interface StripLane {
   /** Its height (px). */
@@ -893,6 +927,34 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
     item.addEventListener('click', action);
     controls.append(item);
   };
+  // (in the small windows over everything — lasers, ring glitch, rings in steps — the block plays from
+  // here, and with Space; the ring and GLS windows have their own ▶)
+  let playing: Editor['previewExtra'] = null;
+  const play = () => {
+    const block = range();
+    if (block === null) return;
+    if (editor.previewExtra !== null) {
+      editor.stopTrial();
+      playing = null;
+      return;
+    }
+    editor.startTrial({ clips: [], raw: [], start: block.start, end: block.end });
+    playing = editor.previewExtra;
+  };
+  const inDialog = () => canvas.closest('.ce-shade') !== null;
+  const keys = (event: KeyboardEvent) => {
+    if (!canvas.isConnected) {
+      window.removeEventListener('keydown', keys, true);
+      return;
+    }
+    const target = event.target as HTMLElement;
+    if (event.code !== 'Space' || !inDialog() || target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    play();
+  };
+  window.addEventListener('keydown', keys, true);
+  control('▶', 'Проиграть блок по кругу (Пробел)', play);
   control('−', 'Отдалить (Ctrl+колесо)', () => zoom(1.5));
   control('+', 'Приблизить (Ctrl+колесо)', () => zoom(1 / 1.5));
   control('⤢', 'Весь блок', () => {
@@ -902,8 +964,17 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
   wrap.append(controls);
 
   const draw = () => {
-    if (!canvas.isConnected) return;
+    if (!canvas.isConnected) {
+      // (the window closed while its block played: stopped)
+      if (playing !== null && editor.previewExtra === playing) editor.stopTrial();
+      return;
+    }
     requestAnimationFrame(draw);
+    const playButton = controls.firstElementChild as HTMLButtonElement | null;
+    if (playButton !== null) {
+      playButton.hidden = !inDialog();
+      playButton.textContent = editor.previewExtra !== null ? '■' : '▶';
+    }
     const beat = editor.playhead();
     // (zoomed in while the song plays: the view goes along with it)
     const block = range();

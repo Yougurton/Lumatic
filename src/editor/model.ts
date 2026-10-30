@@ -39,6 +39,8 @@ export interface LightClip {
   /** fadeIn: how many beats it takes to come up. */
   fadeIn: number;
   endMode: EndMode;
+  /** endMode fade: how many beats the fade out takes, to the clip's end (none: all of the clip). */
+  fadeOut?: number;
   color: ClipColor;
   /** A gradient across the clip: the colour it has arrived at by its end (null: none). */
   endColor: ClipColor | null;

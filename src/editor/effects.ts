@@ -1,4 +1,4 @@
-import { lerpHsv, resolveRgb, type SchemeColors } from './bake';
+import { lerpHsv, resolveRgb, shiftHue, type SchemeColors } from './bake';
 import { generateGls, type GlsData } from './gls';
 import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, type RawEvent, type Rgb, type StartMode } from './model';
 
@@ -49,6 +49,13 @@ export interface EffectParams {
   floor?: number;
   /** fire: how much it trembles (a share of the brightness it has at the time). */
   tremor?: number;
+  /** endMode fade: the beats each flash's fade out takes (none / 0: all of it). */
+  fadeOut?: number;
+  /** Its colours turned round the hue circle (degrees)… */
+  hueShift?: number;
+  /** …and each next one further by this much (degrees): the next item, or the next flash in time. */
+  hueStep?: number;
+  hueBy?: 'item' | 'time';
 }
 
 export interface Effect {
@@ -168,6 +175,35 @@ export function generateEffect(effect: Effect, items: readonly EffectItem[], sch
 
 /** The effect's events: light clips — and, for a GLS block's rotation boxes, ring events. */
 export function buildEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
+  const made = buildEffectEvents(effect, items, scheme, extras);
+  return { clips: finishClips(made.clips, effect.params, scheme), raw: made.raw };
+}
+
+/** What every effect's events get from its settings: the fade out's length, the colours turned round
+ *  the hue circle (all of them, and each next one further). */
+function finishClips(clips: LightClip[], p: EffectParams, scheme: SchemeColors): LightClip[] {
+  const fadeOut = p.fadeOut ?? 0;
+  const shift = p.hueShift ?? 0;
+  const step = p.hueStep ?? 0;
+  // (the next flash in time: the clips' starts, in order)
+  const times = step !== 0 && p.hueBy === 'time' ? [...new Set(clips.map((clip) => Math.round(clip.start * 10000)))].sort((a, b) => a - b) : [];
+  for (const clip of clips) {
+    if (fadeOut > 0 && clip.endMode === 'fade') clip.fadeOut = fadeOut;
+    const k = step === 0 ? 0 : p.hueBy === 'time' ? times.indexOf(Math.round(clip.start * 10000)) : Math.max(0, clip.slot ?? 0);
+    const degrees = shift + step * k;
+    if (Math.abs(degrees % 360) < 1e-6) continue;
+    clip.color = turnHue(clip.color, degrees, scheme);
+    if (clip.endColor !== null) clip.endColor = turnHue(clip.endColor, degrees, scheme);
+  }
+  return clips;
+}
+
+/** A colour turned round the hue circle by `degrees` (as a colour of its own, Chroma's). */
+export function turnHue(color: ClipColor, degrees: number, scheme: SchemeColors): ClipColor {
+  return { ref: 'custom', rgb: shiftHue(resolveRgb(color, scheme), degrees), brightness: color.brightness };
+}
+
+function buildEffectEvents(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
   if (effect.kind === 'gls') {
     const made = generateGls(effect.gls ?? { boxes: [] }, effect.start, effect.end, {
       scheme,

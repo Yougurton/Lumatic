@@ -548,6 +548,11 @@ export class MapView implements RenderView {
    *  actual player standing on it, it can just read as clutter floating in frame. Takes effect on
    *  the environment that's loaded right now (if any) and every one loaded afterwards; the setting
    *  itself persists across environment/track changes until called again. */
+  /** Lights shown lit over the show, by event type and map light ID (see EnvironmentLights). */
+  setHighlight(lights: readonly { type: number; id: number }[] | null, color?: Rgb, strength?: number) {
+    this.environmentLights.setHighlight(lights, color, strength);
+  }
+
   setShowPlayerPlatform(enabled: boolean) {
     this.showPlayerPlatform = enabled;
     this.applyPlayerPlatformVisibility();

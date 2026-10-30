@@ -99,6 +99,8 @@ export interface Brush {
   startMode: StartMode;
   fadeIn: number;
   endMode: EndMode;
+  /** endMode fade: the beats the fade out takes (none: all of the clip). */
+  fadeOut?: number;
   layer: number;
   hsv: boolean;
 }
@@ -1379,6 +1381,7 @@ export class Editor {
       startMode: brush.startMode,
       fadeIn: brush.fadeIn,
       endMode: brush.endMode,
+      ...(brush.fadeOut !== undefined && brush.fadeOut > 0 ? { fadeOut: brush.fadeOut } : {}),
       color: { ...brush.color },
       endColor: brush.endColor === null ? null : { ...brush.endColor },
       layer: brush.layer,
@@ -1767,9 +1770,21 @@ export class Editor {
     return this.effects.find((effect) => effect.id === id);
   }
 
-  effectChildren(id: string) {
-    return this.project?.clips.filter((clip) => clip.group === id) ?? [];
+  effectChildren(id: string): LightClip[] {
+    const clips = this.project?.clips;
+    if (clips === undefined) return [];
+    // (all effects' events found in one pass, kept until the show changes: the timeline asks for every
+    // effect in view on every frame)
+    const cache = this.childrenCache;
+    if (cache === null || cache.version !== this.version || cache.clips !== clips || cache.count !== clips.length) {
+      const byEffect = new Map<string, LightClip[]>();
+      for (const clip of clips) if (clip.group !== undefined) (byEffect.get(clip.group) ?? byEffect.set(clip.group, []).get(clip.group)!).push(clip);
+      this.childrenCache = { version: this.version, clips, count: clips.length, byEffect };
+    }
+    return [...(this.childrenCache!.byEffect.get(id) ?? [])];
   }
+
+  private childrenCache: { version: number; clips: LightClip[]; count: number; byEffect: Map<string, LightClip[]> } | null = null;
 
   /** The ring events a GLS block made. */
   effectRaw(id: string) {
@@ -2233,7 +2248,7 @@ export class Editor {
       this.rebuildTimer = null;
       try {
         this.syncRingTracks();
-        this.preview.setEvents([...this.previewEvents(), ...this.flashEvents()]);
+        this.preview.setEvents(this.previewEvents());
       } catch (error) {
         console.error('[chroeditor] preview rebuild failed', error);
       }
@@ -2266,30 +2281,21 @@ export class Editor {
     if (this.flashFrame === 0) this.flashFrame = requestAnimationFrame(this.flashStep);
   }
 
-  /** (each frame of a flash: the view gets the show with the flash where the song is now) */
+  /** (each frame of a flash: the 3D view lights the picked lights over the show, dimming — nothing
+   *  rebuilt, so a show with many events doesn't stutter) */
   private readonly flashStep = () => {
     this.flashFrame = 0;
-    if (this.flash === null) return;
-    if (performance.now() - this.flash.startedAt >= FLASH_MS) this.flash = null;
-    this.rebuildPreview(true);
-    if (this.flash !== null) this.flashFrame = requestAnimationFrame(this.flashStep);
-  };
-
-  /** The flash as it is now: the picked lights lit in the brush's colour at the song's place, dimming
-   *  from frame to frame (a light event at exactly that moment covers whatever the show does there). */
-  private flashEvents(): OutEvent[] {
     const flash = this.flash;
-    if (flash === null) return [];
+    if (flash === null) return;
     const t = Math.min(1, (performance.now() - flash.startedAt) / FLASH_MS);
-    const brightness = 1.2 * (1 - t) ** 2;
-    const [r, g, b] = resolveRgb(this.brush.color, this.scheme());
-    // (a hair before the song's place: worked back from seconds, the beat can come out a rounding
-    // error past the view's own, and an event after it isn't lit yet)
-    const beat = this.playhead() - 1e-6;
-    const byType = new Map<number, number[]>();
-    for (const light of flash.lights) byType.set(light.type, [...(byType.get(light.type) ?? []), light.id]);
-    return [...byType].map(([type, ids]) => ({ beat, type, value: 1, floatValue: brightness, color: [r, g, b, 1], lightIds: ids }));
-  }
+    if (t >= 1) {
+      this.flash = null;
+      this.preview.setHighlight(null);
+      return;
+    }
+    this.preview.setHighlight(flash.lights, resolveRgb(this.brush.color, this.scheme()), 1.2 * (1 - t) ** 2);
+    this.flashFrame = requestAnimationFrame(this.flashStep);
+  };
 }
 
 /** How long a picked light's flash takes to fade out. */

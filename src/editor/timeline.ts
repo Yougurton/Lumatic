@@ -11,6 +11,7 @@ import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, typ
 import { groupHue, lightGroupName } from './names';
 import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
 import { settings } from './settings';
+import { GRIDS } from './grids';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
@@ -39,21 +40,7 @@ const NAV_H = 26;
 /** How tall the spectrogram's name area must be for the grid and speed to stand in it. */
 const PLAY_ROOM = 74;
 /** The grids offered (beats; 0: none) — down to 1/64, triplets too. */
-export const GRIDS: [number, string][] = [
-  [1, '1'],
-  [0.5, '1/2'],
-  [0.25, '1/4'],
-  [0.125, '1/8'],
-  [0.0625, '1/16'],
-  [0.03125, '1/32'],
-  [0.015625, '1/64'],
-  [1 / 3, '1/3'],
-  [1 / 6, '1/6'],
-  [1 / 12, '1/12'],
-  [1 / 24, '1/24'],
-  [1 / 48, '1/48'],
-  [0, 'без сетки'],
-];
+export { GRIDS } from './grids';
 
 /** The next grid finer or coarser — among the halves, or among the triplets when it is one. */
 export function nextGrid(current: number, finer: boolean): number {
@@ -388,7 +375,21 @@ export class Timeline {
 
   // ----- drawing ---------------------------------------------------------------------------------------
 
+  private readonly cssCache = new Map<string, string>();
+
   private colorCss(color: ClipColor, alpha = 1) {
+    // (worked out once per colour: thousands of clips in view ask again and again)
+    const colors = this.editor.preview.colors;
+    const key = `${color.ref}|${color.rgb?.join(',') ?? ''}|${String(color.brightness)}|${String(alpha)}|${colors.environmentLeft.join(',')}|${colors.environmentRight.join(',')}|${colors.environmentWhite.join(',')}`;
+    const known = this.cssCache.get(key);
+    if (known !== undefined) return known;
+    if (this.cssCache.size > 5000) this.cssCache.clear();
+    const css = this.colorCssOf(color, alpha);
+    this.cssCache.set(key, css);
+    return css;
+  }
+
+  private colorCssOf(color: ClipColor, alpha: number) {
     const colors = this.editor.preview.colors;
     const rgb = resolveRgb(color, { left: [...colors.environmentLeft], right: [...colors.environmentRight], white: [...colors.environmentWhite] });
     const k = Math.min(1.25, 0.35 + 0.65 * Math.min(1.5, color.brightness));
@@ -404,6 +405,7 @@ export class Timeline {
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#15161b';
     ctx.fillRect(0, 0, width, height);
+    this.tinyColumns.clear();
     if (editor.project === null) {
       ctx.fillStyle = '#7a7f8c';
       ctx.font = '14px system-ui, sans-serif';
@@ -654,11 +656,30 @@ export class Timeline {
     ctx.fillRect(0, top + 1, GUTTER, NAV_H - 1);
   }
 
+  /** A clip too narrow to show its look (the whole song in view): one plain column a pixel wide, and
+   *  only one per pixel per row — so thousands of them draw quickly. */
+  private readonly tinyColumns = new Map<number, number>();
+
+  private drawTinyClip(shown: ShownClip, x: number, y: number, h: number) {
+    const column = Math.floor(x);
+    if (this.tinyColumns.get(y) === column) return;
+    this.tinyColumns.set(y, column);
+    const ctx = this.context;
+    ctx.globalAlpha = shown.role === 'background' ? 0.28 : 1;
+    ctx.fillStyle = this.colorCss(shown.clip.color, 1);
+    ctx.fillRect(column, y, 1.5, h);
+    ctx.globalAlpha = 1;
+  }
+
   private drawClip(shown: ShownClip, top: number, height: number, ghost = false) {
     const ctx = this.context;
     const clip = shown.clip;
     const { x, y, w, h } = this.clipRect(shown, top, height);
     if (x > this.width || x + w < GUTTER) return;
+    if (w < 2.5 && !ghost && shown.effect === undefined && !this.editor.selection.has(clip.id)) {
+      this.drawTinyClip(shown, x, y, h);
+      return;
+    }
     if (shown.effect !== undefined) {
       this.drawEffect(shown, x, y, w, h, ghost);
       return;
@@ -679,6 +700,9 @@ export class Timeline {
       const rise = clip.startMode === 'fadeIn' ? stop(clip.fadeIn / Math.max(1e-6, clip.end - clip.start)) : 0;
       gradient.addColorStop(0, rise > 0 ? this.colorCss(clip.color, 0.08) : startColor);
       if (rise > 0) gradient.addColorStop(rise, startColor);
+      // (a fade out over the clip's last beats only: lit until it starts)
+      const span = Math.max(1e-6, clip.end - clip.start);
+      if (clip.endMode === 'fade' && clip.fadeOut !== undefined && clip.fadeOut > 0 && clip.fadeOut < span) gradient.addColorStop(stop(Math.max(rise, 1 - clip.fadeOut / span)), clip.endColor === null ? startColor : endColor);
       gradient.addColorStop(1, clip.endMode === 'fade' ? this.colorCss(clip.endColor ?? clip.color, 0.08) : endColor);
     }
     const background = shown.role === 'background';
@@ -746,6 +770,14 @@ export class Timeline {
     const background = shown.role === 'background';
     // (an effect of a group inside this one: dimmer, and striped when it lights only some of it)
     const inner = shown.role === 'inner';
+    if (w < 16 && !ghost) {
+      // (too narrow to make out its events: a plain block in its colour)
+      ctx.globalAlpha = background ? 0.3 : inner ? 0.6 : 1;
+      ctx.fillStyle = this.colorCss(effect.params.color, 0.85);
+      ctx.fillRect(x, y, Math.max(1.5, w), h);
+      ctx.globalAlpha = 1;
+      return;
+    }
     ctx.save();
     ctx.globalAlpha = ghost ? 0.6 : background ? 0.3 : inner ? 0.6 : 1;
     ctx.beginPath();
@@ -758,6 +790,9 @@ export class Timeline {
     const children = ghost ? (this.ghostChildren ?? []) : this.editor.effectChildren(effect.id);
     const slots = Math.max(1, ...children.map((child) => (child.slot ?? 0) + 1));
     const laneH = Math.max(1, (h - 4) / slots);
+    // (crowded — the song seen from afar: each lane a plain column per pixel, no gradients)
+    const crowded = w < children.length * 1.5;
+    const lastColumn = new Map<number, number>();
     for (const child of children) {
       const cx = this.beatToX(child.start);
       const cw = Math.max(1.5, (child.end - child.start) * this.pxPerBeat);
@@ -765,6 +800,14 @@ export class Timeline {
       const slot = child.slot ?? 0;
       const ly = slot < 0 ? y + 2 : Math.floor(y + 2 + slot * laneH);
       const lh = slot < 0 ? h - 4 : Math.max(1.5, Math.round(laneH - (laneH > 3 ? 1 : 0)));
+      if (crowded && cw < 3) {
+        const column = Math.floor(cx);
+        if (lastColumn.get(ly) === column) continue;
+        lastColumn.set(ly, column);
+        ctx.fillStyle = this.colorCss(child.color, 1);
+        ctx.fillRect(column, ly, 1.5, lh);
+        continue;
+      }
       const fades = child.endMode === 'fade';
       if (fades) {
         const gradient = ctx.createLinearGradient(cx, 0, cx + cw, 0);
@@ -2207,6 +2250,47 @@ export class Timeline {
   }
 
   /** Zoom so the whole song fits. */
+  /** Where the timeline was on this map's difficulty when it was last open (kept in this computer's
+   *  storage): its start, zoom and the song's place; on a map never opened before — its first quarter. */
+  restoreView() {
+    const key = this.viewKey();
+    const read = (): { start: number; px: number; beat: number } | null => {
+      try {
+        return key === null ? null : (JSON.parse(localStorage.getItem(key) ?? 'null') as { start: number; px: number; beat: number } | null);
+      } catch {
+        return null;
+      }
+    };
+    const saved = read();
+    if (saved !== null && Number.isFinite(saved.start) && Number.isFinite(saved.px)) {
+      this.pxPerBeat = Math.min(800, Math.max(0.5, saved.px));
+      this.viewStart = saved.start;
+      if (Number.isFinite(saved.beat)) this.editor.seek(saved.beat);
+    } else {
+      const end = Math.max(16, this.editor.endBeat);
+      this.pxPerBeat = Math.min(800, Math.max(0.5, this.trackWidth / (end / 4 + 2)));
+      this.viewStart = -1;
+    }
+    this.needsDraw = true;
+  }
+
+  /** Keeps where the timeline is now for `restoreView` (said often: on every change of the view). */
+  saveView() {
+    const key = this.viewKey();
+    if (key === null) return;
+    try {
+      localStorage.setItem(key, JSON.stringify({ start: Math.round(this.viewStart * 1000) / 1000, px: Math.round(this.pxPerBeat * 1000) / 1000, beat: Math.round(this.editor.playhead() * 1000) / 1000 }));
+    } catch {
+      // (only a convenience)
+    }
+  }
+
+  private viewKey() {
+    const map = this.editor.map;
+    const row = this.editor.row;
+    return map === null || row === null ? null : `lumatic.view:${map.folder.name}|${row.key}`;
+  }
+
   fit() {
     const end = Math.max(16, this.editor.endBeat);
     this.pxPerBeat = Math.max(0.5, this.trackWidth / (end + 4));

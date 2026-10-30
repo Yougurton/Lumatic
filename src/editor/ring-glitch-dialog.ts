@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
 import { scrubStrip } from './gls-editor';
+import { gridSelect } from './grids';
 import { ringSystemName } from './library';
 import { BANDS, pickOnsets } from './onsets';
 import { DEFAULT_GLITCH, newGlitchBlock, type RingBlock, type RingGlitch } from './rings';
@@ -81,8 +82,13 @@ export function ringGlitchDialog(editor: Editor, blockId: string | null) {
     draw();
   };
   buttons<string>('sound', SOUNDS.map(([value, label]): [string, string] => [label, value]), () => sound, (value) => (sound = value));
-  buttons<number>('every', [['1/4', 0.25], ['1/8', 0.125], ['1/16', 0.0625]], () => glitch.every, (value) => (glitch.every = value));
-  buttons<number>('snap', [['Рывком', 0.15], ['Быстро', 0.35], ['Плавно', 0.8]], () => glitch.snap, (value) => (glitch.snap = value));
+  el('every').replaceChildren(
+    gridSelect(glitch.every, (value) => {
+      glitch.every = value;
+      update();
+    }, [1]),
+  );
+  buttons<number>('snap', [['Мгновенно', 0], ['Рывком', 0.15], ['Быстро', 0.35], ['Плавно', 0.8]], () => glitch.snap, (value) => (glitch.snap = value));
   for (const key of ['length', 'strength', 'chaos'] as const) {
     const input = el<HTMLInputElement>(key);
     input.value = String(glitch[key]);

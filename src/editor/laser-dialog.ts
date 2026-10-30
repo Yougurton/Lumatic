@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
 import { scrubStrip } from './gls-editor';
+import { gridSelect } from './grids';
 import { DEFAULT_LASER_MOVE, laserEvents, type LaserMove } from './lasers';
 import { laserBlockMove, newLaserBlock, type RingBlock } from './rings';
 
@@ -84,11 +85,14 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
   buttons<LaserMove['from']>('from', [['Из ряда', 'row', 'Сначала в исходное положение окружения, затем все вместе — ровным рядом'], ['С места', 'place', 'Оттуда, где стоят'], ['Случайно', 'random', 'Как в игре: случайный угол у каждого']], () => move.from, (value) => (move.from = value));
   buttons<LaserMove['end']>('end', [['Крутятся дальше', 'keep'], ['Замирают', 'freeze'], ['В исходное', 'reset']], () => move.end, (value) => (move.end = value));
   buttons<LaserMove['end']>('stepsEnd', [['Замирают', 'freeze'], ['В исходное', 'reset']], () => (move.end === 'reset' ? 'reset' : 'freeze'), (value) => (move.end = value));
-  buttons<number>('every', [['1/4', 0.25], ['1/2', 0.5], ['1', 1], ['2', 2], ['4', 4]], () => move.every, (value) => {
-    const share = move.every > 0 ? move.turn / move.every : 0.25;
-    move.every = value;
-    move.turn = Math.round(value * share * 1000) / 1000;
-  });
+  el('every').replaceChildren(
+    gridSelect(move.every, (value) => {
+      const share = move.every > 0 ? move.turn / move.every : 0.25;
+      move.every = value;
+      move.turn = Math.round(value * share * 100000) / 100000;
+      update();
+    }, [2, 4, 8]),
+  );
   const turnShare = () => (move.every > 0 ? move.turn / move.every : 0.25);
   const SHARES: [string, number][] = [['Рывком', 0.1], ['Быстро', 0.3], ['Плавно', 0.7], ['Весь шаг', 1]];
   buttons<number>('turn', SHARES.map(([label, value]) => [label, value]), () => SHARES.reduce((best, [, value]) => (Math.abs(value - turnShare()) < Math.abs(best - turnShare()) ? value : best), 0.3), (value) => (move.turn = Math.round(move.every * value * 1000) / 1000));

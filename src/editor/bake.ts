@@ -98,6 +98,20 @@ function clipKeyframes(clip: LightClip, scheme: SchemeColors, until: number, han
     frames.push(keyframe(settled, 'on', c0, scheme));
   }
   const last = clip.endColor ?? c0;
+  // a fade out over its last `fadeOut` beats: lit (or on its way through the gradient) until then
+  const fadeFrom = clip.endMode === 'fade' && clip.fadeOut !== undefined && clip.fadeOut > 0 ? clip.end - Math.min(clip.fadeOut, span) : null;
+  if (fadeFrom !== null && fadeFrom > (frames.at(-1)?.beat ?? clip.start) + 1e-6) {
+    if (clip.endColor === null) frames.push(keyframe(fadeFrom, 'on', c0, scheme));
+    else {
+      // (the colour the gradient has reached there)
+      const t = (fadeFrom - clip.start) / Math.max(1e-6, span);
+      const a = resolveRgb(c0, scheme);
+      const b = resolveRgb(clip.endColor, scheme);
+      const rgb: Rgb = clip.hsv === true ? lerpHsv(a, b, t) : [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+      const brightness = c0.brightness + (clip.endColor.brightness - c0.brightness) * t;
+      frames.push(keyframe(fadeFrom, 'trans', { ref: 'custom', rgb, brightness }, scheme));
+    }
+  }
   if (clip.endMode === 'fade') frames.push(keyframe(clip.end, 'trans', dark(last), scheme));
   else {
     if (clip.endColor !== null) frames.push(keyframe(clip.end, 'trans', clip.endColor, scheme));
@@ -353,6 +367,12 @@ function hsvToRgb([h, s, v]: Rgb): Rgb {
     default:
       return [v, p, q];
   }
+}
+
+/** A colour turned round the hue circle by `degrees`. */
+export function shiftHue(rgb: Rgb, degrees: number): Rgb {
+  const [h, s, v] = rgbToHsv(rgb);
+  return hsvToRgb([(((h + degrees / 360) % 1) + 1) % 1, s, v]);
 }
 
 /** Through hue, the short way round (as Chroma does). */
