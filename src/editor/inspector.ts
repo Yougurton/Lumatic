@@ -3,7 +3,7 @@ import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
 import { holdWhileTyping } from './gls-editor';
-import { gridSelect } from './grids';
+import { gridSelect, numberDrum, wheelSlider } from './grids';
 import { resolveRgb, shiftHue } from './bake';
 import { KIND_NAMES, mixColor, waveLength, waveSteps, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
 import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
@@ -26,6 +26,36 @@ const END_MODES: [EndMode, string, string][] = [
   ['fade', 'Затухание', 'Плавно гаснет к концу (или перетекает в слой ниже)'],
   ['stay', 'Остаётся', 'Остаётся гореть до следующего события'],
 ];
+
+/** How each start and end looks: the light's brightness over time (up: brighter). */
+const MODE_ICONS: Record<string, string> = {
+  'start:on': 'M2 14H9V5H28',
+  'start:flash': 'M2 14H9V1.5Q11 5 15 5H28',
+  'start:fade': 'M2 14H9V1.5Q14 13 28 13.5',
+  'start:fadeIn': 'M2 14L21 5H28',
+  'end:off': 'M2 5H20V14H28',
+  'end:fade': 'M2 5H9L28 14',
+  'end:stay': 'M2 5H24M21 2L26 5L21 8',
+};
+
+function modeIcon(path: string) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 30 16');
+  svg.setAttribute('class', 'mode-icon');
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  line.setAttribute('d', path);
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke', 'currentColor');
+  line.setAttribute('stroke-width', '1.8');
+  line.setAttribute('stroke-linejoin', 'round');
+  line.setAttribute('stroke-linecap', 'round');
+  const floor = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  floor.setAttribute('d', 'M2 15.2H28');
+  floor.setAttribute('stroke', 'currentColor');
+  floor.setAttribute('stroke-opacity', '0.25');
+  svg.append(floor, line);
+  return svg;
+}
 
 /** A colour's hue (degrees). */
 function rgbHue([r, g, b]: Rgb) {
@@ -208,7 +238,7 @@ export class Inspector {
     root.append(actions);
 
     if (effects.every((item) => item.kind === 'gls')) {
-      root.append(this.numberField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => (item.layer = Math.max(0, Math.round(value))))));
+      root.append(this.drumField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => (item.layer = Math.max(0, Math.round(value))))));
       const boxes = effect.gls?.boxes ?? [];
       const note = document.createElement('div');
       note.className = 'ins-note';
@@ -248,10 +278,10 @@ export class Inspector {
         });
       root.append(this.section('Каждая вспышка длится, долей', gridSelect(p.pulse, (value) => wave((params) => (params.pulse = value)), [2, 4, 8])));
       root.append(this.section('Следующая лампа через, долей', gridSelect(p.spacing ?? 0, (value) => wave((params) => (params.spacing = value)), [2, 4], 'весь эффект')));
-      root.append(this.numberField('Сколько раз пройти', p.repeats, 1, (value) => wave((params) => (params.repeats = Math.max(1, Math.round(value))))));
+      root.append(this.drumField('Сколько раз пройти', p.repeats, 1, { min: 1 }, (value) => wave((params) => (params.repeats = Math.max(1, Math.round(value))))));
       if ((p.spacing ?? 0) > 0) root.append(this.note('Длина эффекта считается сама: (ламп − 1) × шаг + вспышка, на каждый проход. Растянете эффект на таймлайне — добавятся проходы.'));
     }
-    if (effect.kind === 'fill') root.append(this.numberField('Время заполнения, долей', p.pulse, 0.25, (value) => change((params) => (params.pulse = Math.max(0, value)))));
+    if (effect.kind === 'fill') root.append(this.drumField('Время заполнения, долей', p.pulse, 0.25, (value) => change((params) => (params.pulse = Math.max(0, value)))));
     if (effect.kind === 'strobe' || effect.kind === 'twinkle') {
       root.append(this.section('Вспышка каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)), [2, 4])));
       root.append(this.slider(effect.kind === 'strobe' ? 'Горит, доля шага' : 'Длительность вспышки', p.duty, 0.05, effect.kind === 'strobe' ? 1 : 4, 0.05, (value) => change((params) => (params.duty = value))));
@@ -292,9 +322,9 @@ export class Inspector {
       root.append(reroll);
     }
     root.append(this.section('Начало вспышки', this.buttons(START_MODES, p.startMode, (mode) => change((params) => (params.startMode = mode)))));
-    if (p.startMode === 'fadeIn') root.append(this.numberField('Нарастание, долей', p.fadeIn, 0.0625, (value) => change((params) => (params.fadeIn = Math.max(0.01, value)))));
+    if (p.startMode === 'fadeIn') root.append(this.drumField('Нарастание, долей', p.fadeIn, 0.0625, (value) => change((params) => (params.fadeIn = Math.max(0.01, value)))));
     root.append(this.section('Конец вспышки', this.buttons(END_MODES, p.endMode, (mode) => change((params) => (params.endMode = mode)))));
-    if (p.endMode === 'fade') root.append(this.numberField('Затухание, долей (0 — вся вспышка)', p.fadeOut ?? 0, 0.0625, (value) => change((params) => (params.fadeOut = Math.max(0, value)))));
+    if (p.endMode === 'fade') root.append(this.drumField('Затухание, долей (0 — вся вспышка)', p.fadeOut ?? 0, 0.0625, (value) => change((params) => (params.fadeOut = Math.max(0, value)))));
     root.append(this.hueControls(effect, (patch) => change((params) => patch(params))));
     if ((p.hueStep ?? 0) !== 0) {
       const by: [string, string, string][] = [
@@ -303,13 +333,13 @@ export class Inspector {
       ];
       root.append(this.section('Следующий — это', this.buttons(by, p.hueBy ?? 'item', (value) => change((params) => (params.hueBy = value === 'time' ? 'time' : 'item')))));
     }
-    root.append(this.numberField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => {
+    root.append(this.drumField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => {
       item.layer = Math.max(0, Math.round(value));
       for (const clip of editor.effectChildren(item.id)) clip.layer = item.layer;
     })));
     if (effects.length === 1) {
       root.append(
-        this.numberField('Начало, доля', effect.start, editor.snap || 0.25, (value) => editor.updateEffects((item) => {
+        this.drumField('Начало, доля', effect.start, editor.snap || 0.25, (value) => editor.updateEffects((item) => {
           const shift = value - item.start;
           item.start += shift;
           item.end += shift;
@@ -318,7 +348,7 @@ export class Inspector {
             clip.end += shift;
           }
         })),
-        this.numberField('Длина, долей', effect.end - effect.start, editor.snap || 0.25, (value) => editor.updateEffects((item) => (item.end = item.start + Math.max(0.0625, value)))),
+        this.drumField('Длина, долей', effect.end - effect.start, editor.snap || 0.25, (value) => editor.updateEffects((item) => (item.end = item.start + Math.max(0.0625, value)))),
       );
       const target = effect.target === undefined ? undefined : findGroup(editor.groups, effect.target)?.group;
       const note = document.createElement('div');
@@ -536,6 +566,18 @@ export class Inspector {
         drawPreview();
       });
       range.addEventListener('change', () => commit(Number(range.value)));
+      // (picked a moment ago: the wheel turns it too)
+      wheelSlider(
+        range,
+        `hue:${label}`,
+        (next) => {
+          number.value = String(next);
+          input(next);
+          drawPreview();
+        },
+        commit,
+        5,
+      );
       number.addEventListener('change', () => {
         const next = Number(number.value);
         if (!Number.isFinite(next)) return;
@@ -571,10 +613,19 @@ export class Inspector {
   private buttons<T extends string>(options: [T, string, string][], current: T, pick: (value: T) => void) {
     const row = document.createElement('div');
     row.className = 'ins-buttons';
+    // (the starts and ends: drawn as the light goes, their names in the tooltip)
+    const icons = options === (START_MODES as unknown) ? 'start' : options === (END_MODES as unknown) ? 'end' : null;
     for (const [value, label, title] of options) {
       const button = document.createElement('button');
-      button.textContent = label;
-      button.title = title;
+      const icon = icons === null ? undefined : MODE_ICONS[`${icons}:${value}`];
+      if (icon === undefined) {
+        button.textContent = label;
+        button.title = title;
+      } else {
+        button.classList.add('icon-button');
+        button.append(modeIcon(icon));
+        button.title = `${label} — ${title}`;
+      }
       if (value === current) button.classList.add('active');
       button.addEventListener('click', () => pick(value));
       row.append(button);
@@ -624,6 +675,16 @@ export class Inspector {
     const box = document.createElement('div');
     box.append(wrap, line);
     return box;
+  }
+
+  /** A number on a drum (a number can be typed in too): `step` apart, from `min` (0). */
+  private drumField(label: string, value: number, step: number, options: { min?: number } | ((value: number) => void), change?: (value: number) => void) {
+    const then = typeof options === 'function' ? options : change!;
+    const min = typeof options === 'function' ? 0 : (options.min ?? 0);
+    const wrap = document.createElement('div');
+    wrap.className = 'ins-drum';
+    wrap.append(Object.assign(document.createElement('span'), { textContent: label }), numberDrum(label, value, then, { step: step > 0 ? step : 0.25, min, digits: 4, beats: step < 1 }));
+    return wrap;
   }
 
   private numberField(label: string, value: number, step: number, change: (value: number) => void) {

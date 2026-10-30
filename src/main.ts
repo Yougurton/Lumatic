@@ -74,11 +74,33 @@ function refreshToolbar() {
   if (editor.row !== null) difficultySelect.value = editor.row.key;
 }
 
+/** What's selected and what's copied, in sight on the toolbar (looked at every frame — drawn only when
+ *  it changes). */
+const selectionInfo = byId('selection-info');
+const clipboardInfo = byId('clipboard-info');
+let shownInfo = '';
+function showSelection() {
+  const selected = editor.selection.size;
+  const board = editor.clipboardInfo();
+  const key = `${String(selected)}|${board === null ? '' : `${String(board.count)}/${String(board.rows)}`}`;
+  if (key === shownInfo) return;
+  shownInfo = key;
+  selectionInfo.hidden = selected === 0;
+  selectionInfo.textContent = tr('▣ Выделено: {0}', selected);
+  selectionInfo.title = tr('Выделено событий: {0}. Esc — снять выделение', selected);
+  clipboardInfo.hidden = board === null || board.count === 0;
+  if (board !== null) {
+    clipboardInfo.textContent = board.rows > 1 ? tr('📋 В буфере: {0} ({1} стр.)', board.count, board.rows) : tr('📋 В буфере: {0}', board.count);
+    clipboardInfo.title = tr('Скопировано: {0}. Ctrl+V — вставить, правый клик по пустому месту таймлайна — куда вставить', board.count);
+  }
+}
+
 function tick() {
   editor.tickTrial();
   const seconds = editor.clock?.currentTime() ?? 0;
   timeLabel.textContent = tr('{0} · доля {1}', formatTime(seconds), editor.playhead().toFixed(3));
   playButton.textContent = editor.isPlaying() ? '❚❚' : '▶';
+  showSelection();
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);

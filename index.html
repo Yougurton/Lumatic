@@ -113,6 +113,36 @@
         min-width: 150px;
         color: #fff;
       }
+      #sel-infos {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        display: flex;
+        gap: 6px;
+        pointer-events: none;
+      }
+      .sel-info {
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 9px;
+        border-radius: 12px;
+        background: rgba(40, 70, 130, 0.55);
+        border: 1px solid rgba(106, 166, 255, 0.55);
+        color: #dfe8ff;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .sel-info[hidden] {
+        display: none;
+      }
+      .clip-info {
+        background: rgba(40, 110, 75, 0.55);
+        border-color: rgba(120, 220, 160, 0.55);
+        color: #dcf5e6;
+      }
       #main {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 300px;
@@ -1399,6 +1429,51 @@
       .drum:focus {
         border-color: var(--accent);
       }
+      .drum.wheel-active {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px rgba(106, 166, 255, 0.45), 0 0 12px rgba(106, 166, 255, 0.25);
+      }
+      .drum-input {
+        position: absolute;
+        left: 50%;
+        top: 3px;
+        bottom: 3px;
+        width: 90px;
+        transform: translateX(-50%);
+        z-index: 2;
+        text-align: center;
+        font-size: 14px;
+        font-weight: 600;
+        background: #0c0d11;
+        color: #fff;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        padding: 0 6px;
+      }
+      .ins-hue-row input[type='range'].wheel-active::-webkit-slider-thumb {
+        box-shadow: 0 0 0 3px rgba(106, 166, 255, 0.8), 0 0 10px rgba(106, 166, 255, 0.6);
+      }
+      .ins-drum {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin: 6px 0;
+        color: var(--dim);
+      }
+      .ins-drum .drum {
+        max-width: 150px;
+        min-width: 120px;
+        flex: none;
+      }
+      .mode-icon {
+        display: block;
+        width: 30px;
+        height: 16px;
+      }
+      .ins-buttons button.icon-button {
+        padding: 3px 7px;
+      }
       .drum-rim {
         position: absolute;
         inset: 0;
@@ -1838,6 +1913,7 @@
         <span class="sep"></span>
         <button id="play" title="Играть / пауза (Пробел)">▶</button>
         <span id="time">0:00.000 · доля 0.000</span>
+
         <span class="sep"></span>
         <button id="bookmark" title="Метка у курсора (B). Метки — флажки на линейке: клик — перейти, тянуть — сдвинуть, двойной клик — переименовать, ПКМ — меню. Ctrl+←/→ — к предыдущей/следующей">⚑ Метка</button>
         <span class="sep"></span>
@@ -1848,7 +1924,7 @@
         <span class="grow"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas><span id="status"></span></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><span id="status"></span><div id="sel-infos"><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
         <aside id="side">
           <div id="library"></div>
         </aside>

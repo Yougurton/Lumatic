@@ -1137,4 +1137,11 @@ export const EN: Record<string, string> = {
   "Выделено событий в куске: {0}": "Events selected in the stretch: {0}",
   "Клик — выделить все его события (в выделенном куске песни — только там) и его лампы; ещё клик — снять. ПКМ — действия": "Click — select all its events (only inside the picked stretch of the song, if any) and its lights; click again — clear. Right click — actions",
   "{0}: {1} ламп. Клик — выделить все её события (в выделенном куске песни — только там) и её лампы, ещё клик — снять; двойной — войти, ПКМ — действия": "{0}: {1} lights. Click — select all its events (only inside the picked stretch of the song, if any) and its lights, click again — clear; double — enter, right click — actions",
+  "Тяните или крутите колесом (кликните — и колесо 5 с крутит барабан); ← → — на шаг": "Drag or turn with the wheel (click it, and for 5 s the wheel turns the drum); ← → — one step",
+  "Тяните или крутите колесом (кликните — и колесо 5 с крутит барабан); ← → — на шаг; двойной клик или цифры — вписать число": "Drag or turn with the wheel (click it, and for 5 s the wheel turns the drum); ← → — one step; double click or digits — type a number",
+  "▣ Выделено: {0}": "▣ Selected: {0}",
+  "Выделено событий: {0}. Esc — снять выделение": "Events selected: {0}. Esc — clear the selection",
+  "📋 В буфере: {0} ({1} стр.)": "📋 Copied: {0} ({1} rows)",
+  "📋 В буфере: {0}": "📋 Copied: {0}",
+  "Скопировано: {0}. Ctrl+V — вставить, правый клик по пустому месту таймлайна — куда вставить": "Copied: {0}. Ctrl+V — paste, a right click on an empty spot of the timeline — where to paste",
 };
