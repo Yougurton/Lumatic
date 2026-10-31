@@ -51,6 +51,13 @@ export interface EffectParams {
   floor?: number;
   /** fire: how much it trembles (a share of the brightness it has at the time). */
   tremor?: number;
+  /** fire: trembling at random like a flame, or swaying evenly like a singer's vibrato — `rate` beats
+   *  a sway, down by `tremor` and back. */
+  wobble?: 'flame' | 'vibrato';
+  /** vibrato: how far behind each next item sways (a share of a sway: 0 — all together). */
+  vibratoLag?: number;
+  /** vibrato: how far the hue sways either way with it (degrees). */
+  vibratoHue?: number;
   /** endMode fade: the beats each flash's fade out takes (none / 0: all of it). */
   fadeOut?: number;
   /** Its colours turned round the hue circle (degrees)… */
@@ -389,6 +396,36 @@ function fire(
   const out: LightClip[] = [];
   const burn = (item: EffectItem | null, slot: number) => {
     const next = random(p.seed * 7919 + slot * 104729 + 1);
+    if (p.wobble === 'vibrato') {
+      // even sways: eight steps a sway, each a fade to the next (smooth, near enough a sine)
+      const sway = Math.max(1 / 16, p.rate);
+      const step = Math.max(1 / 64, sway / 8);
+      const lag = (p.vibratoLag ?? 0) * Math.max(0, slot);
+      const times: number[] = [];
+      for (let t = effect.start; t < effect.end - 1e-6; t += step) times.push(Math.round(t * 1e5) / 1e5);
+      times.push(effect.end);
+      const points = times.map((time) => {
+        const u = (time - effect.start) / duration;
+        const phase = 2 * Math.PI * ((time - effect.start) / sway - lag);
+        // (down from full by `tremor` and back: a dip each sway)
+        const dip = 0.5 - 0.5 * Math.cos(phase);
+        const brightness = Math.round(Math.max(0, p.color.brightness * level(u) * (1 - tremor * dip)) * 1000) / 1000;
+        let color = mixColor(p.color, p.color2, p.color2 === null ? 0 : dip, p.hsv, scheme);
+        const hue = (p.vibratoHue ?? 0) * Math.sin(phase);
+        if (Math.abs(hue) > 0.01) color = { ref: 'custom', rgb: shiftHue(resolveRgb(color, scheme), hue), brightness: color.brightness };
+        return { time, color: { ...color, brightness } };
+      });
+      for (let k = 0; k + 1 < points.length; k++) {
+        const from = points[k]!;
+        const to = points[k + 1]!;
+        const clip = make(from.time, to.time, from.color, slot);
+        clip.startMode = k === 0 ? (p.startMode === 'fade' ? 'on' : p.startMode) : 'on';
+        clip.endColor = to.color;
+        clip.endMode = k + 2 < points.length ? 'stay' : p.endMode;
+        out.push(onItem(clip, item));
+      }
+      return;
+    }
     // the moments it changes at: about `rate` apart
     const times = [effect.start];
     // (on a 1/64 grid: uneven, but on the map's beats)

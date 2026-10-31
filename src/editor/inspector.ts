@@ -302,17 +302,29 @@ export class Inspector {
       ];
       root.append(this.section('Огонёк', this.buttons(shapes, p.shape ?? 'steady', (value) => change((params) => (params.shape = value)))));
       if ((p.shape ?? 'steady') !== 'steady') root.append(this.slider(p.shape === 'rise' ? 'С какой яркости' : 'До какой яркости', p.floor ?? 0.15, 0, 1, 0.05, (value) => change((params) => (params.floor = value))));
-      root.append(this.slider('Дрожание', p.tremor ?? 0.3, 0, 1, 0.05, (value) => change((params) => (params.tremor = value))));
-      root.append(this.section('Дрожит каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)))));
+      const wobbles: [string, string, string][] = [
+        ['flame', 'Пламя', 'Дрожит вразнобой, как огонь'],
+        ['vibrato', 'Вибрато', 'Качается ровно, как вибрато в музыке: тише и обратно, раз за разом'],
+      ];
+      const vibrato = p.wobble === 'vibrato';
+      root.append(this.section('Как дрожит', this.buttons(wobbles, vibrato ? 'vibrato' : 'flame', (value) => change((params) => (params.wobble = value === 'vibrato' ? 'vibrato' : 'flame')))));
+      root.append(this.slider(vibrato ? 'Глубина вибрато' : 'Дрожание', p.tremor ?? 0.3, 0, 1, 0.05, (value) => change((params) => (params.tremor = value))));
+      root.append(this.section(vibrato ? 'Одно качание, долей' : 'Дрожит каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)), vibrato ? [2, 4] : [], null, vibrato ? 'vibrato' : 'flame')));
+      if (vibrato) {
+        root.append(this.slider('Отставание следующей лампы', p.vibratoLag ?? 0, 0, 1, 0.05, (value) => change((params) => (params.vibratoLag = value))));
+        root.append(this.drumField('Оттенок качается на, °', p.vibratoHue ?? 0, 5, (value) => change((params) => (params.vibratoHue = value))));
+      }
       const together: [string, string, string][] = [
         ['each', 'Каждая сама', 'У каждой лампы (элемента) своё дрожание'],
         ['all', 'Все вместе', 'Все дрожат одинаково'],
       ];
       root.append(this.section('Лампы', this.buttons(together, p.pattern === 'all' ? 'all' : 'each', (value) => change((params) => (params.pattern = value === 'all' ? 'all' : 'alternate')))));
-      const reroll = document.createElement('button');
-      reroll.textContent = '🎲 Другое дрожание';
-      reroll.addEventListener('click', () => change((params) => (params.seed = Math.floor(Math.random() * 1e6))));
-      root.append(reroll);
+      if (!vibrato) {
+        const reroll = document.createElement('button');
+        reroll.textContent = '🎲 Другое дрожание';
+        reroll.addEventListener('click', () => change((params) => (params.seed = Math.floor(Math.random() * 1e6))));
+        root.append(reroll);
+      }
     }
     if (effect.kind === 'twinkle') {
       root.append(this.slider('Доля ламп за раз', p.density, 0.05, 1, 0.05, (value) => change((params) => (params.density = value))));

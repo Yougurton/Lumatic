@@ -48,6 +48,7 @@ const EFFECTS: EffectCard[] = [
   { name: 'Градиент', hint: 'Все элементы горят, цвет плавно меняется от первого к последнему', kind: 'gradient', length: 4, params: ({ other }) => ({ startMode: 'fadeIn', fadeIn: 0.5, endMode: 'fade', color2: other }) },
   { name: 'Мерцание', hint: 'Случайные лампы вспыхивают и гаснут', kind: 'twinkle', length: 4, params: () => ({ rate: 0.25, density: 0.3, duty: 1.5, startMode: 'flash', endMode: 'fade' }) },
   { name: 'Огонёк', hint: 'Горит и дрожит, как пламя: то чуть тусклее, то чуть ярче', kind: 'fire', length: 4, params: () => ({ shape: 'steady', tremor: 0.35, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
+  { name: 'Вибрато', hint: 'Свет ровно качается — тише и обратно, как вибрато в музыке; лампы чуть вразнобой', kind: 'fire', length: 4, params: () => ({ shape: 'steady', wobble: 'vibrato', tremor: 0.6, rate: 0.5, vibratoLag: 0.15, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
   { name: 'Разгорается', hint: 'Медленно нарастает, дрожа, как разгорающийся огонь', kind: 'fire', length: 8, params: () => ({ shape: 'rise', floor: 0.1, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'stay' }) },
   { name: 'Догорает', hint: 'Медленно затухает, дрожа, как догорающий огонь', kind: 'fire', length: 8, params: () => ({ shape: 'fall', floor: 0, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
 ];

@@ -408,7 +408,28 @@ export class RingEditor {
     col.append(labeled('Целых оборотов сверху', numberInput(pose.loops, 1, (value) => this.changePose((item) => (item.loops = Math.max(0, Math.round(value)))))));
     col.append(labeled('Время поворота, долей (0 — сразу)', numberInput(pose.duration, 0.25, (value) => this.changePose((item) => (item.duration = Math.max(0, value))))));
     if (!events) col.append(labeled('Сглаживание', select(EASINGS, pose.easing, (value) => this.changePose((item) => (item.easing = value)))));
-    else col.append(note('Событие колец доводит кольца плавно с торможением; время поворота задаёт его скорость.'));
+    else {
+      // (the game's own closing in, or an easing made of short ring events)
+      const options: [string, string][] = [['', 'Как в игре: плавно с торможением'], ...EASINGS];
+      col.append(
+        labeled(
+          'Движение',
+          select(options, pose.eventEasing ?? '', (value) =>
+            this.changePose((item) => {
+              if (value === '') delete item.eventEasing;
+              else item.eventEasing = value;
+            }),
+          ),
+        ),
+      );
+      col.append(
+        note(
+          pose.eventEasing === undefined
+            ? 'Событие колец доводит кольца плавно с торможением; время поворота задаёт его скорость.'
+            : 'Поворот собран из коротких событий колец (≈25 в секунду), идущих по выбранной кривой — так кольца пружинят, отскакивают, перелетают. Нужно время поворота больше нуля.',
+        ),
+      );
+    }
     col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberInput(pose.delay, 0.125, (value) => this.changePose((item) => (item.delay = Math.max(0, value))))));
     if (pose.delay > 0) col.append(check('От дальних к ближним', pose.reverse, (on) => this.changePose((item) => (item.reverse = on))));
     if (events && pose.reverse && pose.delay > 0) col.append(note('События колец ведут волну только от ближних колец к дальним.'));

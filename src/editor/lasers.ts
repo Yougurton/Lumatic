@@ -12,7 +12,9 @@
 
 export interface LaserMove {
   sides: 'left' | 'right' | 'both';
-  mode: 'spin' | 'steps';
+  /** spin: round and round; steps: turned by an angle at a time; sway: back and forth, evenly — a
+   *  vibrato (`angle` either way, `every` beats a sway there and back, for `length` beats). */
+  mode: 'spin' | 'steps' | 'sway';
   /** Spinning: the speed (the game's, 1 = 20° a second). */
   speed: number;
   direction: 0 | 1 | 'random';
@@ -51,6 +53,34 @@ function speedEvent(beat: number, type: number, speed: number, data: Record<stri
   return { beat: round(beat), type, value, floatValue: 1, customData: { ...data, ...exact } };
 }
 
+/** Sixteen speeds a sway: the angle follows a sine, there and back (each piece at the speed that turns
+ *  it that far in its time, its direction changing as the sway turns back). */
+const SWAY_STEPS = 16;
+
+function swayEvents(move: LaserMove, type: number, start: number, seconds: (beat: number) => number, direction: Record<string, unknown>): LaserEvent[] {
+  const out: LaserEvent[] = [];
+  const period = Math.max(1 / 16, move.every);
+  const length = Math.max(period / 4, move.length);
+  const amplitude = Math.abs(move.angle);
+  // (one way: the direction asked for; back: the other)
+  const forward = move.direction === 'random' ? 0 : move.direction;
+  const stop = (beat: number, freeze: boolean): LaserEvent => ({ beat: round(beat), type, value: 0, floatValue: 1, ...(freeze ? { customData: { lockRotation: true } } : {}) });
+  if (move.fromRow) out.push(stop(start, false));
+  const piece = period / SWAY_STEPS;
+  const angleAt = (t: number) => amplitude * Math.sin((2 * Math.PI * t) / period);
+  for (let k = 0; k * piece < length - 1e-6; k++) {
+    const t0 = k * piece;
+    const t1 = Math.min(length, t0 + piece);
+    const delta = angleAt(t1) - angleAt(t0);
+    const at = start + t0 + (k === 0 && move.fromRow ? AFTER : 0);
+    const time = seconds(start + t1) - seconds(start + t0);
+    const speed = Math.max(0.01, Math.abs(delta) / (20 * Math.max(0.001, time)));
+    out.push(speedEvent(at, type, speed, { lockRotation: true, ...direction, direction: delta >= 0 ? forward : 1 - forward }));
+  }
+  out.push(stop(start + length, move.end !== 'reset'));
+  return out;
+}
+
 /** The events of a move from `start` (`seconds`: a beat's time in the song, for the speeds). */
 export function laserEvents(move: LaserMove, start: number, seconds: (beat: number) => number): LaserEvent[] {
   const types = move.sides === 'both' ? [12, 13] : [move.sides === 'left' ? 12 : 13];
@@ -65,6 +95,10 @@ export function laserEvents(move: LaserMove, start: number, seconds: (beat: numb
         out.push(speedEvent(start + AFTER, type, speed, { lockRotation: true, ...direction }));
       } else out.push(speedEvent(start, type, speed, { ...(move.from === 'place' ? { lockRotation: true } : {}), ...direction }));
       if (move.end !== 'keep') out.push(stop(start + Math.max(0.0625, move.length), type, move.end === 'freeze'));
+      continue;
+    }
+    if (move.mode === 'sway') {
+      out.push(...swayEvents(move, type, start, seconds, direction));
       continue;
     }
     const steps = Math.max(1, Math.min(64, Math.round(move.steps)));

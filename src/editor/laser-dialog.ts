@@ -51,6 +51,15 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
       <label class="adjust-check"><input type="checkbox" data-id="fromRow"> Сначала выстроить в ряд (исходное положение окружения)</label>
       <div class="steps-line"><span class="adjust-head">В конце</span><span class="steps-buttons" data-id="stepsEnd"></span></div>
     </div>
+    <div data-id="sway" class="laser-part">
+      <div class="adjust-pair">
+        <label>Качаются на, ° в каждую сторону <input type="number" data-id="swayAngle" min="1" step="5"></label>
+        <label>Длится, долей <input type="number" data-id="swayLength" min="0.25" step="1"></label>
+      </div>
+      <div class="steps-line"><span class="adjust-head">Туда и обратно за, долей</span><span class="steps-buttons" data-id="swayEvery"></span></div>
+      <label class="adjust-check"><input type="checkbox" data-id="swayRow"> Сначала выстроить в ряд (исходное положение окружения)</label>
+      <div class="steps-line"><span class="adjust-head">В конце</span><span class="steps-buttons" data-id="swayEnd"></span></div>
+    </div>
     <canvas class="steps-picture" data-id="picture" width="400" height="64"></canvas>
     <div class="nm-dim" data-id="summary"></div>
     <div class="ce-dialog-buttons"><span class="nm-dim">Нужен Chroma</span><span class="adjust-gap"></span><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="apply">${old === undefined ? 'Поставить' : 'Готово'}</button></div>`;
@@ -80,7 +89,23 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
     return draw;
   };
   buttons<LaserMove['sides']>('sides', [['Левые', 'left'], ['Правые', 'right'], ['Обе', 'both']], () => move.sides, (value) => (move.sides = value));
-  buttons<LaserMove['mode']>('mode', [['Повороты по шагам', 'steps', 'На угол за шаг: лазеры поворачиваются и замирают'], ['Крутятся', 'spin', 'Непрерывно, с выбранной скоростью']], () => move.mode, (value) => (move.mode = value));
+  buttons<LaserMove['mode']>(
+    'mode',
+    [
+      ['Повороты по шагам', 'steps', 'На угол за шаг: лазеры поворачиваются и замирают'],
+      ['Крутятся', 'spin', 'Непрерывно, с выбранной скоростью'],
+      ['Качаются', 'sway', 'Вибрато: ровно качаются туда и обратно на заданный угол'],
+    ],
+    () => move.mode,
+    (value) => (move.mode = value),
+  );
+  buttons<LaserMove['end']>('swayEnd', [['Замирают', 'freeze'], ['В исходное', 'reset']], () => (move.end === 'reset' ? 'reset' : 'freeze'), (value) => (move.end = value));
+  el('swayEvery').replaceChildren(
+    gridSelect(move.every, (value) => {
+      move.every = value;
+      update();
+    }, [2, 4, 8], null, 'sway'),
+  );
   buttons<LaserMove['direction']>('direction', [['0', 0, 'Левые в одну сторону, правые — в другую (зеркально)'], ['1', 1, 'Наоборот'], ['Случайно', 'random', 'Как в игре']], () => move.direction, (value) => (move.direction = value));
   buttons<LaserMove['from']>('from', [['Из ряда', 'row', 'Сначала в исходное положение окружения, затем все вместе — ровным рядом'], ['С места', 'place', 'Оттуда, где стоят'], ['Случайно', 'random', 'Как в игре: случайный угол у каждого']], () => move.from, (value) => (move.from = value));
   buttons<LaserMove['end']>('end', [['Крутятся дальше', 'keep'], ['Замирают', 'freeze'], ['В исходное', 'reset']], () => move.end, (value) => (move.end = value));
@@ -97,7 +122,7 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
   const SHARES: [string, number][] = [['Рывком', 0.1], ['Быстро', 0.3], ['Плавно', 0.7], ['Весь шаг', 1]];
   buttons<number>('turn', SHARES.map(([label, value]) => [label, value]), () => SHARES.reduce((best, [, value]) => (Math.abs(value - turnShare()) < Math.abs(best - turnShare()) ? value : best), 0.3), (value) => (move.turn = Math.round(move.every * value * 1000) / 1000));
 
-  const numbers: [string, keyof LaserMove][] = [['speed', 'speed'], ['length', 'length'], ['angle', 'angle'], ['count', 'steps']];
+  const numbers: [string, keyof LaserMove][] = [['speed', 'speed'], ['length', 'length'], ['angle', 'angle'], ['count', 'steps'], ['swayAngle', 'angle'], ['swayLength', 'length']];
   for (const [id, key] of numbers) {
     const input = el<HTMLInputElement>(id);
     input.value = String(move[key]);
@@ -108,12 +133,14 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
       update();
     });
   }
-  const fromRow = el<HTMLInputElement>('fromRow');
-  fromRow.checked = move.fromRow;
-  fromRow.addEventListener('change', () => {
-    move.fromRow = fromRow.checked;
-    update();
-  });
+  for (const id of ['fromRow', 'swayRow']) {
+    const box = el<HTMLInputElement>(id);
+    box.checked = move.fromRow;
+    box.addEventListener('change', () => {
+      move.fromRow = box.checked;
+      update();
+    });
+  }
 
   let block: RingBlock = newLaserBlock(start, move);
   el('summary').before(scrubStrip(editor, () => block));
@@ -125,7 +152,12 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
     const size = picture.height;
     ctx.clearRect(0, 0, picture.width, size);
     const sign = move.direction === 1 ? -1 : 1;
-    const angles = move.mode === 'steps' ? Array.from({ length: Math.min(Math.max(1, Math.round(move.steps)), 32) + 1 }, (_, k) => k * move.angle * sign) : [0, 30 * sign, 60 * sign];
+    const angles =
+      move.mode === 'steps'
+        ? Array.from({ length: Math.min(Math.max(1, Math.round(move.steps)), 32) + 1 }, (_, k) => k * move.angle * sign)
+        : move.mode === 'sway'
+          ? [0, 1, 0, -1, 0].map((k) => k * Math.abs(move.angle) * sign)
+          : [0, 30 * sign, 60 * sign];
     const gap = 6;
     const count = Math.min(angles.length, Math.floor((picture.width + gap) / (size + gap)));
     angles.slice(0, count).forEach((angle, index) => {
@@ -151,7 +183,7 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
       }
       ctx.fillStyle = '#9aa0b4';
       ctx.font = '10px sans-serif';
-      ctx.fillText(move.mode === 'steps' ? `${String(Math.round(angle))}°` : index === 0 ? 'ряд' : '…', x0 + 3, 11);
+      ctx.fillText(move.mode !== 'spin' ? `${String(Math.round(angle))}°` : index === 0 ? 'ряд' : '…', x0 + 3, 11);
       ctx.restore();
     });
   };
@@ -160,6 +192,12 @@ export function laserDialog(editor: Editor, blockId: string | null = null) {
   const update = () => {
     el('spin').hidden = move.mode !== 'spin';
     el('steps').hidden = move.mode !== 'steps';
+    el('sway').hidden = move.mode !== 'sway';
+    // (the two fields of the same setting show the same value)
+    for (const [id, key] of numbers) {
+      const input = el<HTMLInputElement>(id);
+      if (document.activeElement !== input) input.value = String(move[key]);
+    }
     draw();
     const made = newLaserBlock(start, move);
     block = { ...made, id: old?.id ?? block.id, name: made.name };

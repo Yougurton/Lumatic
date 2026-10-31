@@ -993,7 +993,17 @@ export class Timeline {
       ctx.strokeStyle = `hsl(${String(hue)} 80% 68%)`;
       ctx.fillStyle = `hsla(${String(hue)} 80% 65% / 0.35)`;
       ctx.lineWidth = 1.5;
-      if (move.mode === 'steps') {
+      if (move.mode === 'sway') {
+        // (a sine, there and back)
+        ctx.beginPath();
+        for (let px = x; px <= x + w; px += 2) {
+          const t = (px - x) / this.pxPerBeat;
+          const py = cy - Math.sin((2 * Math.PI * t) / Math.max(1 / 16, move.every)) * r * 0.9;
+          if (px === x) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      } else if (move.mode === 'steps') {
         for (let k = 0; k < move.steps; k++) {
           const px = this.beatToX(block.start + k * move.every);
           ctx.fillRect(px, cy - 1, Math.max(1, Math.min(move.turn, move.every) * this.pxPerBeat), 2);

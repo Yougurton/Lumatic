@@ -48,6 +48,13 @@ check(Math.abs(Math.abs(angleAt(spin, 13, 9)) - 60) < 0.5, 'frozen at the end', 
 // a speed that isn't whole: Chroma's exact speed on the event
 const exact = laserEvents({ ...spin, speed: 2.5 }, 0, seconds).find((event) => event.value > 0)!;
 check(exact.value === 3 && exact.customData?.speed === 2.5 && exact.customData.lockRotation === true, 'exact speed', exact);
+// swaying: 30° either way, there and back in 2 beats, for 4 beats — at a quarter of a sway it's 30° out,
+// half way back at the start, three quarters 30° the other way, at the end where it started
+const sway: LaserMove = { ...DEFAULT_LASER_MOVE, mode: 'sway', angle: 30, every: 2, length: 4, fromRow: true, end: 'freeze', direction: 0 };
+check(Math.abs(Math.abs(angleAt(sway, 13, 4.5)) - 30) < 1.5, 'sway out', angleAt(sway, 13, 4.5));
+check(Math.abs(angleAt(sway, 13, 5)) < 1.5, 'sway back', angleAt(sway, 13, 5));
+check(Math.abs(angleAt(sway, 13, 5.5) + angleAt(sway, 13, 4.5)) < 2, 'sway the other way', angleAt(sway, 13, 5.5));
+check(Math.abs(angleAt(sway, 13, 9)) < 2, 'sway ends where it began', angleAt(sway, 13, 9));
 
 console.log('checks', checks, 'failures', failures);
 if (failures > 0) process.exit(1);

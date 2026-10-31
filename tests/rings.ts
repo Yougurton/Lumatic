@@ -233,6 +233,39 @@ if (points.length !== 5 || points.at(-1)![2] !== 360) {
   }
 }
 
+// ring events along an easing: an overshoot passes the angle and comes back; a bounce ends on it
+{
+  const system = systems[0]!;
+  const posed = (easing: string): RingBlock => ({
+    id: 'e' + easing,
+    name: 'eased',
+    system: system.name,
+    mode: 'event',
+    start: 2,
+    end: 12,
+    poses: [newPose(0, { shape: 'same', angle: 0, duration: 0 }), newPose(1, { shape: 'same', angle: 90, duration: 2, eventEasing: easing })],
+  });
+  const sample = (block: RingBlock) => {
+    const made = poseRingEvents([block], [], systems, 8, (beat) => beat, 60 / bpm);
+    const all: BasicEvent[] = made.map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, customData: event.customData as BasicEvent['customData'] }));
+    return { count: made.length, at: createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed)) };
+  };
+  const off = (want: number, got: number) => Math.abs((((got - want) % 360) + 540) % 360 - 180);
+  const back = sample(posed('easeOutBack'));
+  const peak = Math.max(...Array.from({ length: 40 }, (_, k) => back.at(3 + (k * 2) / 40)[0]!));
+  checks++;
+  if (!(peak > 92) || off(90, back.at(6)[0]!) > 0.5 || back.count < 10) {
+    failures++;
+    console.log('eased overshoot', peak, back.at(6)[0], back.count);
+  }
+  const bounce = sample(posed('easeOutBounce'));
+  checks++;
+  if (off(90, bounce.at(6)[0]!) > 0.5) {
+    failures++;
+    console.log('eased bounce end', bounce.at(6)[0]);
+  }
+}
+
 // zoom poses: the rings stand their pose's spacing apart once its time is over
 const zoomSystem: ZoomSystemInfo = {
   name: 'SmallTrackLaneRings',

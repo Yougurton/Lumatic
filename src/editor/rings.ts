@@ -63,6 +63,9 @@ export interface RingPose {
   relative?: boolean;
   /** A spiral's `step` is added to the step the rings had before it (+5 after 10: 15). */
   relativeStep?: boolean;
+  /** Ring events: how the turn goes — none: the game's own (closing in, slowing down); an easing: the
+   *  turn made of short ring events along it (a spring, a bounce, an overshoot…). */
+  eventEasing?: string;
 }
 
 export interface RingBlock {
@@ -251,15 +254,16 @@ export function newGlitchBlock(system: string, mode: RingBlock['mode'], start: n
 
 /** A lasers block at `start` (as long as the move: its spin, or its steps). */
 export function newLaserBlock(start: number, move: LaserMove): RingBlock {
-  const length = move.mode === 'spin' ? Math.max(0.25, move.length) : Math.max(1, Math.round(move.steps)) * Math.max(1 / 64, move.every);
-  return { id: newId('k'), kind: 'lasers', name: move.mode === 'spin' ? 'Лазеры крутятся' : 'Лазеры по шагам', system: '', mode: 'event', start, end: start + length, poses: [], lasers: { ...move } };
+  const length = move.mode === 'steps' ? Math.max(1, Math.round(move.steps)) * Math.max(1 / 64, move.every) : Math.max(0.25, move.length);
+  const name = move.mode === 'spin' ? 'Лазеры крутятся' : move.mode === 'sway' ? 'Лазеры качаются' : 'Лазеры по шагам';
+  return { id: newId('k'), kind: 'lasers', name, system: '', mode: 'event', start, end: start + length, poses: [], lasers: { ...move } };
 }
 
 /** A lasers block's move as long as the block is now (dragged longer: a longer spin, more steps). */
 export function laserBlockMove(block: RingBlock): LaserMove {
   const move = block.lasers!;
   const length = block.end - block.start;
-  return move.mode === 'spin' ? { ...move, length } : { ...move, steps: Math.max(1, Math.round(length / Math.max(1 / 64, move.every))) };
+  return move.mode === 'steps' ? { ...move, steps: Math.max(1, Math.round(length / Math.max(1 / 64, move.every))) } : { ...move, length };
 }
 
 export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {
@@ -458,19 +462,40 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     const prop = waveSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.01, count / (waveSeconds / 0.02)));
     const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
     const speed = turnSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.05, (1 - 0.01 ** (0.02 / turnSeconds)) / 0.02));
-    const customData: Record<string, unknown> = {
-      rotation: round(Math.abs(rotation)),
-      step: round(step),
-      prop: round(prop),
-      speed: round(speed),
-      direction: rotation >= 0 ? 0 : 1,
-      ...(block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {}),
+    const filter = block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {};
+    const add = (at: number, turned: number, spiral: number, closing: number) => {
+      const customData: Record<string, unknown> = {
+        rotation: round(Math.abs(turned)),
+        step: round(spiral),
+        prop: round(prop),
+        speed: round(closing),
+        direction: turned >= 0 ? 0 : 1,
+        ...filter,
+      };
+      out.push({ beat: at, type: eventType, value: 0, floatValue: 1, customData, group: block.id });
+      // (later poses count this one — before the show's events at its moment, as it's played)
+      const songAt = toSong(at);
+      const index = known.findIndex((item) => item.songBeat >= songAt - 1e-9);
+      known.splice(index < 0 ? known.length : index, 0, { songBeat: songAt, customData });
     };
-    const event = { beat, type: eventType, value: 0, floatValue: 1, customData, group: block.id };
-    out.push(event);
-    // (later poses count this one — before the show's events at its moment, as it's played)
-    const at = known.findIndex((item) => item.songBeat >= songBeat - 1e-9);
-    known.splice(at < 0 ? known.length : at, 0, { songBeat, customData });
+    const easing = pose.eventEasing;
+    if (easing === undefined || easing === '' || turnSeconds <= 0.04) {
+      add(beat, rotation, step, speed);
+      continue;
+    }
+    // the turn along an easing: a ring event every ~1/25 s, each turning on to where the easing has
+    // got (back, for an overshoot or a bounce), the spiral going along too; the rings close in on each
+    // nearly at once
+    const ease = easingFromName(easing);
+    const pieces = Math.max(2, Math.min(96, Math.round(turnSeconds / 0.04)));
+    const fromStep = ringStepBase(known, system, songBeat);
+    let done = 0;
+    for (let k = 1; k <= pieces; k++) {
+      const reached = ease(k / pieces);
+      const at = beat + (pose.duration * (k - 1)) / pieces;
+      add(Math.round(at * 100000) / 100000, rotation * (reached - done), fromStep + (step - fromStep) * reached, k === pieces ? 50 : 35);
+      done = reached;
+    }
   }
   return out;
 }
