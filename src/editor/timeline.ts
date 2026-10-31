@@ -529,6 +529,8 @@ export class Timeline {
       if (top + h < this.rowsTop || top > this.rowsBottom) continue;
       if (row.kind === 'raw') this.drawRaw(row, top, h);
       else if (row.kind === 'poses') for (const block of this.blocksOf(row)) this.drawRingBlock(block, top, h);
+      // (the rings turning too fast to read in a headset: marked along their rows)
+      if ((row.kind === 'raw' && row.type === 8) || (row.kind === 'poses' && row.ring === 'rotation')) this.drawRingSpeed(top);
       else for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
     }
     // the clip being drawn
@@ -949,6 +951,25 @@ export class Timeline {
       ctx.restore();
     }
     ctx.globalAlpha = 1;
+  }
+
+  /** Where the rings turn too fast: a strip along the top of the ring rows — amber past 1500°/s (a
+   *  sixth of a turn between a headset's frames: it starts to look jerky), red past 3000°/s (more than a
+   *  third: a jumble, different in every headset, nothing like on the monitor). */
+  private drawRingSpeed(top: number) {
+    const profile = this.editor.ringSpeeds();
+    if (profile === null) return;
+    const ctx = this.context;
+    const { step, speeds } = profile;
+    const first = Math.max(0, Math.floor(this.xToBeat(GUTTER) / step));
+    const last = Math.min(speeds.length - 1, Math.ceil(this.xToBeat(this.width) / step));
+    for (let k = first; k <= last; k++) {
+      const speed = speeds[k]!;
+      if (speed < 1500) continue;
+      ctx.fillStyle = speed >= 3000 ? 'rgba(255,70,70,0.9)' : 'rgba(255,190,60,0.85)';
+      const x = this.beatToX(k * step);
+      ctx.fillRect(x, top + 1, Math.max(1, step * this.pxPerBeat), 3);
+    }
   }
 
   /** The blocks a ring poses row shows (turns or zooms). */

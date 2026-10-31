@@ -518,6 +518,14 @@ export class Inspector {
         set('prop', 50);
       });
       this.root.append(instant);
+      // (turning too fast to read in a headset)
+      const fastest = editor.ringSpeedBetween(Math.min(...events.map((event) => event.beat)), Math.max(...events.map((event) => event.beat)) + 2);
+      if (fastest >= 1500) {
+        const warning = document.createElement('div');
+        warning.className = 'ins-note ring-warning';
+        warning.textContent = `⚠ Кольца здесь крутятся до ${String(Math.round(fastest))}°/с — в шлеме это ${String(Math.round(fastest / 90))}° за кадр: выглядит как беспорядочное мелькание, не так, как на мониторе.`;
+        this.root.append(warning);
+      }
       note('Пустые поля — как в игре по умолчанию. Нужен Chroma для своих значений. Кольца встают на место мгновенно, только если и скорость, и распространение — 50 и больше: при распространении 1 кольца начинают поворот по одному.');
     } else if (type === 9) {
       const number = (key: string) => (typeof get(key) === 'number' ? (get(key) as number) : null);

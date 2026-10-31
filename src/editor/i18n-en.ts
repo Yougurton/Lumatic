@@ -1169,4 +1169,6 @@ export const EN: Record<string, string> = {
   "Движение": "Motion",
   "Поворот собран из коротких событий колец (≈25 в секунду), идущих по выбранной кривой — так кольца пружинят, отскакивают, перелетают. Нужно время поворота больше нуля.": "The turn is made of short ring events (about 25 a second) along the chosen curve — that's how the rings spring, bounce, overshoot. The turn time must be above zero.",
   "Лазеры качаются": "Lasers sway",
+  "⚠ Кольца здесь крутятся до {0}°/с — в шлеме это {1}° за кадр: выглядит как беспорядочное мелькание, не так, как на мониторе.": "⚠ The rings turn at up to {0}°/s here — {1}° a frame in a headset: it looks like a random flicker, not like on the monitor.",
+  "⚠ Здесь кольца крутятся до {0}°/с. Кольцо одинаково через каждые 90°, и в шлеме при такой скорости за кадр оно поворачивается на {1}° — это выглядит как беспорядочное мелькание, а на мониторе иначе. Сделайте поворот медленнее или короче (меньше угол, больше время поворота).": "⚠ The rings turn at up to {0}°/s here. A ring looks the same every 90°, and in a headset it turns {1}° a frame at this speed — it looks like a random flicker, and differently on a monitor. Make the turn slower or shorter (a smaller angle, a longer turn time).",
 };

@@ -48,6 +48,8 @@ import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
+import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
+import type { BasicEvent } from '../engine/core/beatmap/types';
 import { chromaCustomData, cloneRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
@@ -1805,6 +1807,67 @@ export class Editor {
   }
 
   private boostCache: { version: number; raw: RawEvent[]; count: number; switches: { beat: number; on: boolean }[] } | null = null;
+
+  /**
+   * How fast the rings turn along the song: for every 1/8 beat (map beats), the fastest ring of any ring
+   * system, in degrees a second — worked out with the game's own ring motion from the show's ring
+   * events. Past ~1500°/s a ring (the same every 90°) turns more than a sixth of that between a
+   * headset's frames, and it reads as a jumble — differently on a monitor and in each headset.
+   */
+  ringSpeeds(): { step: number; speeds: Float32Array } | null {
+    if (this.project === null || this.ringInfo.length === 0) return null;
+    const cached = this.ringSpeedCache;
+    if (cached !== null && cached.version === this.version) return cached.result;
+    // (worked out a moment after the show stops changing — the last one shown meanwhile)
+    if (this.ringSpeedTimer === 0) {
+      this.ringSpeedTimer = window.setTimeout(() => {
+        this.ringSpeedTimer = 0;
+        this.ringSpeedCache = { version: this.version, result: this.measureRingSpeeds() };
+        this.emit('time');
+      }, cached === null ? 0 : 300);
+    }
+    return cached?.result ?? null;
+  }
+
+  private ringSpeedTimer = 0;
+
+  private measureRingSpeeds(): { step: number; speeds: Float32Array } {
+    const events: BasicEvent[] = this.previewEvents()
+      .filter((event) => event.type === RING_EVENT_TYPE)
+      .map((event) => ({ jsonTime: event.beat, songBpmTime: this.toSong(event.beat), type: event.type, value: event.value, floatValue: event.floatValue, ...(event.customData === undefined ? {} : { customData: event.customData as BasicEvent['customData'] }) }))
+      .sort((a, b) => a.songBpmTime - b.songBpmTime);
+    const step = 0.125;
+    const end = Math.max(this.endBeat, ...events.map((event) => event.jsonTime + 8));
+    const speeds = new Float32Array(Math.ceil(end / step) + 1);
+    if (events.length > 0) {
+      const h = 1 / 32;
+      for (const system of this.ringInfo) {
+        const sampler = createRingRotationSampler(events, this.songBpm, new Array<number>(system.rings).fill(0), system.rotation, deterministicRingRandom(system.seed));
+        for (let k = 0; k < speeds.length; k++) {
+          const beat = k * step;
+          const a = [...sampler(this.toSong(beat))];
+          const b = sampler(this.toSong(beat + h));
+          const seconds = Math.max(1e-6, this.beatToSeconds(beat + h) - this.beatToSeconds(beat));
+          let fastest = 0;
+          for (let i = 0; i < a.length; i++) fastest = Math.max(fastest, Math.abs((b[i] ?? 0) - (a[i] ?? 0)) / seconds);
+          // (not the rings' own turn into place as the song starts)
+          if (beat >= 2) speeds[k] = Math.max(speeds[k]!, fastest);
+        }
+      }
+    }
+    return { step, speeds };
+  }
+
+  /** The fastest the rings turn between two beats (degrees a second; 0: not known). */
+  ringSpeedBetween(from: number, to: number) {
+    const profile = this.ringSpeeds();
+    if (profile === null) return 0;
+    let fastest = 0;
+    for (let k = Math.max(0, Math.floor(from / profile.step)); k <= Math.min(profile.speeds.length - 1, Math.ceil(to / profile.step)); k++) fastest = Math.max(fastest, profile.speeds[k]!);
+    return fastest;
+  }
+
+  private ringSpeedCache: { version: number; result: { step: number; speeds: Float32Array } } | null = null;
 
   /** The ring events a GLS block made. */
   effectRaw(id: string) {
