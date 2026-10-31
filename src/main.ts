@@ -19,6 +19,10 @@ import { installTranslation, language, tr } from './editor/i18n';
 import { Clicks } from './editor/clicks';
 import { onSettings, settings } from './editor/settings';
 import { settingsDialog } from './editor/settings-dialog';
+import { setRingTickRate } from './engine/core/lighting/ring-motion';
+
+// (the rings as fast as the game the settings say)
+setRingTickRate(settings().ringFps);
 
 // (in English: everything shown from here on goes through the dictionary)
 installTranslation();
@@ -199,6 +203,10 @@ onSettings((now, before) => {
   if (now.volume !== before.volume) editor.clock?.setVolume(now.volume);
   if (now.uiScale !== before.uiScale) applyScale();
   if (now.notes !== before.notes) editor.rebuildPreview(true);
+  if (now.ringFps !== before.ringFps) {
+    setRingTickRate(now.ringFps);
+    editor.ringTimingChanged();
+  }
   if (now.paste !== before.paste || now.follow !== before.follow) timeline.redraw();
 });
 

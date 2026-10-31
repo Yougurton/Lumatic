@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
-import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
+import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, setRingTickRate, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
 import { dataFirstRing, firstRingFromLog, newPose, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
@@ -265,6 +265,47 @@ if (points.length !== 5 || points.at(-1)![2] !== 360) {
     console.log('eased bounce end', bounce.at(6)[0]);
   }
 }
+
+// the game's rule for the base: an event coming while an earlier, slow turn still holds the first ring
+// counts from that turn's angle — three 45° turns two ticks apart (prop 0.05) end at 90°, not 135°
+{
+  const system = systems[0]!;
+  const tickBeats = (0.02 * bpm) / 60;
+  const three: BasicEvent[] = [0, 2, 4].map((k) => ({ jsonTime: 4 + k * tickBeats, songBpmTime: 4 + k * tickBeats, type: 8, value: 0, floatValue: 1, customData: { rotation: 45, step: 0, prop: 0.05, speed: 50, direction: 0 } as BasicEvent['customData'] }));
+  const before = createRingRotationSampler([], bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed))(3.9)[0]!;
+  const after = createRingRotationSampler(three, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed))(60);
+  checks++;
+  if (Math.abs(after[0]! - before - 90) > 0.5 || Math.abs(after[system.rings - 1]! - before - 90) > 0.5) {
+    failures++;
+    console.log('held first ring', before, after[0], after.at(-1));
+  }
+}
+
+// a spring along a slow wave (each turn holding the first ring for many ticks) still lands where it's
+// asked — the events counted from where the game has the first ring — at 50 ticks a second and at 30
+for (const rate of [50, 30]) {
+  setRingTickRate(rate);
+  const system = systems[0]!;
+  const block: RingBlock = {
+    id: 'slow' + String(rate),
+    name: 'slow',
+    system: system.name,
+    mode: 'event',
+    start: 2,
+    end: 20,
+    poses: [newPose(0, { shape: 'same', angle: 0, duration: 0 }), newPose(1, { shape: 'spiral', angle: 120, step: 10, duration: 3, delay: 4, eventEasing: 'easeOutBack' })],
+  };
+  const made = poseRingEvents([block], [], systems, 8, (beat) => beat, 60 / bpm);
+  const all: BasicEvent[] = made.map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, customData: event.customData as BasicEvent['customData'] }));
+  const at = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed))(16);
+  const off = (want: number, got: number) => Math.abs((((got - want) % 360) + 540) % 360 - 180);
+  checks++;
+  if (off(120, at[0]!) > 0.5 || off(120 + 10 * (system.rings - 1), at[system.rings - 1]!) > 0.5 || made.length < 10) {
+    failures++;
+    console.log('slow spring', rate, made.length, at[0], at.at(-1));
+  }
+}
+setRingTickRate(50);
 
 // zoom poses: the rings stand their pose's spacing apart once its time is over
 const zoomSystem: ZoomSystemInfo = {

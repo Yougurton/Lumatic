@@ -1171,4 +1171,8 @@ export const EN: Record<string, string> = {
   "Лазеры качаются": "Lasers sway",
   "⚠ Кольца здесь крутятся до {0}°/с — в шлеме это {1}° за кадр: выглядит как беспорядочное мелькание, не так, как на мониторе.": "⚠ The rings turn at up to {0}°/s here — {1}° a frame in a headset: it looks like a random flicker, not like on the monitor.",
   "⚠ Здесь кольца крутятся до {0}°/с. Кольцо одинаково через каждые 90°, и в шлеме при такой скорости за кадр оно поворачивается на {1}° — это выглядит как беспорядочное мелькание, а на мониторе иначе. Сделайте поворот медленнее или короче (меньше угол, больше время поворота).": "⚠ The rings turn at up to {0}°/s here. A ring looks the same every 90°, and in a headset it turns {1}° a frame at this speed — it looks like a random flicker, and differently on a monitor. Make the turn slower or shorter (a smaller angle, a longer turn time).",
+  "Кольца — как в игре на": "Rings as in a game at",
+  "50+ кадров/с": "50+ fps",
+  "Как в игре, которая держит 50 кадров в секунду и больше (обычно в VR)": "As in a game holding 50 frames a second or more (usually in VR)",
+  "Игра крутит кольца 50 раз в секунду, пока сама успевает рисовать 50 кадров. Если она тормозит (слабый компьютер, запись видео), кольца сдвигаются раз в кадр — и волны, и повороты идут медленнее. Здесь можно посмотреть, как карта выглядит в такой игре; события колец, которые делает редактор, от этого не меняются.": "The game moves the rings 50 times a second as long as it draws 50 frames itself. When it lags (a slow computer, recording a video), the rings move once a frame, so both the waves and the turns go slower. Here you can see how the map looks in such a game; the ring events the editor makes don't change.",
 };

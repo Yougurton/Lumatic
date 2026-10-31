@@ -320,6 +320,14 @@ export class Editor {
     this.setStatus(`Превью песни: с ${start.toFixed(2)} с, ${(end - start).toFixed(2)} с`);
   }
 
+  /** The rings are worked out for another game speed (the settings): the 3D view and the rings' speed
+   *  strip again. */
+  ringTimingChanged() {
+    this.ringSpeedCache = null;
+    this.rebuildPreview(true);
+    this.emit('clips');
+  }
+
   /** The 3D view and the timeline in these colours (null: the difficulty's own; 'environment': the
    *  environment's, no map colours) — tried before they are kept. */
   previewColors(scheme: InfoColorScheme | 'environment' | null) {

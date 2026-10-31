@@ -1,6 +1,7 @@
 import type { SchemeColors } from './bake';
 import { resolveRgb } from './bake';
 import { newId, type ClipColor, type LightClip, type RawEvent, type Rgb } from './model';
+import { ringPropFor } from '../engine/core/lighting/ring-motion';
 
 /**
  * A Group Lighting System block for the classic environments — Beat Saber's v3 "event box groups"
@@ -349,7 +350,7 @@ export function generateGls(data: GlsData, start: number, end: number, context: 
       // the wave: how fast the turn passes from ring to ring (rings per 20 ms)
       const waveBeats = box.beatSpread === 'wave' ? box.beatValue : box.beatValue * rings;
       const waveSeconds = waveBeats * context.secondsPerBeat;
-      const prop = waveSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.05, rings / (waveSeconds / 0.02)));
+      const prop = ringPropFor(rings, waveSeconds, 0.05);
       // the easing: how fast each ring gets there (until the next turn, or 2 beats)
       const nextBeat = events[index + 1]?.beat;
       const span = Math.max(0.25, (nextBeat === undefined ? 2 : nextBeat - event.beat) * context.secondsPerBeat);

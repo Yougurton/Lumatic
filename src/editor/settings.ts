@@ -21,6 +21,9 @@ export interface Settings {
   distortion: boolean;
   /** Notes, bombs and walls in the 3D view too. */
   notes: boolean;
+  /** The frames a second of the game the rings are shown for (50: the game's own 50 ticks; a game
+   *  running slower ticks its rings once a frame, so they go slower). */
+  ringFps: number;
   /** The whole window's scale (the desktop app). */
   uiScale: number;
 
@@ -61,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   platform: true,
   distortion: true,
   notes: false,
+  ringFps: 50,
   uiScale: 1,
   wheel: 'time',
   wheelSpeed: 1,

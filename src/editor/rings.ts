@@ -1,6 +1,6 @@
 import { easingFromName } from '../engine/core/easing';
 import type { LaserMove } from './lasers';
-import { deterministicRingRandom, matchesRingName, type RingPositionConfig, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
+import { deterministicRingRandom, firstRingTicks, GAME_RING_TICK, matchesRingName, ringPropFor, ringSpeedFor, RingTurnModel, type RingPositionConfig, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
 import type { OutEvent } from './bake';
 import { newId } from './model';
 
@@ -291,7 +291,7 @@ export function zoomPositions(system: ZoomSystemInfo, step: number): number[] {
 export function poseZoomEvents(blocks: readonly RingBlock[], systems: readonly ZoomSystemInfo[], eventType: number, secondsPerBeat: number): (OutEvent & { group: string })[] {
   return timedPoses(blocks.filter(isZoom)).map(({ block, pose, beat }) => {
     const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
-    const speed = turnSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.05, (1 - 0.01 ** (0.02 / turnSeconds)) / 0.02));
+    const speed = ringSpeedFor(turnSeconds);
     const customData: Record<string, unknown> = { step: round(pose.step), speed: round(speed), ...(block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {}) };
     return { beat, type: eventType, value: 0, floatValue: 1, customData, group: block.id };
   });
@@ -394,34 +394,55 @@ function timedPoses(blocks: readonly RingBlock[]) {
 
 // ----- 'event': Chroma ring events ----------------------------------------------------------------------
 
+type KnownRingEvent = { songBeat: number; customData?: Record<string, unknown> };
+
 /**
- * Where a ring system's turns have got to just before `beat`: the angle its first ring is headed for,
- * the base Chroma's next ring event adds to — every earlier ring event (in `events`, sorted, beats in
- * song BPM time) counted the way the game's ring motion does (ChroPaper's ring-motion.ts). A pose's
- * event goes before the show's ring events at its very moment (of two at once the first one wins),
- * so those don't count.
+ * Where a ring system's first ring is headed just before a moment (song BPM beats): the base Chroma's
+ * next ring event adds its rotation to. Worked out the way the game turns the rings (RingTurnModel):
+ * every earlier ring event in `events` (sorted) counted — not simply added up, as an event that comes
+ * while an earlier turn still holds the first ring counts from that turn's angle. A pose's event goes
+ * before the show's ring events at its very moment (of two at once the first one wins), so those
+ * don't count. Asked for moments one after another it carries on from where it got to; `inserted`
+ * says an event was put into `events` (at that index).
  */
-export function ringBase(events: readonly { songBeat: number; customData?: Record<string, unknown> }[], system: RingSystemInfo, songBeat: number) {
-  const config = system.rotation;
-  const random = deterministicRingRandom(system.seed);
-  let base = config.startupRotationAngle;
-  let tieIndex = 0;
-  let tieBeat = Number.NaN;
-  for (const event of events) {
-    if (event.songBeat >= songBeat - 1e-9) break;
-    tieIndex = event.songBeat === tieBeat ? tieIndex + 1 : 0;
-    tieBeat = event.songBeat;
-    const custom = event.customData;
-    const get = (key: string) => custom?.[`_${key}`] ?? custom?.[key];
-    const direction = get('direction');
-    const clockwise = custom !== undefined ? direction !== undefined && Number(direction) === 0 : random({ songBpmTime: event.songBeat } as never, tieIndex, 'direction') < 0.5;
-    const ringRotation = get('rotation');
-    const rotation = ringRotation === undefined ? config.rotation : Number(ringRotation);
-    const nameFilter = get('nameFilter');
-    if (nameFilter !== undefined && !matchesRingName(config.name, String(nameFilter))) continue;
-    base += clockwise ? rotation : -rotation;
+export class RingBaseTracker {
+  private model!: RingTurnModel;
+  private next = 0;
+  private last = -Infinity;
+
+  constructor(
+    private readonly events: readonly KnownRingEvent[],
+    private readonly system: RingSystemInfo,
+    private readonly secondsPerBeat: number,
+  ) {
+    this.reset();
   }
-  return base;
+
+  private reset() {
+    this.model = new RingTurnModel(this.system.rotation, 60 / this.secondsPerBeat, deterministicRingRandom(this.system.seed), GAME_RING_TICK);
+    this.next = 0;
+    this.last = -Infinity;
+  }
+
+  inserted(index: number) {
+    if (index < this.next) this.reset();
+  }
+
+  at(songBeat: number) {
+    if (songBeat < this.last) this.reset();
+    this.last = songBeat;
+    while (this.next < this.events.length && this.events[this.next]!.songBeat < songBeat - 1e-9) {
+      const event = this.events[this.next]!;
+      this.model.add({ jsonTime: event.songBeat, songBpmTime: event.songBeat, type: 8, value: 0, floatValue: 1, ...(event.customData === undefined ? {} : { customData: event.customData as never }) });
+      this.next++;
+    }
+    return this.model.firstAt(songBeat * this.secondsPerBeat);
+  }
+}
+
+/** Where a ring system's first ring is headed just before `songBeat` (see RingBaseTracker). */
+export function ringBase(events: readonly KnownRingEvent[], system: RingSystemInfo, songBeat: number, secondsPerBeat = 0.5) {
+  return new RingBaseTracker(events, system, secondsPerBeat).at(songBeat);
 }
 
 /** The step from ring to ring the last ring event before `songBeat` set for a system (its custom step,
@@ -441,6 +462,9 @@ export function ringStepBase(events: readonly { songBeat: number; customData?: R
   return step;
 }
 
+/** The fewest frames a second a game is counted on running at (see poseRingEvents' eased turns). */
+const SLOWEST_GAME_FPS = 30;
+
 /**
  * The ring events of 'event' blocks. `others`: the show's other events of the rings' event type
  * (sorted); `toSong`: map beats → song BPM beats; `secondsPerBeat` of the song.
@@ -448,20 +472,27 @@ export function ringStepBase(events: readonly { songBeat: number; customData?: R
 export function poseRingEvents(blocks: readonly RingBlock[], others: readonly OutEvent[], systems: readonly RingSystemInfo[], eventType: number, toSong: (beat: number) => number, secondsPerBeat: number): (OutEvent & { group: string })[] {
   const out: (OutEvent & { group: string })[] = [];
   const known = others.map((event) => ({ songBeat: toSong(event.beat), customData: event.customData }));
+  const trackers = new Map<RingSystemInfo, RingBaseTracker>();
+  const tracker = (system: RingSystemInfo) => {
+    let found = trackers.get(system);
+    if (found === undefined) trackers.set(system, (found = new RingBaseTracker(known, system, secondsPerBeat)));
+    return found;
+  };
   for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'event'))) {
     const system = systems.find((item) => item.name === block.system) ?? systems[0];
     if (system === undefined) continue;
     const songBeat = toSong(beat);
-    const base = ringBase(known, system, songBeat);
+    const firstAt = tracker(system);
+    const base = firstAt.at(songBeat);
     const rotation = pose.relative === true ? relativeTurn(pose) : turn(base, pose.angle, pose.way, pose.loops);
     const step = pose.shape !== 'spiral' ? 0 : pose.relativeStep === true ? ringStepBase(known, system, songBeat) + pose.step : pose.step;
     const count = system.rings;
-    // the wave: rings per 0.02 s tick (the game's fixed step); the turn's time: how fast each ring
-    // closes in on its angle (99 % of the way by the end)
+    // the wave: rings per tick of the game's ring motion; the turn's time: how fast each ring closes
+    // in on its angle (99 % of the way by the end)
     const waveSeconds = Math.max(0, pose.delay) * secondsPerBeat;
-    const prop = waveSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.01, count / (waveSeconds / 0.02)));
+    const prop = ringPropFor(count, waveSeconds);
     const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
-    const speed = turnSeconds <= 0.02 ? 50 : Math.min(50, Math.max(0.05, (1 - 0.01 ** (0.02 / turnSeconds)) / 0.02));
+    const speed = ringSpeedFor(turnSeconds);
     const filter = block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {};
     const add = (at: number, turned: number, spiral: number, closing: number) => {
       const customData: Record<string, unknown> = {
@@ -475,26 +506,32 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
       out.push({ beat: at, type: eventType, value: 0, floatValue: 1, customData, group: block.id });
       // (later poses count this one — before the show's events at its moment, as it's played)
       const songAt = toSong(at);
-      const index = known.findIndex((item) => item.songBeat >= songAt - 1e-9);
-      known.splice(index < 0 ? known.length : index, 0, { songBeat: songAt, customData });
+      let index = known.findIndex((item) => item.songBeat >= songAt - 1e-9);
+      if (index < 0) index = known.length;
+      known.splice(index, 0, { songBeat: songAt, customData });
+      for (const each of trackers.values()) each.inserted(index);
     };
     const easing = pose.eventEasing;
-    if (easing === undefined || easing === '' || turnSeconds <= 0.04) {
+    // the turn along an easing: ring events one after another, each taking the first ring to where the
+    // easing has got (back, for an overshoot or a bounce), the spiral going along too. Never closer
+    // together than the wave takes to pass the first ring (the game counts a turn from where the first
+    // ring is headed, and a turn holds it until its wave has moved on), nor than two frames of a game
+    // running at 30 a second — so they add up the same however fast the game runs
+    const gap = Math.max(0.04, (firstRingTicks(prop) + 1) / SLOWEST_GAME_FPS, 2 / SLOWEST_GAME_FPS);
+    if (easing === undefined || easing === '' || turnSeconds < 2 * gap) {
       add(beat, rotation, step, speed);
       continue;
     }
-    // the turn along an easing: a ring event every ~1/25 s, each turning on to where the easing has
-    // got (back, for an overshoot or a bounce), the spiral going along too; the rings close in on each
-    // nearly at once
     const ease = easingFromName(easing);
-    const pieces = Math.max(2, Math.min(96, Math.round(turnSeconds / 0.04)));
+    const pieces = Math.max(2, Math.min(96, Math.floor(turnSeconds / gap)));
+    // (the rings close in on each in about the time to the next)
+    const closing = ringSpeedFor(turnSeconds / pieces);
     const fromStep = ringStepBase(known, system, songBeat);
-    let done = 0;
     for (let k = 1; k <= pieces; k++) {
       const reached = ease(k / pieces);
-      const at = beat + (pose.duration * (k - 1)) / pieces;
-      add(Math.round(at * 100000) / 100000, rotation * (reached - done), fromStep + (step - fromStep) * reached, k === pieces ? 50 : 35);
-      done = reached;
+      const at = Math.round((beat + (pose.duration * (k - 1)) / pieces) * 100000) / 100000;
+      const now = k === 1 ? base : firstAt.at(toSong(at));
+      add(at, round(base + rotation * reached - now), fromStep + (step - fromStep) * reached, k === pieces ? 50 : closing);
     }
   }
   return out;
