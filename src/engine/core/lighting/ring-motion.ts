@@ -5,20 +5,18 @@ import {
   beatSaberStringSchema as stringSchema,
 } from '../beatmap/value-schema';
 
-/** Unity's fixed step: what a ring closes in on its angle by each tick (`speed` × this). */
-const FIXED_DELTA = 0.02;
-
 /**
- * How often the rings tick (seconds). The game's ring motion runs on Unity's fixed step, 50 times a
- * second — as long as the game itself keeps up: a game drawing fewer frames (a slow computer, a
- * recording) ticks the rings once a frame, still by 0.02 s each, so the waves and the turns go slower
- * by as much (measured: ~30 ticks a second in a game running at ~30 frames).
+ * How often the game's ring motion ticks (seconds) — its fixed step: each tick a turn's wave moves
+ * `prop` rings on and a ring closes in on its angle by `speed` × the step. Not Unity's usual 0.02 s:
+ * measured in the game (a game drawing 120 frames a second), a wave of prop 0.05 passed a ring every
+ * 0.653 s — 20 ticks — so a tick of ~1/30.6 s. The settings can change it.
  */
-let tickSeconds = FIXED_DELTA;
+export const MEASURED_RING_TICKS = 30.6;
+let tickSeconds = 1 / MEASURED_RING_TICKS;
 
-/** The game's frames a second the rings are worked out for (50 and more: the game's own 50 ticks). */
+/** The ticks a second of the game's ring motion. */
 export function setRingTickRate(perSecond: number) {
-  tickSeconds = 1 / Math.min(50, Math.max(10, perSecond));
+  tickSeconds = 1 / Math.min(120, Math.max(10, perSecond));
 }
 
 export const ringTickSeconds = () => tickSeconds;
@@ -106,7 +104,7 @@ function addPropagation(
 }
 
 function approachTarget(value: number, target: number, speed: number, ticks: number) {
-  return target + (value - target) * (1 - Math.min(Math.max(FIXED_DELTA * speed, 0), 1)) ** ticks;
+  return target + (value - target) * (1 - Math.min(Math.max(tickSeconds * speed, 0), 1)) ** ticks;
 }
 
 function compileChanges(initial: number, changes: TargetChange[]) {
@@ -359,19 +357,14 @@ export function deterministicRingRandom(seed: number): RingRandom {
   };
 }
 
-/** The game's own tick (seconds): what ring events are worked out for. */
-export const GAME_RING_TICK = FIXED_DELTA;
-
-/** The `speed` (Chroma's flexy speed) that brings a ring 99 % of the way to its angle in `seconds`, in
- *  the game's 50 ticks a second. */
+/** The `speed` (Chroma's flexy speed) that brings a ring 99 % of the way to its angle in `seconds`. */
 export function ringSpeedFor(seconds: number) {
-  if (seconds <= FIXED_DELTA) return 50;
-  return Math.min(50, Math.max(0.05, (1 - 0.01 ** (FIXED_DELTA / seconds)) / FIXED_DELTA));
+  if (seconds <= tickSeconds) return 50;
+  return Math.min(50, Math.max(0.05, (1 - 0.01 ** (tickSeconds / seconds)) / tickSeconds));
 }
 
-/** The `prop` (rings a tick) that takes a turn along `rings` rings in `seconds`, in the game's 50 ticks
- *  a second. */
+/** The `prop` (rings a tick) that takes a turn along `rings` rings in `seconds`. */
 export function ringPropFor(rings: number, seconds: number, least = 0.01) {
-  if (seconds <= FIXED_DELTA) return 50;
-  return Math.min(50, Math.max(least, rings / (seconds / FIXED_DELTA)));
+  if (seconds <= tickSeconds) return 50;
+  return Math.min(50, Math.max(least, rings / (seconds / tickSeconds)));
 }

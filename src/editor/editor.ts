@@ -320,8 +320,8 @@ export class Editor {
     this.setStatus(`Превью песни: с ${start.toFixed(2)} с, ${(end - start).toFixed(2)} с`);
   }
 
-  /** The rings are worked out for another game speed (the settings): the 3D view and the rings' speed
-   *  strip again. */
+  /** The rings are worked out for another tick of the game's (the settings): the 3D view, the ring
+   *  events made from poses and the rings' speed strip again. */
   ringTimingChanged() {
     this.ringSpeedCache = null;
     this.rebuildPreview(true);

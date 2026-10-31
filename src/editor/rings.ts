@@ -1,6 +1,6 @@
 import { easingFromName } from '../engine/core/easing';
 import type { LaserMove } from './lasers';
-import { deterministicRingRandom, firstRingTicks, GAME_RING_TICK, matchesRingName, ringPropFor, ringSpeedFor, RingTurnModel, type RingPositionConfig, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
+import { deterministicRingRandom, firstRingTicks, matchesRingName, ringPropFor, ringSpeedFor, ringTickSeconds, RingTurnModel, type RingPositionConfig, type RingRotationConfig } from '../engine/core/lighting/ring-motion';
 import type { OutEvent } from './bake';
 import { newId } from './model';
 
@@ -419,7 +419,7 @@ export class RingBaseTracker {
   }
 
   private reset() {
-    this.model = new RingTurnModel(this.system.rotation, 60 / this.secondsPerBeat, deterministicRingRandom(this.system.seed), GAME_RING_TICK);
+    this.model = new RingTurnModel(this.system.rotation, 60 / this.secondsPerBeat, deterministicRingRandom(this.system.seed));
     this.next = 0;
     this.last = -Infinity;
   }
@@ -462,9 +462,6 @@ export function ringStepBase(events: readonly { songBeat: number; customData?: R
   return step;
 }
 
-/** The fewest frames a second a game is counted on running at (see poseRingEvents' eased turns). */
-const SLOWEST_GAME_FPS = 30;
-
 /**
  * The ring events of 'event' blocks. `others`: the show's other events of the rings' event type
  * (sorted); `toSong`: map beats → song BPM beats; `secondsPerBeat` of the song.
@@ -489,6 +486,7 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     const count = system.rings;
     // the wave: rings per tick of the game's ring motion; the turn's time: how fast each ring closes
     // in on its angle (99 % of the way by the end)
+    const tick = ringTickSeconds();
     const waveSeconds = Math.max(0, pose.delay) * secondsPerBeat;
     const prop = ringPropFor(count, waveSeconds);
     const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
@@ -515,9 +513,9 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     // the turn along an easing: ring events one after another, each taking the first ring to where the
     // easing has got (back, for an overshoot or a bounce), the spiral going along too. Never closer
     // together than the wave takes to pass the first ring (the game counts a turn from where the first
-    // ring is headed, and a turn holds it until its wave has moved on), nor than two frames of a game
-    // running at 30 a second — so they add up the same however fast the game runs
-    const gap = Math.max(0.04, (firstRingTicks(prop) + 1) / SLOWEST_GAME_FPS, 2 / SLOWEST_GAME_FPS);
+    // ring is headed, and a turn holds it until its wave has moved on), nor than two ticks — with room
+    // to spare, so they add up the same even if the game's ticks are a little slower
+    const gap = 1.15 * Math.max(0.04, (firstRingTicks(prop) + 1) * tick, 2 * tick);
     if (easing === undefined || easing === '' || turnSeconds < 2 * gap) {
       add(beat, rotation, step, speed);
       continue;

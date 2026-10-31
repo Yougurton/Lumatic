@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
-import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, setRingTickRate, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
+import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, MEASURED_RING_TICKS, ringTickSeconds, setRingTickRate, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
 import { dataFirstRing, firstRingFromLog, newPose, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
@@ -270,7 +270,7 @@ if (points.length !== 5 || points.at(-1)![2] !== 360) {
 // counts from that turn's angle — three 45° turns two ticks apart (prop 0.05) end at 90°, not 135°
 {
   const system = systems[0]!;
-  const tickBeats = (0.02 * bpm) / 60;
+  const tickBeats = (ringTickSeconds() * bpm) / 60;
   const three: BasicEvent[] = [0, 2, 4].map((k) => ({ jsonTime: 4 + k * tickBeats, songBpmTime: 4 + k * tickBeats, type: 8, value: 0, floatValue: 1, customData: { rotation: 45, step: 0, prop: 0.05, speed: 50, direction: 0 } as BasicEvent['customData'] }));
   const before = createRingRotationSampler([], bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed))(3.9)[0]!;
   const after = createRingRotationSampler(three, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed))(60);
@@ -282,8 +282,8 @@ if (points.length !== 5 || points.at(-1)![2] !== 360) {
 }
 
 // a spring along a slow wave (each turn holding the first ring for many ticks) still lands where it's
-// asked — the events counted from where the game has the first ring — at 50 ticks a second and at 30
-for (const rate of [50, 30]) {
+// asked — the events counted from where the game has the first ring — at the game's ticks and at Unity's usual 50
+for (const rate of [MEASURED_RING_TICKS, 50]) {
   setRingTickRate(rate);
   const system = systems[0]!;
   const block: RingBlock = {
@@ -305,7 +305,7 @@ for (const rate of [50, 30]) {
     console.log('slow spring', rate, made.length, at[0], at.at(-1));
   }
 }
-setRingTickRate(50);
+setRingTickRate(MEASURED_RING_TICKS);
 
 // zoom poses: the rings stand their pose's spacing apart once its time is over
 const zoomSystem: ZoomSystemInfo = {

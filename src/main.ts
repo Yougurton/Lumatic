@@ -21,8 +21,8 @@ import { onSettings, settings } from './editor/settings';
 import { settingsDialog } from './editor/settings-dialog';
 import { setRingTickRate } from './engine/core/lighting/ring-motion';
 
-// (the rings as fast as the game the settings say)
-setRingTickRate(settings().ringFps);
+// (the rings ticking as often as the settings say the game's do)
+setRingTickRate(settings().ringTicks);
 
 // (in English: everything shown from here on goes through the dictionary)
 installTranslation();
@@ -203,8 +203,8 @@ onSettings((now, before) => {
   if (now.volume !== before.volume) editor.clock?.setVolume(now.volume);
   if (now.uiScale !== before.uiScale) applyScale();
   if (now.notes !== before.notes) editor.rebuildPreview(true);
-  if (now.ringFps !== before.ringFps) {
-    setRingTickRate(now.ringFps);
+  if (now.ringTicks !== before.ringTicks) {
+    setRingTickRate(now.ringTicks);
     editor.ringTimingChanged();
   }
   if (now.paste !== before.paste || now.follow !== before.follow) timeline.redraw();

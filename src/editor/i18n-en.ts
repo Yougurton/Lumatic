@@ -1175,4 +1175,10 @@ export const EN: Record<string, string> = {
   "50+ кадров/с": "50+ fps",
   "Как в игре, которая держит 50 кадров в секунду и больше (обычно в VR)": "As in a game holding 50 frames a second or more (usually in VR)",
   "Игра крутит кольца 50 раз в секунду, пока сама успевает рисовать 50 кадров. Если она тормозит (слабый компьютер, запись видео), кольца сдвигаются раз в кадр — и волны, и повороты идут медленнее. Здесь можно посмотреть, как карта выглядит в такой игре; события колец, которые делает редактор, от этого не меняются.": "The game moves the rings 50 times a second as long as it draws 50 frames itself. When it lags (a slow computer, recording a video), the rings move once a frame, so both the waves and the turns go slower. Here you can see how the map looks in such a game; the ring events the editor makes don't change.",
+  "Тиков колец в секунду": "Ring ticks a second",
+  "30.6 — как в игре": "30.6 — as in the game",
+  "Измерено в игре: волна с prop 0.05 проходит кольцо за 0,653 с": "Measured in the game: a wave with prop 0.05 passes a ring every 0.653 s",
+  "50 — шаг Unity": "50 — Unity's step",
+  "Обычный шаг физики Unity (0,02 с)": "Unity's usual physics step (0.02 s)",
+  "Как часто игра двигает кольца: каждый тик волна событий колец проходит prop колец, а кольцо подходит к своему углу. По этому считаются и кольца в окне просмотра, и события колец, которые делает редактор (позы, пружина, ступени).": "How often the game moves the rings: each tick a ring event's wave passes prop rings and a ring closes in on its angle. Both the rings in the preview and the ring events the editor makes (poses, spring, steps) are worked out for it.",
 };
