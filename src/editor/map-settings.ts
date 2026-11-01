@@ -6,6 +6,8 @@ import type { Editor } from './editor';
 import { difficultyFile, loadProject, projectFileName, transformDifficultyBeats, transformProjectBeats } from './map-io';
 import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
 import { previewPicker, type PreviewPicker } from './song-picker';
+import { DEFAULT_NJS, DIFFICULTY_NAMES, jumpEditor } from './jump';
+import { addDifficulty, setDifficultyInfo, takenDifficulties } from './difficulties';
 
 /**
  * "Map settings": the song's name and authors, the environment, its tempo, its start — silence put
@@ -158,6 +160,20 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
         <label>Автор карты<input type="text" data-id="mapper"></label>
         <label class="nm-wide">Окружение<select data-id="env"></select></label>
         <div class="nm-wide nm-dim" data-id="env-info"></div>
+        <div class="nm-wide nm-section">Сложность</div>
+        <label>Какую настроить<select data-id="diff"></select></label>
+        <label>Подпись в игре<input type="text" data-id="diff-label" placeholder="без подписи"></label>
+        <div class="nm-wide" data-id="jump"></div>
+        <div class="nm-wide nm-newdiff">
+          <button type="button" data-id="new-diff">＋ Новая сложность…</button>
+          <div data-id="new-form" class="nm-row" hidden>
+            <select data-id="nd-name" title="Сложность"></select>
+            <select data-id="nd-char" title="Режим"><option value="Standard">Стандарт</option><option value="OneSaber">Одна сабля</option></select>
+            <select data-id="nd-from" title="С чего начать"><option value="empty">пустая</option><option value="notes">с нотами этой</option><option value="all">с нотами и светом этой</option></select>
+            <input type="text" data-id="nd-label" placeholder="подпись" title="Подпись в игре">
+          </div>
+          <div class="nm-dim" data-id="nd-info"></div>
+        </div>
         <label>BPM
           <span class="nm-row"><input type="number" data-id="bpm" min="10" max="1000" step="any"><button type="button" data-id="detect">Определить</button></span>
         </label>
@@ -223,6 +239,59 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     };
     env.addEventListener('change', envInfo);
     envInfo();
+    // the difficulties: their label, NJS and offset (with the reaction time and BSMG's ranges) — and a
+    // new one made
+    const rows = editor.difficulties();
+    const diffSelect = el<HTMLSelectElement>('diff');
+    const charName = (name: string) => (name === 'Standard' ? 'Стандарт' : name === 'OneSaber' ? 'Одна сабля' : name);
+    for (const row of rows) diffSelect.append(Object.assign(document.createElement('option'), { value: row.key, textContent: `${row.label} · ${charName(row.infoDifficulty?.characteristic ?? '')}` }));
+    diffSelect.value = editor.row?.key ?? rows[0]?.key ?? '';
+    const edits = new Map<string, { njs: number; offset: number; label: string }>();
+    const valuesOf = (key: string) => {
+      const row = rows.find((item) => item.key === key);
+      const info = row?.infoDifficulty;
+      return edits.get(key) ?? { njs: info !== undefined && info.noteJumpSpeed > 0 ? info.noteJumpSpeed : (DEFAULT_NJS[info?.difficulty ?? ''] ?? 16), offset: info?.noteStartBeatOffset ?? 0, label: info?.customLabel ?? '' };
+    };
+    const npsOf = (key: string) => {
+      if (key !== editor.row?.key) return undefined;
+      const beats = editor.objects.notes.map((note) => note.b);
+      const span = beats.length > 1 ? editor.beatToSeconds(Math.max(...beats)) - editor.beatToSeconds(Math.min(...beats)) : 0;
+      return span > 0 ? editor.objects.notes.length / span : undefined;
+    };
+    let shownKey = diffSelect.value;
+    const firstValues = valuesOf(shownKey);
+    const jump = jumpEditor({ bpm: fields.bpm, difficulty: rows.find((row) => row.key === shownKey)?.infoDifficulty?.difficulty ?? '', njs: firstValues.njs, offset: firstValues.offset, nps: npsOf(shownKey) });
+    el('jump').append(jump.element);
+    el<HTMLInputElement>('diff-label').value = firstValues.label;
+    const keepShown = () => edits.set(shownKey, { ...jump.value(), label: el<HTMLInputElement>('diff-label').value.trim() });
+    diffSelect.addEventListener('change', () => {
+      keepShown();
+      shownKey = diffSelect.value;
+      const values = valuesOf(shownKey);
+      el<HTMLInputElement>('diff-label').value = values.label;
+      jump.set({ difficulty: rows.find((row) => row.key === shownKey)?.infoDifficulty?.difficulty ?? '', njs: values.njs, offset: values.offset, nps: npsOf(shownKey) });
+    });
+    el('bpm').addEventListener('change', () => jump.set({ bpm: Number(el<HTMLInputElement>('bpm').value) || fields.bpm }));
+    const ndName = el<HTMLSelectElement>('nd-name');
+    const ndChar = el<HTMLSelectElement>('nd-char');
+    const fillNames = () => {
+      const taken = takenDifficulties(infoText, ndChar.value);
+      const was = ndName.value;
+      ndName.replaceChildren(...DIFFICULTY_NAMES.map(([id, label]) => Object.assign(document.createElement('option'), { value: id, textContent: taken.includes(id) ? `${label} (уже есть)` : label, disabled: taken.includes(id) })));
+      const free = DIFFICULTY_NAMES.map(([id]) => id).filter((id) => !taken.includes(id));
+      ndName.value = free.includes(was) ? was : (free.at(-1) ?? '');
+      el('nd-info').textContent = free.length === 0 ? 'В этом режиме все сложности уже есть.' : `Новая сложность получит NJS ${String(DEFAULT_NJS[ndName.value] ?? 16)} — поменяете здесь же после создания. Создаётся при «Применить».`;
+    };
+    ndChar.addEventListener('change', fillNames);
+    ndName.addEventListener('change', fillNames);
+    el('new-diff').addEventListener('click', () => {
+      const form = el('new-form');
+      form.hidden = !form.hidden;
+      el('new-diff').textContent = form.hidden ? '＋ Новая сложность…' : '✕ Не создавать';
+      if (!form.hidden) fillNames();
+      else el('nd-info').textContent = '';
+    });
+
     // the preview picked on the song's spectrogram (as soon as the song is read)
     let picker: PreviewPicker | null = null;
     const previewInput = el<HTMLInputElement>('preview');
@@ -459,14 +528,28 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
             await map.folder.writeBinary(fields.song, ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
             next.preview = Math.max(0, next.preview + shift);
           }
-          await map.folder.writeText(infoName, writeInfo(await map.folder.readText(infoName), next, place));
+          let info = writeInfo(await map.folder.readText(infoName), next, place);
+          // the difficulties' label, NJS and offset as changed here
+          keepShown();
+          for (const [key, values] of edits) {
+            const row = rows.find((item) => item.key === key);
+            if (row === undefined) continue;
+            info = setDifficultyInfo(info, difficultyFile(row), values);
+          }
+          await map.folder.writeText(infoName, info);
+          // a new difficulty
+          let made: string | null = null;
+          if (!el('new-form').hidden && ndName.value !== '') {
+            status.textContent = 'Создаю сложность…';
+            made = await addDifficulty(editor, { difficulty: ndName.value, characteristic: ndChar.value, label: el<HTMLInputElement>('nd-label').value.trim(), njs: DEFAULT_NJS[ndName.value] ?? 16, offset: 0, from: el<HTMLSelectElement>('nd-from').value as 'empty' | 'notes' | 'all' });
+          }
           await map.folder.refresh();
           const key = editor.row?.key;
           status.textContent = 'Открываю карту заново…';
           await editor.open(map.folder);
-          const row = editor.difficulties().find((item) => item.key === key);
+          const row = made !== null ? editor.difficulties().find((item) => difficultyFile(item) === made) : editor.difficulties().find((item) => item.key === key);
           if (row !== undefined && row !== editor.row) await editor.openDifficulty(row);
-          editor.setStatus(`Свойства карты изменены${dropped > 0 ? ` (отрезано событий до начала песни: ${String(dropped)})` : ''}`);
+          editor.setStatus(made !== null ? `Сложность создана: ${made}` : `Свойства карты изменены${dropped > 0 ? ` (отрезано событий до начала песни: ${String(dropped)})` : ''}`);
           finish();
         } catch (error) {
           console.error(error);

@@ -1,3 +1,4 @@
+import { DEFAULT_NJS, jumpEditor } from './jump';
 import { environmentCatalog, isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
 import { choiceLabel, environmentGallery, type EnvironmentChoice } from './environment-gallery';
 import { readTags } from './song-tags';
@@ -46,6 +47,9 @@ export interface NewMapSettings {
   environment: string;
   difficulty: string;
   label: string;
+  /** The difficulty's note jump speed and start offset. */
+  njs?: number;
+  offset?: number;
   previewStart: number;
   previewDuration: number;
 }
@@ -79,8 +83,8 @@ export function infoText(settings: NewMapSettings, difficultyFile: string, songF
               _difficulty: settings.difficulty,
               _difficultyRank: rank,
               _beatmapFilename: difficultyFile,
-              _noteJumpMovementSpeed: 16,
-              _noteJumpStartBeatOffset: 0,
+              _noteJumpMovementSpeed: settings.njs ?? 16,
+              _noteJumpStartBeatOffset: settings.offset ?? 0,
               _customData: { _difficultyLabel: settings.label, _suggestions: ['Chroma'] },
             },
           ],
@@ -245,6 +249,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
             <div class="nm-grid">
               <label>Сложность<select data-id="diff"></select></label>
               <label>Подпись<input type="text" data-id="label" value="Lightshow"></label>
+              <div class="nm-wide" data-id="jump"></div>
             </div>
             <div class="nm-section">Превью в списке песен</div>
             <div data-id="picker"><div class="nm-dim">Появится, когда выберете песню.</div></div>
@@ -310,6 +315,10 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     showPlate();
     const diff = el<HTMLSelectElement>('diff');
     for (const [name] of DIFFICULTIES) diff.append(Object.assign(document.createElement('option'), { value: name, textContent: name === 'ExpertPlus' ? 'Expert+' : name }));
+    // its NJS, offset and reaction time (a new difficulty: its usual NJS)
+    const jump = jumpEditor({ bpm: 120, difficulty: diff.value, njs: DEFAULT_NJS[diff.value] ?? 16, offset: 0 });
+    el('jump').append(jump.element);
+    diff.addEventListener('change', () => jump.set({ difficulty: diff.value, njs: DEFAULT_NJS[diff.value] ?? 16 }));
     el<HTMLInputElement>('mapper').value = defaultMapper;
 
     let audio: AudioBuffer | null = null;
@@ -333,6 +342,9 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     let busy = false;
     const status = el('status');
     const bpmInput = el<HTMLInputElement>('bpm');
+    bpmInput.addEventListener('input', () => {
+      if (Number(bpmInput.value) > 0) jump.set({ bpm: Number(bpmInput.value) });
+    });
     const silenceInput = el<HTMLInputElement>('silence');
     const align = el<HTMLSelectElement>('align');
     const unit = el<HTMLSelectElement>('unit');
@@ -380,6 +392,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
       refresh();
     };
     const refresh = () => {
+      if (Number(bpmInput.value) > 0) jump.set({ bpm: Number(bpmInput.value) });
       const s = silence();
       const strong = align.value === 'bar' && downbeat !== null && downbeat.key === downbeatKey();
       const lands = strong ? Math.round(((downbeat!.time + s) * Number(bpmInput.value)) / 60) : 0;
@@ -531,6 +544,8 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
         environment: choice.environment,
         difficulty: diff.value,
         label: el<HTMLInputElement>('label').value.trim(),
+        njs: jump.value().njs,
+        offset: jump.value().offset,
         previewStart: picker?.value().start ?? silence() + audio.duration * 0.35,
         previewDuration: picker?.value().duration ?? 10,
       };

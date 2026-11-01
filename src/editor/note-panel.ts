@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
-import { DIR_ANGLE, type MapNote } from './notes';
+import { ROW_WALL, WALL_SHAPES, type MapNote } from './notes';
+import { drawGameNote } from './note-draw';
 import { newId } from './model';
 import { setSettings, settings } from './settings';
 
@@ -110,41 +111,22 @@ export class NotePanel {
     this.tools.dataset.key = key;
     const colors = editor.preview.colors;
     const css = (rgb: readonly number[]) => `rgb(${rgb.slice(0, 3).map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})`;
-    // the hands' notes: big, in their colours, the left one on the left
-    const hands = document.createElement('div');
-    hands.className = 'np-hands';
-    const textOn = (rgb: readonly number[]) => (0.299 * (rgb[0] ?? 0) + 0.587 * (rgb[1] ?? 0) + 0.114 * (rgb[2] ?? 0) > 0.6 ? '#101114' : '#ffffff');
-    for (const item of [
-      { kind: 'red' as const, side: 'Левая', color: colors.leftNote, key: '1', arrow: '◀' },
-      { kind: 'blue' as const, side: 'Правая', color: colors.rightNote, key: '2', arrow: '▶' },
-    ]) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'np-hand';
-      button.classList.toggle('active', tool.kind === item.kind);
-      button.style.background = css(item.color);
-      button.style.color = textOn(item.color);
-      button.title = `${item.side} рука — нота ${item.kind === 'red' ? 'красная' : 'синяя'} (${item.key})`;
-      const label = item.kind === 'red' ? `${item.arrow} ${item.side}` : `${item.side} ${item.arrow}`;
-      button.innerHTML = `<b>${label}</b><small>${item.kind === 'red' ? 'красная' : 'синяя'} · ${item.key}</small>`;
-      button.addEventListener('click', () => {
-        editor.noteTool = { ...editor.noteTool, kind: item.kind };
-        editor.emit('selection');
-      });
-      hands.append(button);
-    }
+    // the four tools in a row, square, as the game's things: the left hand's note, the right hand's, a
+    // bomb, a wall
     const row = document.createElement('div');
-    row.className = 'np-kinds';
+    row.className = 'np-tools4';
     for (const item of [
-      { kind: 'bomb' as const, label: 'Бомба', key: '3', swatch: '#3a3d46' },
-      { kind: 'wall' as const, label: 'Стена', key: '4', swatch: css(colors.obstacle) },
+      { kind: 'red' as const, label: '◀ Левая', title: 'Левая рука — красная нота (1)', key: '1', color: colors.leftNote },
+      { kind: 'blue' as const, label: 'Правая ▶', title: 'Правая рука — синяя нота (2)', key: '2', color: colors.rightNote },
+      { kind: 'bomb' as const, label: 'Бомба', title: 'Бомба (3)', key: '3', color: [0.2, 0.21, 0.24] },
+      { kind: 'wall' as const, label: 'Стена', title: 'Стена (4)', key: '4', color: colors.obstacle },
     ]) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'np-kind';
+      button.className = 'np-tool';
       button.classList.toggle('active', tool.kind === item.kind);
-      button.title = `${item.label} (${item.key})`;
-      button.innerHTML = `<i style="background:${item.swatch}"></i><span>${item.label}</span><kbd>${item.key}</kbd>`;
+      button.title = item.title;
+      button.append(toolIcon(item.kind, item.color, css), Object.assign(document.createElement('span'), { textContent: item.label }), Object.assign(document.createElement('kbd'), { textContent: item.key }));
       button.addEventListener('click', () => {
         editor.noteTool = { ...editor.noteTool, kind: item.kind };
         editor.emit('selection');
@@ -167,9 +149,8 @@ export class NotePanel {
     side.className = 'np-side';
     if (tool.kind === 'wall') {
       for (const [kind, label, title] of [
-        ['full', 'Полная', 'Стена во весь рост: от неё уходят в сторону (на 3D-стене — нижний ряд)'],
-        ['deep', 'Глубокий присед', 'Стена от среднего ряда вверх (на 3D-стене — средний ряд)'],
-        ['crouch', 'Присед', 'Обычная стена-присед из игры (на 3D-стене — верхний ряд)'],
+        ['full', 'Полная', 'Стена во весь рост: от неё уходят в сторону (на 3D-стене — нижний и средний ряды)'],
+        ['crouch', 'Присед', 'Стена-присед из игры (на 3D-стене — верхний ряд)'],
       ] as const) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -182,11 +163,11 @@ export class NotePanel {
         });
         side.append(button);
       }
-      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На 3D-стене: ряд — вид стены, протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
+      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На 3D-стене и в сетке: верхний ряд — присед, ниже — полная; протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
     } else {
       side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'W/A/S/D, F — точка; две сразу — диагональ. У выделенных нот меняется тоже.' }));
     }
-    this.tools.replaceChildren(hands, row, Object.assign(document.createElement('div'), { className: 'np-row' }));
+    this.tools.replaceChildren(row, Object.assign(document.createElement('div'), { className: 'np-row' }));
     this.tools.lastElementChild!.append(pad, side);
   }
 
@@ -296,9 +277,20 @@ export class NotePanel {
         else this.note(ctx, item as MapNote, cx, cy, cell * 0.72, this.rgb(noteColor((item as MapNote).c), 1), picked);
       }
     }
-    // the arrow being dragged out
+    // the arrow being dragged out (a wall: the wall, as wide as the drag)
     const press = this.press;
     const hover = this.hoverPoint;
+    if (press !== null && press.button === 0 && this.editor.noteTool.kind === 'wall') {
+      const to = hover === null ? press.col : (this.cellAt(hover.x, hover.y)?.col ?? press.col);
+      const crouch = (ROW_WALL[press.row] ?? 'full') === 'crouch';
+      const x0 = left + Math.min(press.col, to) * cell;
+      const wide = (Math.abs(to - press.col) + 1) * cell;
+      ctx.fillStyle = this.rgb(colors.obstacle, 0.45);
+      ctx.fillRect(x0 + 2, top + 2, wide - 4, (crouch ? cell : cell * 3) - 4);
+      ctx.strokeStyle = this.rgb(colors.obstacle, 1);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x0 + 2, top + 2, wide - 4, (crouch ? cell : cell * 3) - 4);
+    }
     if (press !== null && press.button === 0 && hover !== null && this.editor.noteTool.kind !== 'bomb' && this.editor.noteTool.kind !== 'wall') {
       const [cx, cy] = center(press.col, press.row);
       const dir = this.dragDirection(hover.x - press.x, hover.y - press.y);
@@ -311,34 +303,7 @@ export class NotePanel {
   private hoverPoint: { x: number; y: number } | null = null;
 
   private note(ctx: CanvasRenderingContext2D, note: MapNote, x: number, y: number, size: number, color: string, picked: boolean) {
-    const half = size / 2;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.roundRect(x - half, y - half, size, size, size * 0.16);
-    ctx.fill();
-    ctx.strokeStyle = picked ? '#ffe27a' : 'rgba(0,0,0,0.5)';
-    ctx.lineWidth = picked ? 3 : 1;
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    if (note.d === 8) {
-      ctx.beginPath();
-      ctx.arc(x, y, size * 0.13, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-    const angle = (((DIR_ANGLE[note.d] ?? 270) + note.a) * Math.PI) / 180;
-    const dx = Math.cos(angle);
-    const dy = -Math.sin(angle);
-    // (the game's arrow: a wide chevron near the edge the cut goes out of)
-    const out = size * 0.36;
-    const wing = size * 0.3;
-    const inner = size * 0.14;
-    ctx.beginPath();
-    ctx.moveTo(x + dx * out - dy * wing, y + dy * out + dx * wing);
-    ctx.lineTo(x + dx * out + dy * wing, y + dy * out - dx * wing);
-    ctx.lineTo(x + dx * inner, y + dy * inner);
-    ctx.closePath();
-    ctx.fill();
+    drawGameNote(ctx, note, x, y, size, color, picked);
   }
 
   private bomb(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, picked: boolean) {
@@ -424,8 +389,9 @@ export class NotePanel {
       const beat = editor.snapBeat(editor.playhead());
       const tool = editor.noteTool;
       if (tool.kind === 'wall') {
-        const crouch = editor.wallKind === 'crouch';
-        editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: press.col, y: crouch ? 2 : 0, d: editor.snap || 1, w: 1, h: crouch ? 3 : 5 } }], false);
+        // (the top row: a crouch wall, lower: a full one; dragged sideways: as wide as the drag went)
+        const to = this.cellAt(x, y)?.col ?? press.col;
+        editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: Math.min(press.col, to), ...WALL_SHAPES[ROW_WALL[press.row] ?? 'full'], d: editor.snap || 1, w: Math.abs(to - press.col) + 1 } }], false);
       } else if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: press.col, y: press.row } }], false);
       else {
         const direction = dir ?? tool.direction;
@@ -450,4 +416,76 @@ export class NotePanel {
       { passive: false },
     );
   }
+}
+
+/** A tool's picture, as the game's thing: a note (a rounded cube, lit from above, with its arrow), a
+ *  bomb, a wall. */
+function toolIcon(kind: 'red' | 'blue' | 'bomb' | 'wall', color: readonly number[], css: (rgb: readonly number[]) => string) {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  canvas.className = 'np-icon';
+  const ctx = canvas.getContext('2d')!;
+  const shade = (k: number) => css(color.slice(0, 3).map((v) => Math.max(0, Math.min(1, v * k))));
+  if (kind === 'red' || kind === 'blue') {
+    const s = 44;
+    const x = (size - s) / 2;
+    const y = (size - s) / 2;
+    const fill = ctx.createLinearGradient(x, y, x + s, y + s);
+    fill.addColorStop(0, shade(1.35));
+    fill.addColorStop(0.5, shade(1));
+    fill.addColorStop(1, shade(0.6));
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.roundRect(x, y, s, s, 9);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // (the game's arrow: a wide chevron near the edge the cut goes out of — down)
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(x + s * 0.2, y + s * 0.6);
+    ctx.lineTo(x + s * 0.8, y + s * 0.6);
+    ctx.lineTo(x + s * 0.5, y + s * 0.84);
+    ctx.closePath();
+    ctx.fill();
+  } else if (kind === 'bomb') {
+    const r = 20;
+    ctx.fillStyle = '#2a2c33';
+    ctx.strokeStyle = '#b4b8c4';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let k = 0; k < 20; k++) {
+      const angle = (k / 20) * Math.PI * 2;
+      const radius = k % 2 === 0 ? r : r * 0.74;
+      const px = size / 2 + Math.cos(angle) * radius;
+      const py = size / 2 + Math.sin(angle) * radius;
+      if (k === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    const glow = ctx.createRadialGradient(size / 2 - 5, size / 2 - 5, 1, size / 2, size / 2, 14);
+    glow.addColorStop(0, 'rgba(255,255,255,0.35)');
+    glow.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, 14, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // a wall: a see-through pane in its colour with a bright frame, a little turned
+    ctx.save();
+    ctx.translate(size / 2, size / 2);
+    ctx.transform(1, -0.12, 0, 1, 0, 0);
+    ctx.fillStyle = css(color.slice(0, 3).map((v) => Math.min(1, v)).concat()).replace('rgb(', 'rgba(').replace(')', ',0.35)');
+    ctx.fillRect(-15, -22, 30, 44);
+    ctx.strokeStyle = shade(1.4);
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-15, -22, 30, 44);
+    ctx.restore();
+  }
+  return canvas;
 }

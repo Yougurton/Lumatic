@@ -2000,8 +2000,17 @@ export class Timeline {
         this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
       } else if (this.notesMode) {
         // (the notes side: the wheel takes the song on or back — the cursor stays where it is)
-        const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
-        this.editor.seek(Math.max(0, this.editor.playhead() + (delta / this.pxPerBeat) * 0.9 * settings().wheelSpeed));
+        // (as the 3D track: up — on through the song; a grid step a notch, landing on the grid)
+        const delta = event.deltaX !== 0 ? event.deltaX : -event.deltaY;
+        this.cursorWheel += delta * settings().wheelSpeed;
+        if (Math.abs(this.cursorWheel) >= 40) {
+          // (one step a notch, as on the 3D track)
+          const editor = this.editor;
+          const step = editor.snap || 0.25;
+          const sign = Math.sign(this.cursorWheel);
+          this.cursorWheel = 0;
+          editor.seek(Math.max(0, editor.snapBeat(editor.playhead()) + sign * step));
+        }
       } else if (settings().wheel === 'cursor' && event.deltaX === 0) {
         // (as in ChroMapper: the wheel moves the song cursor a grid step — up: later in the song)
         this.cursorWheel += event.deltaY * settings().wheelSpeed;
@@ -2015,7 +2024,8 @@ export class Timeline {
           if (beat > this.viewStart + width * 0.9 || beat < this.viewStart) this.viewStart = beat - width * 0.5;
         }
       } else {
-        this.viewStart += ((event.deltaX !== 0 ? event.deltaX : event.deltaY) / this.pxPerBeat) * 0.9 * settings().wheelSpeed;
+        // (as the 3D track: the wheel up goes on through the song)
+        this.viewStart += ((event.deltaX !== 0 ? event.deltaX : -event.deltaY) / this.pxPerBeat) * 0.9 * settings().wheelSpeed;
         this.followPlayhead = false;
       }
       this.needsDraw = true;

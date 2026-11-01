@@ -102,12 +102,13 @@ export interface MapChain {
   customData?: Json;
 }
 
-/** The walls put in from the grid's rows: the bottom row a full wall (dodged), the middle one a deep
- *  crouch (from the middle row up), the top one the game's usual crouch wall. */
+/** The walls (as ChroMapper has them): a full wall (dodged) — from the grid's bottom and middle rows —
+ *  and the game's crouch wall — from its top row. ('deep': a wall from the middle row up, as some maps
+ *  have; read, not made.) */
 export type WallKind = 'full' | 'deep' | 'crouch';
 export const WALL_SHAPES: Record<WallKind, { y: number; h: number }> = { full: { y: 0, h: 5 }, deep: { y: 1, h: 4 }, crouch: { y: 2, h: 3 } };
-export const ROW_WALL: WallKind[] = ['full', 'deep', 'crouch'];
-export const WALL_NAMES: Record<WallKind, string> = { full: 'Полная стена', deep: 'Глубокий присед', crouch: 'Присед' };
+export const ROW_WALL: WallKind[] = ['full', 'full', 'crouch'];
+export const WALL_NAMES: Record<WallKind, string> = { full: 'Полная стена', deep: 'Низкая стена', crouch: 'Присед' };
 
 /** What a wall is (from its row and height). */
 export function wallKindOf(wall: { y: number; h: number }): WallKind {

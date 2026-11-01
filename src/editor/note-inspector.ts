@@ -1,6 +1,7 @@
 import type { Editor } from './editor';
 import { mirrorObjects } from './notes-timeline';
-import { ROW_WALL, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapChain, type MapNote, type MapWall } from './notes';
+import { jumpOf, jumpWarnings } from './jump';
+import { WALL_NAMES, type WallKind, WALL_SHAPES, wallKindOf, type MapArc, type MapChain, type MapNote, type MapWall } from './notes';
 
 /**
  * The notes side's panel beside the timeline: what the difficulty has (notes, bombs, walls, arcs,
@@ -21,14 +22,7 @@ const DIRS: [number, string][] = [
   [8, '• точка'],
 ];
 
-/** The half jump (beats) and the jump distance (metres) as the game works them out. */
-export function jumpOf(bpm: number, njs: number, offset: number) {
-  const beat = 60 / bpm;
-  let half = 4;
-  while (njs * beat * half > 17.999) half /= 2;
-  half = Math.max(half + offset, 0.25);
-  return { half, distance: njs * beat * half * 2 };
-}
+export { jumpOf } from './jump';
 
 export class NoteInspector {
   private shownKey = '';
@@ -81,6 +75,8 @@ export class NoteInspector {
       const jump = jumpOf(editor.songBpm, njs, info.noteStartBeatOffset);
       stat('Скорость нот (NJS)', `${String(njs)}, смещение ${String(info.noteStartBeatOffset)}`, 'Меняется в свойствах карты');
       stat('Подлёт', `${jump.half.toFixed(2)} доли · ${jump.distance.toFixed(1)} м`, 'Половина времени подлёта (доли) и дальность появления нот (метры)');
+      stat('Время реакции', `${String(Math.round(jump.reaction))} мс`, 'Сколько нота видна до удара');
+      for (const warning of jumpWarnings(info.difficulty, njs, jump.distance, jump.reaction, nps)) stats.append(Object.assign(document.createElement('div'), { className: `jump-${warning.level}`, textContent: `⚠ ${warning.text}` }));
     }
     root.append(stats);
 
@@ -156,7 +152,8 @@ export class NoteInspector {
         field('Длина (доли)', number(wall.d, editor.snap || 0.25, (value) => (wall.d = Math.max(0, value))));
         field('Колонка', select([0, 1, 2, 3].map((x) => [x, String(x + 1)]), wall.x, (value) => (wall.x = Math.min(value, 4 - wall.w))));
         field('Ширина', select([1, 2, 3, 4].map((w) => [w, String(w)]), wall.w, (value) => (wall.w = Math.min(value, 4 - wall.x))));
-        field('Вид', select(ROW_WALL.map((kind, index) => [index, WALL_NAMES[kind]]), ROW_WALL.indexOf(wallKindOf(wall)), (value) => Object.assign(wall, WALL_SHAPES[ROW_WALL[value]!])));
+        const kinds: WallKind[] = wallKindOf(wall) === 'deep' ? ['full', 'deep', 'crouch'] : ['full', 'crouch'];
+        field('Вид', select(kinds.map((kind, index) => [index, WALL_NAMES[kind]]), kinds.indexOf(wallKindOf(wall)), (value) => Object.assign(wall, WALL_SHAPES[kinds[value]!])));
       } else {
         field('Колонка', select([0, 1, 2, 3].map((x) => [x, String(x + 1)]), item.x, (value) => (item.x = value)));
         field('Ряд', select([0, 1, 2].map((y) => [y, ROWS[y]!]), (item as MapNote).y, (value) => ((item as MapNote).y = value)));

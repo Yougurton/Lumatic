@@ -1,6 +1,7 @@
 import type { Editor } from './editor';
 import { DIR_ANGLE, MIRROR_DIR, objectSpan, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
+import { drawGameNote } from './note-draw';
 
 /**
  * The notes side's timeline (as in ChroViewer): the grid's four columns as four lanes, time going right.
@@ -281,34 +282,7 @@ export class NotesLanes {
   }
 
   private drawNote(ctx: CanvasRenderingContext2D, note: MapNote, x: number, y: number, size: number, color: string, picked: boolean) {
-    const half = size / 2;
-    ctx.fillStyle = color;
-    roundRect(ctx, x - half, y - half, size, size, Math.max(2, size * 0.18));
-    ctx.fill();
-    ctx.strokeStyle = picked ? '#ffe27a' : 'rgba(0,0,0,0.55)';
-    ctx.lineWidth = picked ? 2.5 : 1;
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    if (note.d === 8) {
-      ctx.beginPath();
-      ctx.arc(x, y, size * 0.14, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      const angle = (((DIR_ANGLE[note.d] ?? 270) + note.a) * Math.PI) / 180;
-      // (the arrow: a chevron pointing where the cut goes — screen y goes down)
-      const dx = Math.cos(angle);
-      const dy = -Math.sin(angle);
-      const tip = size * 0.3;
-      const back = size * 0.08;
-      const wing = size * 0.28;
-      ctx.beginPath();
-      ctx.moveTo(x + dx * tip, y + dy * tip);
-      ctx.lineTo(x - dx * back - dy * wing, y - dy * back + dx * wing);
-      ctx.lineTo(x - dx * back + dy * wing, y - dy * back - dx * wing);
-      ctx.closePath();
-      ctx.fill();
-    }
-    this.drawPips(ctx, x + half + 3, y, size, note.y);
+    drawGameNote(ctx, note, x, y, size, color, picked);
   }
 
   private drawBomb(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, picked: boolean) {
