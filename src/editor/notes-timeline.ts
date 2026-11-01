@@ -262,7 +262,7 @@ export class NotesLanes {
     }
     // the map checker's finds: what's at fault ringed (red: an error, yellow: a warning), a mark over
     // the lanes where it is (the mouse over it tells what's wrong)
-    const shown = editor.mapIssues().filter((issue) => issue.level !== 'info' && issue.beat >= from - 8 && issue.beat <= to);
+    const shown = editor.activeIssues().filter((issue) => issue.level !== 'info' && issue.beat >= from - 8 && issue.beat <= to);
     const faults = this.faults(shown);
     for (const [id, level] of faults) {
       const found = editor.objectById(id);
@@ -370,7 +370,7 @@ export class NotesLanes {
   private issuesAtMark(x: number, y: number) {
     const host = this.host;
     if (y < host.lanesTop - 2 || y > host.lanesTop + 14) return [];
-    return this.editor.mapIssues().filter((issue) => issue.level !== 'info' && Math.abs(host.beatToX(issue.beat) - x) <= 8);
+    return this.editor.activeIssues().filter((issue) => issue.level !== 'info' && Math.abs(host.beatToX(issue.beat) - x) <= 8);
   }
 
   /** A box of lines by the mouse (long lines wrapped). */
@@ -443,7 +443,7 @@ export class NotesLanes {
       title = found.kind === 'arcs' ? 'Дуга' : `Цепь (${String((item as MapChain).sc)} звеньев)`;
       where = `${where} → доля ${span[1].toFixed(3)}`;
     }
-    const issues = editor.mapIssues().filter((issue) => issue.level !== 'info' && issue.ids.includes(item.id));
+    const issues = editor.activeIssues().filter((issue) => issue.level !== 'info' && issue.ids.includes(item.id));
     this.tipBox(ctx, hover, [{ text: title, colour: '#fff', bold: true }, { text: time, colour: '#9aa0ad' }, { text: where, colour: '#9aa0ad' }, ...this.issueLines(issues.slice(0, 6))]);
   }
 

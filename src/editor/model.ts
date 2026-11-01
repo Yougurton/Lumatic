@@ -114,6 +114,8 @@ export interface Project {
   ringBlocks?: RingBlock[];
   /** Bookmarks (written into the difficulty as the editors' bookmarks). */
   bookmarks?: Bookmark[];
+  /** The map checker's finds the user chose to ignore (their keys). */
+  ignoredIssues?: string[];
   /** The order of the top rows of lights ("g<type>" — a light group of the environment, "u<id>" — a
    *  group of the user's); rows not in it keep their own order after these. */
   rowOrder?: string[];

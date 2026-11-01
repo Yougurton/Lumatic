@@ -17,6 +17,8 @@ export interface MapIssue {
   /** The objects at fault (selected when the issue is clicked). */
   ids: string[];
   text: string;
+  /** Stays the same from session to session while the issue does (for ignoring it). */
+  key: string;
 }
 
 export interface CheckRule {
@@ -24,7 +26,7 @@ export interface CheckRule {
   name: string;
   /** Whose rule it is. */
   source: string;
-  group: 'notes' | 'bombs' | 'walls' | 'arcs' | 'timing';
+  group: 'notes' | 'bombs' | 'walls' | 'arcs' | 'timing' | 'situational';
   about: string;
 }
 
@@ -45,13 +47,29 @@ export const CHECK_RULES: CheckRule[] = [
   { id: 'inWall', name: 'Нота в стене', source: 'BL · SS', group: 'walls', about: 'Нота или бомба внутри стены' },
   { id: 'wallShape', name: 'Неправильная стена', source: 'BL · SS', group: 'walls', about: 'Нулевая ширина (fake wall), короче 15 мс (BL: 13,8 мс), не полная и не crouch, выходит за сетку' },
   { id: 'dangerDash', name: 'Danger dash', source: 'BSMG · SS', group: 'walls', about: 'Полные стены закрывают обе средние дорожки — выгоняют игрока на край (3-wide wall)' },
-  { id: 'rapidDodge', name: 'Rapid dodge walls', source: 'BL', group: 'walls', about: 'Dodge walls заставляют двигать голову больше 3 раз в секунду' },
+  { id: 'rapidDodge', name: 'Rapid dodge walls', source: 'BSMG · BL', group: 'walls', about: 'Dodge walls заставляют двигать голову больше 3 раз в секунду' },
   { id: 'arcs', name: 'Arcs', source: 'SS', group: 'arcs', about: 'Arc не связана с нотой; multiplier вне 0,1–1,5' },
   { id: 'chains', name: 'Chains', source: 'SS', group: 'arcs', about: 'ScoreSaber не ранкает карты с chains' },
   { id: 'hotStart', name: 'Hot start', source: 'BSMG · BL · SS', group: 'timing', about: 'Первые объекты раньше 1,5 с (SS), 1,33 с (BL) или 2 с (BSMG)' },
   { id: 'coldEnd', name: 'Cold end', source: 'BL · SS', group: 'timing', about: 'После последнего объекта меньше 2 с песни' },
   { id: 'longOutro', name: 'Долгий outro', source: 'SS', group: 'timing', about: 'После последнего объекта больше 15 с без нот (если там нет света)' },
   { id: 'mapLength', name: 'Длина карты', source: 'BL · SS', group: 'timing', about: 'Короче 45 с от первой ноты до последней (BL); песня короче 20 с или длиннее 10 минут (SS)' },
+  { id: 'cross', name: 'Cross', source: 'BSMG', group: 'notes', about: 'Скрещённые руки бьют навстречу друг другу (X): handclap со скрещёнными руками' },
+  { id: 'disembodied', name: 'Disembodied notes', source: 'BSMG', group: 'walls', about: 'Нота спрятана за стеной: стена в её клетке кончается прямо перед ней' },
+  { id: 'bombWall', name: 'Bomb wall', source: 'BSMG', group: 'bombs', about: 'Бомбы в одно время закрывают почти всю сетку (9+ клеток из 12)' },
+  { id: 'bombSpam', name: 'Bomb spam', source: 'BSMG', group: 'bombs', about: 'Слишком много бомб: больше 24 за 4 доли' },
+  { id: 'widePrecision', name: 'Wide precision', source: 'BSMG', group: 'bombs', about: 'Двойной удар по краям с бомбами в середине: руки идут внутрь и задевают бомбы' },
+  { id: 'incorrectSide', name: 'Incorrect side hits', source: 'BSMG', group: 'situational', about: 'Двойной crossover вбок: при ударе влево красная должна быть сверху, вправо — синяя' },
+  { id: 'rapidCrossover', name: 'Rapid crossovers', source: 'BSMG', group: 'situational', about: 'Рука уходит в дальнюю дорожку чужой стороны и обратно быстрее чем за 1 с' },
+  { id: 'wideInward', name: 'Wide inward doubles', source: 'BSMG', group: 'situational', about: 'Двойной удар по краям внутрь или двойной вниз с верхнего ряда' },
+  { id: 'towers', name: 'Excessive towers', source: 'BSMG', group: 'situational', about: 'Башни из 3+ нот одного цвета много раз подряд (3 за 4 доли)' },
+  { id: 'detachedWalls', name: 'Detached walls', source: 'BSMG', group: 'situational', about: 'Соседние одинаковые стены в одно время — лучше одна широкая' },
+  { id: 'extendedCrouch', name: 'Extended crouch', source: 'BSMG', group: 'situational', about: 'Присед дольше 3 секунд подряд' },
+  { id: 'cornerCrouch', name: 'Corner crouch', source: 'BSMG', group: 'situational', about: 'Crouch wall вместе с dodge wall: присесть и уйти в угол' },
+  { id: 'skyStream', name: 'Sky streams', source: 'BSMG', group: 'situational', about: '8+ нот одной руки подряд в верхнем ряду' },
+  { id: 'visualClutter', name: 'Visual clutter', source: 'BSMG', group: 'situational', about: 'Стрелка и dot одного цвета в один удар' },
+  { id: 'armTangle', name: 'Arm tangle', source: 'BSMG', group: 'situational', about: 'Скрещённые руки бьют в разные стороны по вертикали' },
+  { id: 'facePuncher', name: 'Face puncher', source: 'BSMG', group: 'situational', about: 'Crossover в верхний угол чужой стороны с ударом вверх наружу' },
   { id: 'jump', name: 'NJS, JD и NPS', source: 'BSMG', group: 'timing', about: 'Note jump speed, jump distance, reaction time и notes per second по таблицам BSMG' },
 ];
 
@@ -74,6 +92,8 @@ export interface CheckInput {
   disabled?: Iterable<string>;
   /** Whose thresholds (default: all — the strictest of each). */
   standard?: CheckStandard;
+  /** The difficulty's half jump (beats): BSMG's vision blocks last that long. */
+  halfJump?: number;
 }
 
 /** Cut directions (0 up … 7 down-right; 8 a dot) as steps on the grid (x right, y up). */
@@ -115,7 +135,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
     if (off.has(rule)) return;
     const count = (counts.get(rule) ?? 0) + 1;
     counts.set(rule, count);
-    if (count <= CAP) issues.push({ rule, level, beat, ids, text });
+    if (count <= CAP) issues.push({ rule, level, beat, ids, text, key: '' });
   };
   const on = (rule: string) => !off.has(rule);
   const { objects } = input;
@@ -240,7 +260,9 @@ export function checkMap(input: CheckInput): MapIssue[] {
         const gap = after[0]!.b - before[0]!.b;
         // (a slider's notes are one swing)
         if (sec(after[0]!.b) - sec(before[0]!.b) < 0.09) continue;
-        if (angleBetween(a, b) > 45.5) continue;
+        // the same way: within 45°, or both swinging down (or both up) — the hand never came back
+        const sameWay = angleBetween(a, b) <= 45.5 || (a[1] < -0.3 && b[1] < -0.3) || (a[1] > 0.3 && b[1] > 0.3);
+        if (!sameWay) continue;
         const xs = [...before, ...after].map((note) => note.x);
         const reset = bombs.some((bomb) => bomb.b > before[0]!.b + SAME && bomb.b < after[0]!.b - SAME && bomb.x >= Math.min(...xs) - 1 && bomb.x <= Math.max(...xs) + 1);
         if (!reset) add('doubleDirectional', gap < 1.5 ? 'error' : 'warn', after[0]!.b, [before[before.length - 1]!.id, after[0]!.id], `Double directional: ${colour === 0 ? 'красная' : 'синяя'} дважды в одну сторону через ${String(Math.round(gap * 100) / 100)} доли без bomb reset`);
@@ -298,11 +320,15 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const face = notes[i]!;
       if (face.y !== 1 || (face.x !== 1 && face.x !== 2)) continue;
       const t = sec(face.b);
+      // (BSMG: nothing in that half of the grid for the half jump; BL: 250/500 ms, outer columns free)
+      const bsmg = standard === 'BSMG';
+      const window = bsmg ? sec(face.b + (input.halfJump ?? 1)) - t : 0.5;
       for (let j = i + 1; j < notes.length; j++) {
         const hidden = notes[j]!;
         const dt = sec(hidden.b) - t;
-        if (dt > 0.5) break;
-        if (dt < 0.005 || Math.abs(hidden.x - face.x) > 1 || hidden.x === 0 || hidden.x === 3) continue;
+        if (dt > window) break;
+        if (dt < 0.005) continue;
+        if (bsmg ? hidden.x < 2 !== face.x < 2 : Math.abs(hidden.x - face.x) > 1 || hidden.x === 0 || hidden.x === 3) continue;
         // (the same hand's slider goes on with the same swing)
         if (hidden.c === face.c && dt < 0.09) continue;
         add('visionBlock', 'warn', hidden.b, [face.id, hidden.id], `Vision block: face note закрывает ноту через ${ms(dt)} (BL: от 250 мс, если она предсказуема, иначе от 500 мс)`);
@@ -421,6 +447,144 @@ export function checkMap(input: CheckInput): MapIssue[] {
   }
   if (on('chains') && standard !== 'BL' && standard !== 'BSMG' && objects.chains.length > 0) add('chains', 'info', objects.chains[0]!.b, objects.chains.map((chain) => chain.id), `Chains: ${String(objects.chains.length)} — ScoreSaber не ранкает карты с chains (BeatLeader — да)`);
 
+  // ----- BSMG's forbidden and situational patterns ---------------------------------------------
+  const hand = (c: number) => (c === 0 ? 'красная' : 'синяя');
+  for (const moment of moments) {
+    const beat = moment[0]!.b;
+    const red = moment.filter((note) => note.c === 0);
+    const blue = moment.filter((note) => note.c === 1);
+    for (const r of red) {
+      for (const bl of blue) {
+        const cr = cutOf(r);
+        const cb = cutOf(bl);
+        if (cr === null || cb === null) continue;
+        // crossed: red right of blue
+        if (r.x > bl.x) {
+          if (cr[0] < -0.3 && cb[0] > 0.3 && Math.abs(r.y - bl.y) <= 1) add('cross', 'error', beat, [r.id, bl.id], 'Cross: скрещённые руки бьют навстречу друг другу');
+          else if ((cr[1] > 0.3 && cb[1] < -0.3) || (cr[1] < -0.3 && cb[1] > 0.3)) add('armTangle', 'warn', beat, [r.id, bl.id], 'Arm tangle: скрещённые руки бьют в разные стороны по вертикали');
+          // both crossed over and slicing sideways: red on top slicing left, blue on top slicing right
+          if (r.x >= 2 && bl.x <= 1 && Math.abs(cr[1]) < 0.75 && Math.abs(cb[1]) < 0.75 && cr[0] * cb[0] > 0 && r.y !== bl.y) {
+            const left = cr[0] < 0;
+            if ((left && r.y < bl.y) || (!left && bl.y < r.y)) add('incorrectSide', 'warn', beat, [r.id, bl.id], `Incorrect side hits: при ударе ${left ? 'влево сверху должна быть красная' : 'вправо сверху должна быть синяя'}`);
+          }
+        }
+        // wide inward doubles: on the edges pointing in, or both down from the top row
+        if (((r.x === 0 && bl.x === 3 && cr[0] > 0.3 && cb[0] < -0.3) || (r.y === 2 && bl.y === 2 && cr[1] < -0.3 && cb[1] < -0.3)) && r.x < bl.x) add('wideInward', 'warn', beat, [r.id, bl.id], 'Wide inward double: неудобно для невысоких игроков');
+        // wide precision: the double on the edges, bombs in the middle at the same time
+        if (Math.min(r.x, bl.x) === 0 && Math.max(r.x, bl.x) === 3) {
+          const middle = bombs.filter((bomb) => Math.abs(bomb.b - beat) < 0.26 && (bomb.x === 1 || bomb.x === 2));
+          if (middle.length > 0) add('widePrecision', 'warn', beat, [r.id, bl.id, ...middle.map((bomb) => bomb.id)], 'Wide precision: удар по краям, а в середине бомбы');
+        }
+      }
+    }
+    for (const own of [red, blue]) {
+      if (own.length < 2) continue;
+      const arrows = own.filter((note) => note.d !== 8);
+      if (arrows.length > 0 && arrows.length < own.length) add('visualClutter', 'warn', beat, own.map((note) => note.id), 'Visual clutter: стрелка и dot одного цвета в один удар');
+    }
+    // face punchers: a crossover into the top corner, swinging up and out
+    for (const note of moment) {
+      if (note.y === 2 && ((note.c === 0 && note.x === 3 && note.d === 5) || (note.c === 1 && note.x === 0 && note.d === 4))) add('facePuncher', 'warn', beat, [note.id], `Face puncher: ${hand(note.c)} в чужом верхнем углу бьёт вверх наружу`);
+    }
+  }
+  if (on('towers')) {
+    const towers = moments.flatMap((moment) => [0, 1].map((c) => moment.filter((note) => note.c === c)).filter((own) => own.length >= 3));
+    for (let i = 2; i < towers.length; i++) {
+      if (towers[i]![0]!.b - towers[i - 2]![0]!.b <= 4) add('towers', 'warn', towers[i]![0]!.b, towers[i]!.map((note) => note.id), 'Excessive towers: третья башня за 4 доли');
+    }
+  }
+  if (on('skyStream')) {
+    for (const c of [0, 1]) {
+      let run: MapNote[] = [];
+      const flush = () => {
+        if (run.length >= 8) add('skyStream', 'warn', run[0]!.b, run.map((note) => note.id).slice(0, 32), `Sky stream: ${String(run.length)} нот подряд в верхнем ряду (${hand(c)})`);
+        run = [];
+      };
+      for (const note of notes) {
+        if (note.c !== c) continue;
+        if (note.y === 2) run.push(note);
+        else flush();
+      }
+      flush();
+    }
+  }
+  if (on('rapidCrossover')) {
+    for (const c of [0, 1]) {
+      /** Where the hand is: on its own side (false) or crossed over (true). */
+      let crossed = false;
+      let since: { t: number; id: string } | null = null;
+      for (const note of notes) {
+        if (note.c !== c) continue;
+        const over = c === 0 ? note.x === 3 : note.x === 0; // (deep into the other side: the far lane)
+        if (over === crossed) continue;
+        const t = sec(note.b);
+        if (!over && since !== null && t - since.t < 1) add('rapidCrossover', 'warn', note.b, [since.id, note.id], `Rapid crossover: ${hand(c)} уходит в дальнюю дорожку чужой стороны и обратно за ${ms(t - since.t)}`);
+        crossed = over;
+        since = over ? { t, id: note.id } : null;
+      }
+    }
+  }
+  if (on('bombWall') || on('bombSpam')) {
+    const byMoment = new Map<string, typeof bombs>();
+    for (const bomb of bombs) {
+      const k = bomb.b.toFixed(3);
+      byMoment.set(k, [...(byMoment.get(k) ?? []), bomb]);
+    }
+    for (const group of byMoment.values()) {
+      const cells = new Set(group.map((bomb) => `${String(bomb.x)},${String(bomb.y)}`));
+      if (cells.size >= 9) add('bombWall', 'error', group[0]!.b, group.map((bomb) => bomb.id), `Bomb wall: бомбы закрывают ${String(cells.size)} клеток из 12`);
+    }
+    let from = 0;
+    let last = -Infinity;
+    for (let i = 0; i < bombs.length; i++) {
+      while (bombs[i]!.b - bombs[from]!.b > 4) from++;
+      if (i - from + 1 > 24 && bombs[i]!.b - last > 4) {
+        last = bombs[i]!.b;
+        add('bombSpam', 'warn', bombs[from]!.b, [], `Bomb spam: ${String(i - from + 1)} бомб за 4 доли`);
+      }
+    }
+  }
+  if (on('disembodied')) {
+    for (const wall of walls) {
+      if (wall.w <= 0 || wall.d <= 0) continue;
+      const end = wallEnd(wall);
+      for (const note of notes) {
+        if (note.b <= end + SAME) continue;
+        if (note.b > end + Math.min(1, input.halfJump ?? 1)) break;
+        if (covers(wall, note.x, note.y)) add('disembodied', 'warn', note.b, [note.id, wall.id], 'Disembodied note: нота спрятана за стеной');
+      }
+    }
+  }
+  if (on('detachedWalls') || on('cornerCrouch') || on('extendedCrouch')) {
+    for (let i = 0; i < walls.length; i++) {
+      const a = walls[i]!;
+      if (a.w <= 0 || a.d <= 0) continue;
+      for (let j = i + 1; j < walls.length && walls[j]!.b < wallEnd(a); j++) {
+        const b = walls[j]!;
+        if (b.w <= 0 || b.d <= 0) continue;
+        if (Math.abs(a.b - b.b) < SAME && Math.abs(a.d - b.d) < SAME && a.y === b.y && a.h === b.h && (a.x + a.w === b.x || b.x + b.w === a.x)) add('detachedWalls', 'warn', a.b, [a.id, b.id], 'Detached walls: соседние стены лучше сделать одной');
+        const kinds = [wallKindOf(a), wallKindOf(b)];
+        if (kinds.includes('crouch') && kinds.includes('full') && Math.abs(a.b - b.b) < 1) add('cornerCrouch', 'warn', Math.max(a.b, b.b), [a.id, b.id], 'Corner crouch: присед вместе с dodge wall');
+      }
+    }
+    // crouching for long: crouch walls joined end to end
+    const crouch = walls.filter((wall) => wall.w > 0 && wall.d > 0 && wallKindOf(wall) === 'crouch' && wall.x <= 1 && wall.x + wall.w >= 3);
+    let start: MapWall | null = null;
+    let until = -Infinity;
+    const close = () => {
+      if (start !== null && sec(until) - sec(start.b) > 3) add('extendedCrouch', 'warn', start.b, [start.id], `Extended crouch: присед ${fmt(sec(until) - sec(start.b))}`);
+    };
+    for (const wall of crouch) {
+      if (start !== null && wall.b <= until + 0.25) until = Math.max(until, wallEnd(wall));
+      else {
+        close();
+        start = wall;
+        until = wallEnd(wall);
+      }
+    }
+    close();
+  }
+
   // ----- the start and the end ---------------------------------------------------------------
   /** What the player meets: notes, bombs, arcs, chains, walls in the middle lanes. */
   const starts: { b: number; end: number; id: string }[] = [
@@ -451,7 +615,11 @@ export function checkMap(input: CheckInput): MapIssue[] {
   }
 
   for (const [rule, count] of counts) {
-    if (count > CAP) issues.push({ rule, level: 'info', beat: issues.find((issue) => issue.rule === rule)?.beat ?? 0, ids: [], text: `…и ещё ${String(count - CAP)} таких же` });
+    if (count > CAP) issues.push({ rule, level: 'info', beat: issues.find((issue) => issue.rule === rule)?.beat ?? 0, ids: [], text: `…и ещё ${String(count - CAP)} таких же`, key: `more:${rule}` });
   }
+  // (a key made of what the issue is about, not of the ids, which are new each time the map is read)
+  const described = new Map<string, string>();
+  for (const kind of ['notes', 'bombs', 'walls', 'arcs', 'chains'] as const) for (const item of objects[kind] as { id: string; b: number; x: number; y: number }[]) described.set(item.id, `${kind[0]!}${item.b.toFixed(3)}:${String(item.x)}:${String(item.y)}`);
+  for (const issue of issues) if (issue.key === '') issue.key = `${issue.rule}@${issue.beat.toFixed(3)}#${issue.ids.map((id) => described.get(id) ?? '').sort().join(';')}`;
   return issues.sort((a, b) => a.beat - b.beat);
 }

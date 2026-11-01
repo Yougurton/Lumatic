@@ -63,5 +63,16 @@ for (let t = 105; t < 109; t += 0.08) fast.push(n(t * 2, 0, 0, 0, Math.round(t /
 check('fast stream', rules({ notes: [...filler(), ...fast] }).has('fastStream'));
 check('switched off', !checkMap({ objects: map({ notes: [n(1, 0, 0, 0, 1), ...filler()] }), seconds: (beat) => beat / 2, songSeconds: 120, disabled: ['hotStart'] }).some((issue) => issue.rule === 'hotStart'));
 
+check('DD by parity', run({ notes: [...filler(), n(211, 0, 0, 0, 6), n(212, 1, 0, 0, 7)] }).some((issue) => issue.rule === 'doubleDirectional' && issue.beat === 212));
+check('cross', rules({ notes: [...filler(), n(211, 2, 1, 0, 2), n(211, 1, 1, 1, 3)] }).has('cross'));
+check('visual clutter', rules({ notes: [...filler(), n(211, 0, 2, 0, 1), n(211, 0, 1, 0, 8)] }).has('visualClutter'));
+const sky = [];
+for (let k = 0; k < 9; k++) sky.push(n(211 + k, 0, 2, 0, k % 2));
+check('sky stream', rules({ notes: [...filler(), ...sky] }).has('skyStream'));
+const donut = [];
+for (let x = 0; x < 4; x++) for (let y = 0; y < 3; y++) if (!(x === 1 && y === 1)) donut.push(bomb(211, x, y));
+check('bomb wall', rules({ notes: filler(), bombs: donut }).has('bombWall'));
+check('detached walls', rules({ notes: filler(), walls: [wall(205, 0, 0, 1, 1, 5), wall(205, 1, 0, 1, 1, 5)] }).has('detachedWalls'));
+check('keys stable', run({ notes: [n(1, 0, 0, 0, 1), ...filler()] })[0]!.key === run({ notes: [n(1, 0, 0, 0, 1), ...filler()] })[0]!.key);
 console.log(`${String(checks - failures)}/${String(checks)} checks passed`);
 if (failures > 0) process.exit(1);

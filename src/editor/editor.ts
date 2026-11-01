@@ -49,6 +49,7 @@ import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
 import { checkMap, type MapIssue } from './checks';
+import { jumpOf } from './jump';
 import { allObjects, strobeWalls, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
@@ -2414,9 +2415,80 @@ export class Editor {
     const key = `${String(this.noteVersion)}|${this.row?.key ?? ''}|${String(this.duration)}|${disabled.join(',')}|${standard}`;
     if (key !== this.issuesKey) {
       this.issuesKey = key;
-      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: this.row?.infoDifficulty?.difficulty, disabled, standard });
+      const info = this.row?.infoDifficulty;
+      const halfJump = info === undefined ? undefined : jumpOf(this.songBpm, info.noteJumpSpeed > 0 ? info.noteJumpSpeed : 16, info.noteStartBeatOffset).half;
+      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: info?.difficulty, disabled, standard, halfJump });
     }
     return this.issues;
+  }
+
+  /** Whether the user chose to ignore this find. */
+  isIgnored(issue: MapIssue) {
+    return this.project?.ignoredIssues?.includes(issue.key) === true;
+  }
+
+  /** The finds not ignored. */
+  activeIssues() {
+    const ignored = new Set(this.project?.ignoredIssues ?? []);
+    return this.mapIssues().filter((issue) => !ignored.has(issue.key));
+  }
+
+  /** Ignores a find (or stops ignoring it); kept with the map's project file. */
+  ignoreIssue(issue: MapIssue, ignore: boolean) {
+    const project = this.project;
+    if (project === null) return;
+    const list = new Set(project.ignoredIssues ?? []);
+    if (ignore) list.add(issue.key);
+    else list.delete(issue.key);
+    project.ignoredIssues = [...list];
+    this.dirty = true;
+    this.emit('selection');
+  }
+
+  /**
+   * The selected walls as a strobe, if they are one: walls of one shape and length one after another
+   * at one step (null: not a strobe).
+   */
+  selectedStrobe() {
+    const walls = this.objects.walls.filter((wall) => this.noteSelection.has(wall.id)).sort((a, b) => a.b - b.b);
+    if (walls.length < 2 || walls.length !== this.noteSelection.size) return null;
+    const first = walls[0]!;
+    const step = walls[1]!.b - first.b;
+    if (!(step > 1e-4)) return null;
+    for (let i = 1; i < walls.length; i++) {
+      const wall = walls[i]!;
+      if (wall.x !== first.x || wall.y !== first.y || wall.w !== first.w || wall.h !== first.h || Math.abs(wall.d - first.d) > 1e-4 || Math.abs(wall.b - walls[i - 1]!.b - step) > 1e-3) return null;
+    }
+    return { walls, from: first.b, to: walls[walls.length - 1]!.b + step, step, fill: first.d / step, shape: { x: first.x, y: first.y, w: first.w, h: first.h } };
+  }
+
+  /** The whole strobe a wall is part of (walls of its shape and length at one step before and after it). */
+  strobeAround(id: string) {
+    const wall = this.objects.walls.find((item) => item.id === id);
+    if (wall === undefined) return [];
+    const like = this.objects.walls.filter((other) => other.x === wall.x && other.y === wall.y && other.w === wall.w && other.h === wall.h && Math.abs(other.d - wall.d) < 1e-4).sort((a, b) => a.b - b.b);
+    const at = like.indexOf(wall);
+    const gap = (i: number) => (like[i + 1]?.b ?? Infinity) - (like[i]?.b ?? -Infinity);
+    const step = Math.min(gap(at), gap(at - 1));
+    if (!Number.isFinite(step) || step <= 1e-4) return [wall];
+    let lo = at;
+    let hi = at;
+    while (lo > 0 && Math.abs(gap(lo - 1) - step) < 1e-3) lo--;
+    while (hi < like.length - 1 && Math.abs(gap(hi) - step) < 1e-3) hi++;
+    return like.slice(lo, hi + 1);
+  }
+
+  /** Makes the selected strobe again with other settings (one undo step; merged while typing). */
+  restrobe(patch: { from: number; to: number; step: number; fill: number; shape: { x: number; y: number; w: number; h: number } }) {
+    const current = this.selectedStrobe();
+    if (current === null || !(patch.step > 0) || !(patch.to > patch.from)) return;
+    const made = strobeWalls(patch.shape, patch.from, patch.to, patch.step, patch.fill).map((item) => ({ ...item, id: newId('n') }));
+    if (made.length === 0) return;
+    this.noteCheckpoint('restrobe');
+    this.removeObjects(new Set(current.walls.map((wall) => wall.id)));
+    this.objects.walls.push(...made);
+    this.noteSelection = new Set(made.map((wall) => wall.id));
+    this.notesChanged();
   }
 
   /** The selected objects with their kinds. */

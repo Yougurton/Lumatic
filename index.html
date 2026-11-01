@@ -456,41 +456,49 @@
         color: #6fdc8c;
       }
       .ni-tabs {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 3px;
-        margin-bottom: 10px;
+        display: flex;
+        gap: 2px;
+        padding: 6px 6px 0;
+        margin: -8px -12px 10px;
+        border-bottom: 1px solid var(--line);
         position: sticky;
-        top: 0;
-        z-index: 1;
-        background: var(--panel, #1a1b21);
-        padding-bottom: 4px;
+        top: -8px;
+        z-index: 2;
+        background: var(--panel);
       }
       .ni-tabs button {
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        justify-content: center;
-        gap: 5px;
-        padding: 5px 4px;
-        font-size: 12px;
+        gap: 4px;
+        border-radius: 5px 5px 0 0;
+        border-bottom: 0;
+        padding: 4px 7px;
+        font-size: 12.5px;
+        background: none;
+        color: var(--dim);
         white-space: nowrap;
+        min-width: 0;
       }
       .ni-tabs button.active {
-        background: #2d3a55;
-        border-color: #4d6aa8;
+        background: var(--panel2);
         color: #fff;
+        border-color: var(--line);
       }
       .ni-badge {
         display: inline-flex;
         gap: 3px;
       }
+      .ni-badge {
+        gap: 2px;
+      }
       .ni-badge b {
-        font-size: 10.5px;
-        min-width: 16px;
-        padding: 0 4px;
-        border-radius: 8px;
-        line-height: 16px;
+        font-size: 9.5px;
+        min-width: 13px;
+        padding: 0 3px;
+        border-radius: 7px;
+        line-height: 13px;
         color: #111;
+        text-align: center;
       }
       .ni-badge b.bad {
         background: #ff6b6b;
@@ -500,6 +508,25 @@
       }
       .ni-badge b.ok {
         background: #6fdc8c;
+      }
+      .ni-badge b.n {
+        background: #4a5068;
+        color: #fff;
+      }
+      .ni-ignored {
+        margin-top: 10px;
+        border-top: 1px solid var(--line);
+        padding-top: 6px;
+        opacity: 0.75;
+      }
+      .ni-ignored summary {
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--dim);
+        margin-bottom: 4px;
+      }
+      .ni-strobe-pick {
+        margin-top: 8px;
       }
       .ni-strobe {
         margin-top: 12px;

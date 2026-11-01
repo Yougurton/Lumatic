@@ -231,6 +231,7 @@ export function settingsDialog(restart: () => void) {
         ['walls', 'Стены'],
         ['arcs', 'Дуги и цепи'],
         ['timing', 'Начало, конец, скорость'],
+        ['situational', 'Ситуативные паттерны BSMG (можно, но осторожно)'],
       ];
       const boxes: HTMLInputElement[] = [];
       const set = (id: string, on: boolean) => {

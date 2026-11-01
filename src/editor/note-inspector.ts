@@ -2,7 +2,8 @@ import type { Editor } from './editor';
 import { mirrorObjects } from './notes-timeline';
 import { jumpOf, jumpWarnings } from './jump';
 import { CHECK_RULES, type MapIssue } from './checks';
-import { onSettings, settings } from './settings';
+import { onSettings, setSettings, settings } from './settings';
+import { showMenu } from './menu';
 import { WALL_NAMES, type WallKind, WALL_SHAPES, wallKindOf, type MapArc, type MapChain, type MapNote, type MapWall } from './notes';
 
 /**
@@ -48,6 +49,7 @@ export class NoteInspector {
   private shownIssues: MapIssue[] | null = null;
   /** A click on a find selects what's at fault — and stays on the finds. */
   private keepView = false;
+  private ignoredOpen = false;
 
   render() {
     const editor = this.editor;
@@ -56,14 +58,14 @@ export class NoteInspector {
     if (active instanceof HTMLInputElement && this.root.contains(active)) return;
     const issues = editor.project === null ? [] : editor.mapIssues();
     const selection = [...editor.noteSelection].join(',');
-    const key = `${String(editor.noteVersion)}|${selection}|${editor.row?.key ?? ''}|${this.view}`;
+    const key = `${String(editor.noteVersion)}|${selection}|${editor.row?.key ?? ''}|${this.view}|${(editor.project?.ignoredIssues ?? []).length}`;
     if (key === this.shownKey && issues === this.shownIssues) return;
     if (selection !== this.shownSelection) {
       if (selection !== '' && !this.keepView) this.view = 'picked';
       this.keepView = false;
       this.shownSelection = selection;
     }
-    this.shownKey = `${String(editor.noteVersion)}|${selection}|${editor.row?.key ?? ''}|${this.view}`;
+    this.shownKey = `${String(editor.noteVersion)}|${selection}|${editor.row?.key ?? ''}|${this.view}|${(editor.project?.ignoredIssues ?? []).length}`;
     this.shownIssues = issues;
     const root = this.root;
     root.replaceChildren();
@@ -71,8 +73,9 @@ export class NoteInspector {
       root.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Откройте карту' }));
       return;
     }
-    const errors = issues.filter((issue) => issue.level === 'error').length;
-    const warnings = issues.filter((issue) => issue.level === 'warn').length + this.jumpIssues().length;
+    const live = issues.filter((issue) => !editor.isIgnored(issue));
+    const errors = live.filter((issue) => issue.level === 'error').length;
+    const warnings = live.filter((issue) => issue.level === 'warn').length + this.jumpIssues().length;
     const tabs = document.createElement('div');
     tabs.className = 'ni-tabs';
     const tab = (id: typeof this.view, label: string, badge?: HTMLElement) => {
@@ -85,7 +88,10 @@ export class NoteInspector {
       });
       tabs.append(button);
     };
-    tab('picked', editor.noteSelection.size > 0 ? `Выделено (${String(editor.noteSelection.size)})` : 'Выделено');
+    const count = document.createElement('span');
+    count.className = 'ni-badge';
+    if (editor.noteSelection.size > 0) count.append(Object.assign(document.createElement('b'), { className: 'n', textContent: String(editor.noteSelection.size) }));
+    tab('picked', 'Выделено', count);
     const badge = document.createElement('span');
     badge.className = 'ni-badge';
     if (errors > 0) badge.append(Object.assign(document.createElement('b'), { className: 'bad', textContent: String(errors) }));
@@ -236,7 +242,19 @@ export class NoteInspector {
       section.append(form);
     }
     const walls = picked.filter(({ kind }) => kind === 'walls').map(({ item }) => item as MapWall);
-    if (walls.length > 0) section.append(this.strobeForm(walls));
+    const strobe = editor.selectedStrobe();
+    if (strobe !== null) section.append(this.strobeEditor(strobe));
+    else if (walls.length > 0) {
+      if (walls.length === 1) {
+        const run = editor.strobeAround(walls[0]!.id);
+        if (run.length > 1) {
+          const whole = Object.assign(document.createElement('button'), { type: 'button', className: 'ni-strobe-pick', textContent: `⚡ Выделить весь строб (${String(run.length)})`, title: 'Эта стена — часть строба: выделить его целиком, чтобы поменять' });
+          whole.addEventListener('click', () => editor.selectNotes(run.map((wall) => wall.id)));
+          section.append(whole);
+        }
+      }
+      section.append(this.strobeForm(walls));
+    }
     return section;
   }
 
@@ -273,10 +291,66 @@ export class NoteInspector {
     return box;
   }
 
+  /** A strobe already made: where it starts and ends, its step, each wall's length, kind and place. */
+  private strobeEditor(strobe: NonNullable<ReturnType<Editor['selectedStrobe']>>) {
+    const editor = this.editor;
+    const box = document.createElement('div');
+    box.className = 'ni-strobe';
+    box.append(Object.assign(document.createElement('h3'), { textContent: `Строб: ${String(strobe.walls.length)} стен` }));
+    const form = document.createElement('div');
+    form.className = 'ni-form';
+    const line = (label: string, input: HTMLElement) => {
+      const item = document.createElement('label');
+      item.append(Object.assign(document.createElement('span'), { textContent: label }), input);
+      form.append(item);
+    };
+    const round = (value: number) => String(Math.round(value * 1000) / 1000);
+    const from = Object.assign(document.createElement('input'), { type: 'number', step: 'any', value: round(strobe.from) });
+    const to = Object.assign(document.createElement('input'), { type: 'number', step: 'any', value: round(strobe.to) });
+    const step = strobeStepSelect(strobe.step);
+    const fill = Object.assign(document.createElement('input'), { type: 'number', min: '5', max: '100', step: '5', value: String(Math.round(strobe.fill * 100)) });
+    const kind = document.createElement('select');
+    for (const [value, text] of [
+      ['full', WALL_NAMES.full],
+      ['crouch', WALL_NAMES.crouch],
+    ] as const)
+      kind.append(Object.assign(document.createElement('option'), { value, textContent: text }));
+    kind.value = wallKindOf({ ...strobe.shape }) === 'crouch' ? 'crouch' : 'full';
+    const column = document.createElement('select');
+    for (let x = 0; x < 4; x++) column.append(Object.assign(document.createElement('option'), { value: String(x), textContent: String(x + 1) }));
+    column.value = String(strobe.shape.x);
+    const width = document.createElement('select');
+    for (let w = 1; w <= 4; w++) width.append(Object.assign(document.createElement('option'), { value: String(w), textContent: String(w) }));
+    width.value = String(strobe.shape.w);
+    line('Начало (доля)', from);
+    line('Конец (доля)', to);
+    line('Шаг', step);
+    line('Длина стены, % шага', fill);
+    line('Вид', kind);
+    line('Колонка', column);
+    line('Ширина', width);
+    const apply = () => {
+      const start = Number(from.value.replace(',', '.'));
+      const end = Number(to.value.replace(',', '.'));
+      const every = Number(step.value);
+      const part = Number(fill.value) / 100;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !(every > 0) || !(part > 0)) return;
+      const w = Number(width.value);
+      const x = Math.min(Number(column.value), 4 - w);
+      const shape = WALL_SHAPES[kind.value as 'full' | 'crouch'];
+      editor.restrobe({ from: Math.max(0, start), to: end, step: every, fill: Math.min(1, part), shape: { x, w, y: shape.y, h: shape.h } });
+    };
+    for (const input of [from, to, step, fill, kind, column, width]) input.addEventListener('change', apply);
+    box.append(form, Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Поменяйте любое поле — строб перестроится. Ctrl+Z отменит.' }));
+    return box;
+  }
+
   /** The map checker's finds: how many, and each one (a click goes there and selects what's at fault). */
   private checks() {
     const editor = this.editor;
-    const issues = editor.mapIssues();
+    const all = editor.mapIssues();
+    const issues = all.filter((issue) => !editor.isIgnored(issue));
+    const ignored = all.filter((issue) => editor.isIgnored(issue));
     const box = document.createElement('div');
     box.className = 'ins-section ni-checks';
     const jump = this.jumpIssues();
@@ -292,19 +366,14 @@ export class NoteInspector {
     head.append(' ', summary);
     box.append(head);
     for (const warning of jump) box.append(Object.assign(document.createElement('div'), { className: `jump-${warning.level}`, textContent: `⚠ ${warning.text}` }));
-    if (issues.length === 0) {
-      box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Правила BSMG, BeatLeader и ScoreSaber. Отключить отдельные — в настройках, «Проверка карты».' }));
-      return box;
-    }
-    const list = document.createElement('div');
-    list.className = 'ni-check-list';
+    if (issues.length === 0) box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Правила BSMG, BeatLeader и ScoreSaber. Отключить отдельные — в настройках, «Проверка карты». ПКМ по строке — игнорировать.' }));
     const names = new Map(CHECK_RULES.map((rule) => [rule.id, rule]));
     const item = (issue: MapIssue) => {
       const line = document.createElement('button');
       line.type = 'button';
       line.className = `ni-check ni-check-${issue.level}`;
       const rule = names.get(issue.rule);
-      line.title = rule === undefined ? '' : `${rule.name} (${rule.source}): ${rule.about}`;
+      line.title = `${rule === undefined ? '' : `${rule.name} (${rule.source}): ${rule.about}\n`}ПКМ — ${editor.isIgnored(issue) ? 'не игнорировать' : 'игнорировать'}`;
       const where = Object.assign(document.createElement('b'), { textContent: (Math.round(issue.beat * 100) / 100).toString() });
       line.append(Object.assign(document.createElement('span'), { className: 'ni-check-icon', textContent: issue.level === 'error' ? '⛔' : issue.level === 'warn' ? '⚠' : 'ℹ' }), where, Object.assign(document.createElement('span'), { textContent: issue.text }));
       line.addEventListener('click', () => {
@@ -315,8 +384,18 @@ export class NoteInspector {
           editor.selectNotes(ids);
         }
       });
+      line.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        const off = editor.isIgnored(issue);
+        showMenu(event.clientX, event.clientY, [
+          { label: off ? 'Не игнорировать' : 'Игнорировать', action: () => editor.ignoreIssue(issue, !off) },
+          ...(rule === undefined ? [] : [{ label: `Отключить правило «${rule.name}»`, action: () => setSettings({ disabledChecks: [...new Set([...settings().disabledChecks, rule.id])] }) }]),
+        ]);
+      });
       return line;
     };
+    const list = document.createElement('div');
+    list.className = 'ni-check-list';
     const shown = 60;
     list.append(...issues.slice(0, shown).map(item));
     if (issues.length > shown) {
@@ -328,6 +407,19 @@ export class NoteInspector {
       list.append(more);
     }
     box.append(list);
+    // the ignored ones: at the end, folded
+    if (ignored.length > 0) {
+      const fold = document.createElement('details');
+      fold.className = 'ni-ignored';
+      fold.open = this.ignoredOpen;
+      fold.addEventListener('toggle', () => (this.ignoredOpen = fold.open));
+      fold.append(Object.assign(document.createElement('summary'), { textContent: `Игнорируемые (${String(ignored.length)})` }));
+      const rest = document.createElement('div');
+      rest.className = 'ni-check-list';
+      rest.append(...ignored.map(item));
+      fold.append(rest);
+      box.append(fold);
+    }
     return box;
   }
 }
@@ -347,6 +439,12 @@ export function strobeStepSelect(value: number) {
   ] as const)
     select.append(Object.assign(document.createElement('option'), { value: String(step), textContent: text }));
   select.value = String(value);
-  if (select.selectedIndex < 0) select.value = '0.25';
+  if (select.selectedIndex < 0 && value > 0) {
+    // (a strobe of another step: shown as it is)
+    const inverse = 1 / value;
+    const text = Math.abs(inverse - Math.round(inverse)) < 1e-3 ? `1/${String(Math.round(inverse))}` : String(Math.round(value * 1000) / 1000);
+    select.append(Object.assign(document.createElement('option'), { value: String(value), textContent: text }));
+    select.value = String(value);
+  }
   return select;
 }
