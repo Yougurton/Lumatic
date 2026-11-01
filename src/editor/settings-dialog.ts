@@ -1,6 +1,6 @@
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
-import { CHECK_RULES, type CheckRule } from './checks';
+import { CHECK_RULES, rulesOf, type CheckRule, type CheckStandard } from './checks';
 
 /**
  * "Settings": the language, pasting, the 3D view, the timeline, the sound, saving — and the hotkeys'
@@ -249,12 +249,43 @@ export function settingsDialog(restart: () => void) {
           textContent: 'Что проверять в нотах на вкладке «Ноты»: ошибки и предупреждения видны в панели справа и метками над дорожками таймлайна. Правила — из руководства BSMG и критериев рейтинга BeatLeader (BL) и ScoreSaber (SS).',
         }),
       ];
+      // presets: whose criteria — their rules ticked, their thresholds used
+      const presets: [CheckStandard, string, string][] = [
+        ['all', 'Все правила', 'Все правила, у каждого — самый строгий порог'],
+        ['BSMG', 'BSMG', 'Только советы руководства BSMG (bsmg.wiki)'],
+        ['BL', 'BeatLeader', 'Только критерии рейтинга BeatLeader, с их порогами'],
+        ['SS', 'ScoreSaber', 'Только критерии рейтинга ScoreSaber, с их порогами'],
+      ];
+      const presetRow = document.createElement('span');
+      presetRow.className = 'steps-buttons';
+      const drawPresets = () =>
+        presetRow.replaceChildren(
+          ...presets.map(([id, label, hint]) => {
+            const button = Object.assign(document.createElement('button'), { type: 'button', textContent: label, title: hint });
+            const wanted = new Set(rulesOf(id));
+            button.classList.toggle('active', settings().checkPreset === id && CHECK_RULES.every((rule) => wanted.has(rule.id) !== settings().disabledChecks.includes(rule.id)));
+            button.addEventListener('click', () => {
+              change({ checkPreset: id, disabledChecks: CHECK_RULES.filter((rule) => !wanted.has(rule.id)).map((rule) => rule.id) });
+              for (const box of boxes) box.checked = wanted.has(box.dataset.rule ?? '');
+              drawPresets();
+            });
+            return button;
+          }),
+        );
+      drawPresets();
+      out.push(row('Критерии', presetRow, 'Пресет отмечает правила этого сайта и берёт его пороги (hot start, бомбы, длина стен). Отдельные правила можно снять ниже.'));
       const buttons = document.createElement('div');
       buttons.className = 'steps-buttons';
       const on = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Включить все' });
       const off = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Выключить все' });
-      on.addEventListener('click', () => all(true));
-      off.addEventListener('click', () => all(false));
+      on.addEventListener('click', () => {
+        all(true);
+        drawPresets();
+      });
+      off.addEventListener('click', () => {
+        all(false);
+        drawPresets();
+      });
       buttons.append(on, off);
       out.push(buttons);
       for (const [group, title] of groups) {
@@ -263,7 +294,11 @@ export function settingsDialog(restart: () => void) {
           const line = document.createElement('label');
           line.className = 'set-check-rule';
           const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !settings().disabledChecks.includes(rule.id) });
-          box.addEventListener('change', () => set(rule.id, box.checked));
+          box.dataset.rule = rule.id;
+          box.addEventListener('change', () => {
+            set(rule.id, box.checked);
+            drawPresets();
+          });
           boxes.push(box);
           line.append(box, Object.assign(document.createElement('span'), { textContent: rule.name }), Object.assign(document.createElement('em'), { textContent: rule.source }), Object.assign(document.createElement('small'), { textContent: rule.about }));
           out.push(line);

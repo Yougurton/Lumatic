@@ -346,3 +346,16 @@ export function objectSpan(kind: ObjectKind, item: MapNote | MapBomb | MapWall |
   if (kind === 'arcs' || kind === 'chains') return [item.b, (item as MapArc).tb];
   return [item.b, item.b];
 }
+
+/**
+ * A wall strobe: short walls of one shape one after another from `from` up to `to` — one every `step`
+ * beats, each `fill` of the step long (as the lights' strobe).
+ */
+export function strobeWalls(shape: { x: number; y: number; w: number; h: number }, from: number, to: number, step: number, fill: number): Omit<MapWall, 'id'>[] {
+  const out: Omit<MapWall, 'id'>[] = [];
+  if (!(step > 0)) return out;
+  const length = Math.max(1 / 64, step * Math.min(1, Math.max(0.05, fill)));
+  const round = (value: number) => Math.round(value * 1e6) / 1e6;
+  for (let k = 0; from + k * step < to - 1e-6 && k < 4096; k++) out.push({ b: round(from + k * step), d: round(length), ...shape });
+  return out;
+}

@@ -42,7 +42,9 @@ check('stack ok', !rules({ notes: [...filler(), n(211, 0, 2, 0, 1), n(211, 0, 1,
 check('same swing angle', rules({ notes: [...filler(), n(211, 0, 2, 0, 1), n(211, 0, 1, 0, 0)] }).has('sameSwingAngle'));
 check('pre swing', rules({ notes: [...filler(), n(211, 1, 1, 0, 1), n(211, 1, 2, 1, 8)] }).has('preSwing'));
 check('double directional', rules({ notes: [...filler(), n(211, 0, 0, 0, 1), n(211.5, 0, 0, 0, 1)] }).has('doubleDirectional'));
-check('bomb reset', !rules({ notes: [...filler(), n(211, 0, 0, 0, 1), n(212.5, 0, 0, 0, 1)], bombs: [bomb(211.75, 0, 2)] }).has('doubleDirectional'));
+check('bomb reset', !run({ notes: [...filler(), n(211, 0, 0, 0, 1), n(212.5, 0, 0, 0, 1)], bombs: [bomb(211.75, 0, 2)] }).some((issue) => issue.rule === 'doubleDirectional' && issue.beat === 212.5));
+check('far DD warns', run({ notes: [...filler(), n(211, 0, 0, 0, 1), n(214, 0, 0, 0, 1)] }).some((issue) => issue.rule === 'doubleDirectional' && issue.beat === 214 && issue.level === 'warn'));
+check('close DD errs', run({ notes: [...filler(), n(211, 0, 0, 0, 1), n(211.5, 0, 0, 0, 1)] }).some((issue) => issue.rule === 'doubleDirectional' && issue.beat === 211.5 && issue.level === 'error'));
 check('vision block', rules({ notes: [...filler(), n(211, 1, 1, 0, 1), n(211.25, 2, 0, 1, 1)] }).has('visionBlock'));
 check('angle offset', rules({ notes: [...filler(), n(211, 0, 0, 0, 1, 15)] }).has('angleOffset'));
 check('hammer hit', rules({ notes: [...filler(), n(211, 0, 1, 0, 1)], bombs: [bomb(211, 0, 0)] }).has('hammerHit'));

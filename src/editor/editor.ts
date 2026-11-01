@@ -49,7 +49,7 @@ import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
 import { checkMap, type MapIssue } from './checks';
-import { allObjects, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
+import { allObjects, strobeWalls, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
@@ -204,6 +204,8 @@ export class Editor {
   noteRow = 0;
   /** What walls are drawn as: full height (dodged) or crouch ones. */
   wallKind: WallKind = 'full';
+  /** The wall tool draws a strobe: short walls one every `step` beats, each `fill` of the step long. */
+  wallStrobe = { on: false, step: 0.25, fill: 0.5 };
   private noteUndo: string[] = [];
   private noteRedo: string[] = [];
   private noteClipboard: { kind: ObjectKind; item: MapObjects[ObjectKind][number] }[] | null = null;
@@ -2408,10 +2410,11 @@ export class Editor {
   /** What the map checker finds in the difficulty's notes (worked out again only after a change). */
   mapIssues(): MapIssue[] {
     const disabled = settings().disabledChecks;
-    const key = `${String(this.noteVersion)}|${this.row?.key ?? ''}|${String(this.duration)}|${disabled.join(',')}`;
+    const standard = settings().checkPreset;
+    const key = `${String(this.noteVersion)}|${this.row?.key ?? ''}|${String(this.duration)}|${disabled.join(',')}|${standard}`;
     if (key !== this.issuesKey) {
       this.issuesKey = key;
-      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: this.row?.infoDifficulty?.difficulty, disabled });
+      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: this.row?.infoDifficulty?.difficulty, disabled, standard });
     }
     return this.issues;
   }
@@ -2510,6 +2513,18 @@ export class Editor {
       (this.objects as Record<ObjectKind, { id: string }[]>)[kind] = (this.objects[kind] as { id: string }[]).filter((item) => !ids.has(item.id));
     }
     for (const id of ids) this.noteSelection.delete(id);
+  }
+
+  /** The selected walls as strobes up to a beat (each wall the first of its strobe; one undo step). */
+  strobeSelectedWalls(until: number, step: number, fill: number) {
+    const walls = this.objects.walls.filter((wall) => this.noteSelection.has(wall.id));
+    const made = walls.flatMap((wall) => strobeWalls({ x: wall.x, y: wall.y, w: wall.w, h: wall.h }, wall.b, Math.max(until, wall.b + step), step, fill).map((item) => ({ ...item, id: newId('n') })));
+    if (made.length === 0) return;
+    this.noteCheckpoint();
+    this.removeObjects(new Set(walls.map((wall) => wall.id)));
+    this.objects.walls.push(...made);
+    this.noteSelection = new Set(made.map((wall) => wall.id));
+    this.notesChanged();
   }
 
   deleteNoteSelection() {

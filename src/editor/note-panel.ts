@@ -2,6 +2,7 @@ import type { Editor } from './editor';
 import { ROW_WALL, WALL_SHAPES, type MapNote } from './notes';
 import { drawGameNote } from './note-draw';
 import { newId } from './model';
+import { strobeStepSelect } from './note-inspector';
 import { onSettings, setSettings, settings } from './settings';
 
 /**
@@ -138,7 +139,7 @@ export class NotePanel {
     const editor = this.editor;
     const tool = editor.noteTool;
     const scheme = editor.preview.colors;
-    const key = `${tool.kind}|${String(tool.direction)}|${editor.wallKind}|${[...scheme.leftNote, ...scheme.rightNote, ...scheme.obstacle].join(',')}`;
+    const key = `${tool.kind}|${String(tool.direction)}|${editor.wallKind}|${JSON.stringify(editor.wallStrobe)}|${[...scheme.leftNote, ...scheme.rightNote, ...scheme.obstacle].join(',')}`;
     if (this.tools.dataset.key === key) return;
     this.tools.dataset.key = key;
     const colors = editor.preview.colors;
@@ -195,7 +196,28 @@ export class NotePanel {
         });
         side.append(button);
       }
-      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На 3D-стене и в сетке: нижний ряд — полная стена, выше — присед; протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
+      // a strobe: the wall drawn along the timeline becomes short walls one after another
+      const strobe = document.createElement('div');
+      strobe.className = 'np-strobe';
+      const on = Object.assign(document.createElement('input'), { type: 'checkbox', checked: editor.wallStrobe.on });
+      const toggle = document.createElement('label');
+      toggle.title = 'Протянутая по таймлайну стена станет рядом коротких стен с этим шагом (как строб у света)';
+      toggle.append(on, ' ⚡ Строб');
+      const step = strobeStepSelect(editor.wallStrobe.step);
+      step.title = 'Шаг строба (доли)';
+      const fill = Object.assign(document.createElement('input'), { type: 'number', min: '5', max: '100', step: '5', value: String(Math.round(editor.wallStrobe.fill * 100)) });
+      fill.title = 'Длина каждой стены, % шага';
+      const apply = () => {
+        const part = Number(fill.value) / 100;
+        editor.wallStrobe = { on: on.checked, step: Number(step.value) || 0.25, fill: part > 0 ? Math.min(1, part) : editor.wallStrobe.fill };
+        editor.emit('selection');
+      };
+      on.addEventListener('change', apply);
+      step.addEventListener('change', apply);
+      fill.addEventListener('change', apply);
+      strobe.append(toggle, step, fill, '%');
+      side.append(strobe);
+      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: editor.wallStrobe.on ? 'Строб: протяните по дорожкам таймлайна — получится ряд коротких стен. Из выделенной стены — кнопка в панели «Выделено».' : 'На 3D-стене и в сетке: нижний ряд — полная стена, выше — присед; протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
     } else {
       side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'W/A/S/D, F — точка; две сразу — диагональ. У выделенных нот меняется тоже.' }));
     }

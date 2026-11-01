@@ -29,31 +29,39 @@ export interface CheckRule {
 }
 
 export const CHECK_RULES: CheckRule[] = [
-  { id: 'stacked', name: 'Объекты друг в друге', source: 'BSMG · BL · SS', group: 'notes', about: 'Две ноты или нота и бомба в одной клетке в одно время' },
-  { id: 'handclap', name: 'Хлопок руками', source: 'BSMG · BL', group: 'notes', about: 'Красная и синяя ноты в одно время направляют руки навстречу друг другу' },
-  { id: 'parallel', name: 'Параллельные ноты одного цвета', source: 'BL · SS', group: 'notes', about: 'Ноты одного цвета в один удар стоят рядом поперёк замаха, а не по его линии' },
-  { id: 'sameSwingAngle', name: 'Разные стрелки в один удар', source: 'BL · SS', group: 'notes', about: 'Стрелки нот одного цвета в одно время расходятся больше чем на 45°' },
-  { id: 'preSwing', name: 'Нота в замахе другого цвета', source: 'BL · SS', group: 'notes', about: 'Нота стоит там, откуда замахивается сабля другого цвета' },
-  { id: 'postSwing', name: 'Нота на пути удара другого цвета', source: 'BSMG · SS', group: 'notes', about: 'Сразу после удара на его продолжении стоит нота другого цвета (hitbox abuse)' },
-  { id: 'doubleDirectional', name: 'Двойное направление', source: 'BSMG · SS', group: 'notes', about: 'Две ноты одного цвета подряд в одну сторону без бомбы-сброса (ближе 1,5 доли)' },
-  { id: 'visionBlock', name: 'Перекрытие обзора', source: 'BSMG · BL', group: 'notes', about: 'Нота у лица (средний ряд, центр) закрывает следующие ноты позади неё' },
-  { id: 'angleOffset', name: 'Поворот стрелки', source: 'SS', group: 'notes', about: 'У стрелок поворот должен быть 0, у точек — кратен 45°' },
-  { id: 'sliderSpacing', name: 'Неровный слайдер', source: 'BL', group: 'notes', about: 'В слайдере из 3+ нот промежутки между нотами разные' },
-  { id: 'fastStream', name: 'Слишком быстро', source: 'SS', group: 'notes', about: 'Удары одной рукой чаще 350 BPM дольше 8 долей (или чаще 425)' },
-  { id: 'hammerHit', name: 'Бомба на пути удара', source: 'BSMG · BL · SS', group: 'bombs', about: 'Стрелка указывает на бомбу рядом (hammer hit) или бомба стоит в замахе' },
+  { id: 'stacked', name: 'Merged objects', source: 'BSMG · BL · SS', group: 'notes', about: 'Две ноты или нота и бомба в одной клетке в одно время' },
+  { id: 'handclap', name: 'Handclap', source: 'BSMG · BL', group: 'notes', about: 'Красная и синяя ноты в одно время направляют руки навстречу друг другу (controller clash)' },
+  { id: 'parallel', name: 'Parallel notes', source: 'BL · SS', group: 'notes', about: 'Ноты одного цвета в один swing стоят рядом поперёк замаха, а не по его линии' },
+  { id: 'sameSwingAngle', name: 'Cut direction в одном swing', source: 'BL · SS', group: 'notes', about: 'Стрелки нот одного цвета в одно время расходятся больше чем на 45°' },
+  { id: 'preSwing', name: 'Pre-swing path', source: 'BL · SS', group: 'notes', about: 'Нота стоит в pre-swing (замахе) сабли другого цвета' },
+  { id: 'postSwing', name: 'Hitbox abuse', source: 'BSMG · SS', group: 'notes', about: 'Сразу после удара в его follow-through стоит нота другого цвета' },
+  { id: 'doubleDirectional', name: 'Double directional (DD)', source: 'BSMG · SS', group: 'notes', about: 'Две ноты одного цвета подряд в одну сторону без bomb reset: ближе 1,5 доли — ошибка, дальше — предупреждение' },
+  { id: 'visionBlock', name: 'Vision block (VB)', source: 'BSMG · BL', group: 'notes', about: 'Face note (средний ряд, центр) закрывает следующие ноты позади неё' },
+  { id: 'angleOffset', name: 'Angle offset', source: 'SS', group: 'notes', about: 'У arrow-нот angle offset должен быть 0, у dot-нот — кратен 45°' },
+  { id: 'sliderSpacing', name: 'Неровный slider', source: 'BL', group: 'notes', about: 'В slider из 3+ нот промежутки между нотами разные' },
+  { id: 'fastStream', name: 'EBPM выше 350', source: 'SS', group: 'notes', about: 'Удары одной рукой быстрее 350 EBPM дольше 8 долей (или быстрее 425)' },
+  { id: 'hammerHit', name: 'Hammer hit', source: 'BSMG · BL · SS', group: 'bombs', about: 'Arrow-нота указывает на бомбу рядом, или бомба стоит в pre-swing' },
   { id: 'bombSpacing', name: 'Бомбы слишком часто', source: 'BL · SS', group: 'bombs', about: 'Бомбы в одной клетке ближе 20 мс (SS) или 30 мс (BL)' },
-  { id: 'inWall', name: 'Нота или бомба в стене', source: 'BL · SS', group: 'walls', about: 'Нота или бомба внутри стены' },
-  { id: 'wallShape', name: 'Неправильная стена', source: 'SS · BL', group: 'walls', about: 'Нулевая ширина, короче 15 мс, не полная и не присед, выходит за сетку' },
-  { id: 'dangerDash', name: 'Стена на обе средние дорожки', source: 'BSMG · SS', group: 'walls', about: 'Полные стены закрывают обе средние дорожки — выгоняют игрока на край' },
-  { id: 'rapidDodge', name: 'Частые уклонения', source: 'BL', group: 'walls', about: 'Стены заставляют двигать голову больше 3 раз в секунду' },
-  { id: 'arcs', name: 'Дуги', source: 'SS', group: 'arcs', about: 'Дуга не связана с нотой; сила изгиба вне 0,1–1,5' },
-  { id: 'chains', name: 'Цепи', source: 'SS', group: 'arcs', about: 'ScoreSaber не ранкает карты с цепями' },
-  { id: 'hotStart', name: 'Горячий старт', source: 'BSMG · BL · SS', group: 'timing', about: 'Первые объекты раньше 1,5 с (ошибка) или 2 с (предупреждение)' },
-  { id: 'coldEnd', name: 'Холодный конец', source: 'BL · SS', group: 'timing', about: 'После последнего объекта меньше 2 с песни' },
-  { id: 'longOutro', name: 'Долгая концовка', source: 'SS', group: 'timing', about: 'После последнего объекта больше 15 с без нот (если там нет света)' },
-  { id: 'mapLength', name: 'Длина карты', source: 'BL · SS', group: 'timing', about: 'Короче 45 с от первой ноты до последней; песня короче 20 с или длиннее 10 минут' },
-  { id: 'jump', name: 'NJS, подлёт и плотность', source: 'BSMG', group: 'timing', about: 'Скорость нот, дальность появления, время реакции и нот в секунду по таблицам BSMG' },
+  { id: 'inWall', name: 'Нота в стене', source: 'BL · SS', group: 'walls', about: 'Нота или бомба внутри стены' },
+  { id: 'wallShape', name: 'Неправильная стена', source: 'BL · SS', group: 'walls', about: 'Нулевая ширина (fake wall), короче 15 мс (BL: 13,8 мс), не полная и не crouch, выходит за сетку' },
+  { id: 'dangerDash', name: 'Danger dash', source: 'BSMG · SS', group: 'walls', about: 'Полные стены закрывают обе средние дорожки — выгоняют игрока на край (3-wide wall)' },
+  { id: 'rapidDodge', name: 'Rapid dodge walls', source: 'BL', group: 'walls', about: 'Dodge walls заставляют двигать голову больше 3 раз в секунду' },
+  { id: 'arcs', name: 'Arcs', source: 'SS', group: 'arcs', about: 'Arc не связана с нотой; multiplier вне 0,1–1,5' },
+  { id: 'chains', name: 'Chains', source: 'SS', group: 'arcs', about: 'ScoreSaber не ранкает карты с chains' },
+  { id: 'hotStart', name: 'Hot start', source: 'BSMG · BL · SS', group: 'timing', about: 'Первые объекты раньше 1,5 с (SS), 1,33 с (BL) или 2 с (BSMG)' },
+  { id: 'coldEnd', name: 'Cold end', source: 'BL · SS', group: 'timing', about: 'После последнего объекта меньше 2 с песни' },
+  { id: 'longOutro', name: 'Долгий outro', source: 'SS', group: 'timing', about: 'После последнего объекта больше 15 с без нот (если там нет света)' },
+  { id: 'mapLength', name: 'Длина карты', source: 'BL · SS', group: 'timing', about: 'Короче 45 с от первой ноты до последней (BL); песня короче 20 с или длиннее 10 минут (SS)' },
+  { id: 'jump', name: 'NJS, JD и NPS', source: 'BSMG', group: 'timing', about: 'Note jump speed, jump distance, reaction time и notes per second по таблицам BSMG' },
 ];
+
+/** Whose criteria to check against (thresholds where they differ; `all`: every one of them). */
+export type CheckStandard = 'all' | 'BSMG' | 'BL' | 'SS';
+
+/** The rules a standard has. */
+export function rulesOf(standard: CheckStandard) {
+  return CHECK_RULES.filter((rule) => standard === 'all' || rule.source.split(' · ').includes(standard)).map((rule) => rule.id);
+}
 
 export interface CheckInput {
   objects: MapObjects;
@@ -64,6 +72,8 @@ export interface CheckInput {
   difficulty?: string;
   /** Rules switched off. */
   disabled?: Iterable<string>;
+  /** Whose thresholds (default: all — the strictest of each). */
+  standard?: CheckStandard;
 }
 
 /** Cut directions (0 up … 7 down-right; 8 a dot) as steps on the grid (x right, y up). */
@@ -98,6 +108,7 @@ const ms = (seconds: number) => `${String(Math.round(seconds * 1000))} мс`;
 
 export function checkMap(input: CheckInput): MapIssue[] {
   const off = new Set(input.disabled ?? []);
+  const standard = input.standard ?? 'all';
   const issues: MapIssue[] = [];
   const counts = new Map<string, number>();
   const add = (rule: string, level: IssueLevel, beat: number, ids: string[], text: string) => {
@@ -156,7 +167,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
           const cBlue = cutOf(blue);
           if (cr !== null && cBlue !== null) {
             const p: [number, number] = [blue.x - red.x, blue.y - red.y];
-            if (cr[0] * p[0] + cr[1] * p[1] > 0.3 && -(cBlue[0] * p[0] + cBlue[1] * p[1]) > 0.3 && cr[0] * cBlue[0] + cr[1] * cBlue[1] < -0.3) add('handclap', 'error', beat, [red.id, blue.id], 'Хлопок руками: красная и синяя бьются навстречу друг другу');
+            if (cr[0] * p[0] + cr[1] * p[1] > 0.3 && -(cBlue[0] * p[0] + cBlue[1] * p[1]) > 0.3 && cr[0] * cBlue[0] + cr[1] * cBlue[1] < -0.3) add('handclap', 'error', beat, [red.id, blue.id], 'Handclap: красная и синяя бьют навстречу друг другу');
           }
           // in the other colour's swing: where it comes from (its back side)
           for (const [note, other] of [
@@ -165,17 +176,17 @@ export function checkMap(input: CheckInput): MapIssue[] {
           ] as const) {
             const cut = cutOf(note);
             if (cut === null) continue;
-            if (Math.round(note.x - cut[0]) === other.x && Math.round(note.y - cut[1]) === other.y) add('preSwing', 'error', beat, [note.id, other.id], `${other.c === 0 ? 'Красная' : 'Синяя'} нота стоит в замахе ${note.c === 0 ? 'красной' : 'синей'}`);
+            if (Math.round(note.x - cut[0]) === other.x && Math.round(note.y - cut[1]) === other.y) add('preSwing', 'error', beat, [note.id, other.id], `Pre-swing path: ${other.c === 0 ? 'красная' : 'синяя'} нота в замахе ${note.c === 0 ? 'красной' : 'синей'}`);
           }
         } else if (ca !== null && cb !== null) {
-          if (angleBetween(ca, cb) > 45.5) add('sameSwingAngle', 'error', beat, [a.id, b.id], `Ноты одного цвета в один удар: стрелки расходятся на ${String(Math.round(angleBetween(ca, cb)))}°`);
+          if (angleBetween(ca, cb) > 45.5) add('sameSwingAngle', 'error', beat, [a.id, b.id], `Cut direction в одном swing расходится на ${String(Math.round(angleBetween(ca, cb)))}°`);
           else {
             // side by side across the cut, not along it
             const line: [number, number] = [b.x - a.x, b.y - a.y];
             const length = Math.hypot(line[0], line[1]);
             if (length > 0) {
               const along = Math.abs((line[0] * ca[0] + line[1] * ca[1]) / length);
-              if (along < Math.cos((50 * Math.PI) / 180)) add('parallel', 'error', beat, [a.id, b.id], 'Ноты одного цвета в один удар стоят поперёк замаха (параллельно)');
+              if (along < Math.cos((50 * Math.PI) / 180)) add('parallel', 'error', beat, [a.id, b.id], 'Parallel notes: ноты одного цвета в один swing стоят поперёк замаха');
             }
           }
         }
@@ -197,7 +208,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const flush = () => {
         if (run.length >= 3) {
           const gaps = run.slice(1).map((note, index) => note.b - run[index]!.b);
-          if (Math.max(...gaps) - Math.min(...gaps) > 0.004) add('sliderSpacing', 'warn', run[0]!.b, run.map((note) => note.id), `Слайдер из ${String(run.length)} нот с разными промежутками`);
+          if (Math.max(...gaps) - Math.min(...gaps) > 0.004) add('sliderSpacing', 'warn', run[0]!.b, run.map((note) => note.id), `Неровный slider: ${String(run.length)} нот с разными промежутками`);
         }
         run = [];
       };
@@ -217,8 +228,9 @@ export function checkMap(input: CheckInput): MapIssue[] {
       }
       flush();
     }
-    // double directionals: two swings the same way with no reset (a bomb) between
-    if (on('doubleDirectional') && !(input.difficulty === 'Easy' || input.difficulty === 'Normal')) {
+    // double directionals: two swings the same way with no bomb reset between (a bomb by the hand
+    // that makes it swing back) — close (under 1.5 beats) an error, farther a warning
+    if (on('doubleDirectional')) {
       for (let i = 1; i < swings.length; i++) {
         const before = swings[i - 1]!;
         const after = swings[i]!;
@@ -227,10 +239,11 @@ export function checkMap(input: CheckInput): MapIssue[] {
         if (a === null || b === null) continue;
         const gap = after[0]!.b - before[0]!.b;
         // (a slider's notes are one swing)
-        if (sec(after[0]!.b) - sec(before[0]!.b) < 0.09 || gap >= 1.5) continue;
+        if (sec(after[0]!.b) - sec(before[0]!.b) < 0.09) continue;
         if (angleBetween(a, b) > 45.5) continue;
-        const reset = bombs.some((bomb) => bomb.b > before[0]!.b + SAME && bomb.b < after[0]!.b - SAME);
-        if (!reset) add('doubleDirectional', 'warn', after[0]!.b, [before[0]!.id, after[0]!.id], `Двойное направление: ${colour === 0 ? 'красная' : 'синяя'} дважды в одну сторону через ${String(Math.round(gap * 100) / 100)} доли без сброса`);
+        const xs = [...before, ...after].map((note) => note.x);
+        const reset = bombs.some((bomb) => bomb.b > before[0]!.b + SAME && bomb.b < after[0]!.b - SAME && bomb.x >= Math.min(...xs) - 1 && bomb.x <= Math.max(...xs) + 1);
+        if (!reset) add('doubleDirectional', gap < 1.5 ? 'error' : 'warn', after[0]!.b, [before[before.length - 1]!.id, after[0]!.id], `Double directional: ${colour === 0 ? 'красная' : 'синяя'} дважды в одну сторону через ${String(Math.round(gap * 100) / 100)} доли без bomb reset`);
       }
     }
     // too fast for one hand (SS: 350 BPM sustained; bursts to 8 beats, never over 425)
@@ -240,7 +253,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const close = (end: number) => {
         if (start < 0) return;
         const swingsIn = end - start;
-        if (swingsIn / 2 > 8 || peak > 425) add('fastStream', 'error', swings[start]![0]!.b, swings.slice(start, end + 1).map((swing) => swing[0]!.id).slice(0, 64), `${colour === 0 ? 'Красная' : 'Синяя'} рука: ${String(Math.round(peak))} BPM на протяжении ${String(Math.round(swingsIn / 2))} долей`);
+        if (swingsIn / 2 > 8 || peak > 425) add('fastStream', 'error', swings[start]![0]!.b, swings.slice(start, end + 1).map((swing) => swing[0]!.id).slice(0, 64), `${colour === 0 ? 'Красная' : 'Синяя'} рука: ${String(Math.round(peak))} EBPM на протяжении ${String(Math.round(swingsIn / 2))} долей`);
         start = -1;
         peak = 0;
       };
@@ -274,7 +287,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
         const dt = sec(other.b) - t;
         if (dt > 0.15) break;
         if (dt < 0.005 || other.c === note.c) continue;
-        if (other.x === tx && other.y === ty) add('postSwing', 'warn', other.b, [note.id, other.id], `Нота через ${ms(dt)} на пути удара другого цвета`);
+        if (other.x === tx && other.y === ty) add('postSwing', 'warn', other.b, [note.id, other.id], `Hitbox abuse: нота через ${ms(dt)} в follow-through другого цвета`);
       }
     }
   }
@@ -292,7 +305,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
         if (dt < 0.005 || Math.abs(hidden.x - face.x) > 1 || hidden.x === 0 || hidden.x === 3) continue;
         // (the same hand's slider goes on with the same swing)
         if (hidden.c === face.c && dt < 0.09) continue;
-        add('visionBlock', 'warn', hidden.b, [face.id, hidden.id], `Нота у лица закрывает ноту через ${ms(dt)} (BL: нужно от 250 мс, если она предсказуема, иначе от 500 мс)`);
+        add('visionBlock', 'warn', hidden.b, [face.id, hidden.id], `Vision block: face note закрывает ноту через ${ms(dt)} (BL: от 250 мс, если она предсказуема, иначе от 500 мс)`);
         break;
       }
     }
@@ -302,8 +315,8 @@ export function checkMap(input: CheckInput): MapIssue[] {
   if (on('angleOffset')) {
     for (const note of notes) {
       if (note.a === 0) continue;
-      if (note.d !== 8) add('angleOffset', 'warn', note.b, [note.id], `У стрелки поворот ${String(note.a)}° — для рейтинга (SS) нужен 0`);
-      else if (note.a % 45 !== 0) add('angleOffset', 'warn', note.b, [note.id], `У точки поворот ${String(note.a)}° — для рейтинга (SS) нужно кратно 45°`);
+      if (note.d !== 8) add('angleOffset', 'warn', note.b, [note.id], `Angle offset ${String(note.a)}° у arrow-ноты — SS требует 0`);
+      else if (note.a % 45 !== 0) add('angleOffset', 'warn', note.b, [note.id], `Angle offset ${String(note.a)}° у dot-ноты — SS требует кратно 45°`);
     }
   }
 
@@ -319,8 +332,8 @@ export function checkMap(input: CheckInput): MapIssue[] {
         const bomb = bombs[k]!;
         const dt = sec(bomb.b) - t;
         if (dt > 0.06) break;
-        if (bomb.x === Math.round(note.x + cut[0]) && bomb.y === Math.round(note.y + cut[1]) && dt >= -0.005) add('hammerHit', 'error', note.b, [note.id, bomb.id], 'Стрелка указывает прямо на бомбу (hammer hit)');
-        else if (bomb.x === Math.round(note.x - cut[0]) && bomb.y === Math.round(note.y - cut[1]) && dt <= 0.005) add('hammerHit', 'error', note.b, [note.id, bomb.id], 'Бомба в замахе ноты');
+        if (bomb.x === Math.round(note.x + cut[0]) && bomb.y === Math.round(note.y + cut[1]) && dt >= -0.005) add('hammerHit', 'error', note.b, [note.id, bomb.id], 'Hammer hit: arrow-нота указывает прямо на бомбу');
+        else if (bomb.x === Math.round(note.x - cut[0]) && bomb.y === Math.round(note.y - cut[1]) && dt <= 0.005) add('hammerHit', 'error', note.b, [note.id, bomb.id], 'Бомба в pre-swing ноты');
       }
     }
   }
@@ -331,8 +344,8 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const before = last.get(cell);
       if (before !== undefined) {
         const dt = sec(bomb.b) - sec(before.b);
-        if (dt < 0.02) add('bombSpacing', 'error', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (SS: от 20 мс)`);
-        else if (dt < 0.03) add('bombSpacing', 'warn', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (BL: от 30 мс)`);
+        if (dt < 0.02 && standard !== 'BL') add('bombSpacing', 'error', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (SS: от 20 мс)`);
+        else if (dt < 0.03 && standard !== 'SS') add('bombSpacing', standard === 'BL' ? 'error' : 'warn', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (BL: от 30 мс)`);
       }
       last.set(cell, { b: bomb.b, id: bomb.id });
     }
@@ -360,12 +373,12 @@ export function checkMap(input: CheckInput): MapIssue[] {
   if (on('wallShape')) {
     for (const wall of walls) {
       const length = sec(wall.b + wall.d) - sec(wall.b);
-      if (wall.w <= 0) add('wallShape', 'error', wall.b, [wall.id], 'Стена нулевой или отрицательной ширины (ложная стена)');
-      else if (length < 0.015) add('wallShape', 'error', wall.b, [wall.id], `Стена короче 15 мс (${ms(length)})`);
+      if (wall.w <= 0) add('wallShape', 'error', wall.b, [wall.id], 'Fake wall: ширина 0 или меньше');
+      else if (length < (standard === 'BL' ? 0.0138 : 0.015) && (standard !== 'BL' || (wall.x < 3 && wall.x + wall.w > 1))) add('wallShape', 'error', wall.b, [wall.id], standard === 'BL' ? `Стена в средних дорожках короче 13,8 мс (${ms(length)})` : `Стена короче 15 мс (${ms(length)})`);
       // (walls off the grid altogether are scenery)
       const inGrid = wall.x < 4 && wall.x + wall.w > 0;
       if (inGrid && wall.w > 0 && (wall.x < 0 || wall.x + wall.w > 4 || wall.y < 0 || wall.y + wall.h > 5)) add('wallShape', 'error', wall.b, [wall.id], 'Стена выходит за сетку 4×3');
-      else if (inGrid && wall.w > 0 && wallKindOf(wall) === 'deep') add('wallShape', 'warn', wall.b, [wall.id], 'Стена не полная и не присед — для рейтинга нужна одна из двух');
+      else if (inGrid && wall.w > 0 && wallKindOf(wall) === 'deep') add('wallShape', 'warn', wall.b, [wall.id], 'Стена не полная и не crouch — для рейтинга нужна одна из двух');
     }
   }
   /** Full walls (they make the player step aside). */
@@ -375,7 +388,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const active = tall.filter((other) => other.b <= wall.b + SAME && wallEnd(other) > wall.b + SAME);
       const one = active.some((other) => covers(other, 1, 0));
       const two = active.some((other) => covers(other, 2, 0));
-      if (one && two && sec(Math.min(...active.map(wallEnd))) - sec(wall.b) >= 0.015) add('dangerDash', 'error', wall.b, active.map((other) => other.id), 'Полные стены закрывают обе средние дорожки — игрок вынужден уйти на край');
+      if (one && two && sec(Math.min(...active.map(wallEnd))) - sec(wall.b) >= 0.015) add('dangerDash', 'error', wall.b, active.map((other) => other.id), 'Danger dash: полные стены закрывают обе средние дорожки');
     }
   }
   if (on('rapidDodge')) {
@@ -394,7 +407,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
       side = move.side;
     }
     for (let i = 3; i < changes.length; i++) {
-      if (changes[i]!.t - changes[i - 3]!.t < 1) add('rapidDodge', 'warn', changes[i]!.beat, changes.slice(i - 3, i + 1).map((move) => move.id), 'Стены двигают голову больше 3 раз в секунду');
+      if (changes[i]!.t - changes[i - 3]!.t < 1) add('rapidDodge', 'warn', changes[i]!.beat, changes.slice(i - 3, i + 1).map((move) => move.id), 'Rapid dodge walls: голова двигается больше 3 раз в секунду');
     }
   }
 
@@ -402,11 +415,11 @@ export function checkMap(input: CheckInput): MapIssue[] {
   if (on('arcs')) {
     const at = (c: number, b: number, x: number, y: number) => notes.some((note) => note.c === c && Math.abs(note.b - b) < SAME && note.x === x && note.y === y);
     for (const arc of objects.arcs) {
-      if (!at(arc.c, arc.b, arc.x, arc.y) && !at(arc.c, arc.tb, arc.tx, arc.ty)) add('arcs', 'error', arc.b, [arc.id], 'Дуга не связана ни с одной нотой');
-      if (arc.mu < 0.1 || arc.mu > 1.5 || ((arc.tmu < 0.1 || arc.tmu > 1.5) && arc.tc !== 8)) add('arcs', 'warn', arc.b, [arc.id], 'Сила изгиба дуги вне 0,1–1,5 (SS)');
+      if (!at(arc.c, arc.b, arc.x, arc.y) && !at(arc.c, arc.tb, arc.tx, arc.ty)) add('arcs', 'error', arc.b, [arc.id], 'Arc не связана ни с одной нотой');
+      if (arc.mu < 0.1 || arc.mu > 1.5 || ((arc.tmu < 0.1 || arc.tmu > 1.5) && arc.tc !== 8)) add('arcs', 'warn', arc.b, [arc.id], 'Arc multiplier вне 0,1–1,5 (SS)');
     }
   }
-  if (on('chains') && objects.chains.length > 0) add('chains', 'info', objects.chains[0]!.b, objects.chains.map((chain) => chain.id), `Цепей: ${String(objects.chains.length)} — ScoreSaber не ранкает карты с цепями (BeatLeader — да)`);
+  if (on('chains') && standard !== 'BL' && standard !== 'BSMG' && objects.chains.length > 0) add('chains', 'info', objects.chains[0]!.b, objects.chains.map((chain) => chain.id), `Chains: ${String(objects.chains.length)} — ScoreSaber не ранкает карты с chains (BeatLeader — да)`);
 
   // ----- the start and the end ---------------------------------------------------------------
   /** What the player meets: notes, bombs, arcs, chains, walls in the middle lanes. */
@@ -421,11 +434,12 @@ export function checkMap(input: CheckInput): MapIssue[] {
     const first = starts.reduce((a, b) => (b.b < a.b ? b : a));
     const last = starts.reduce((a, b) => (b.end > a.end ? b : a));
     const begin = sec(first.b);
-    if (begin < 1.5) add('hotStart', 'error', first.b, [first.id], `Горячий старт: первый объект на ${fmt(begin)} (SS: от 1,5 с, BL: от 1,33 с)`);
-    else if (begin < 2) add('hotStart', 'warn', first.b, [first.id], `Первый объект на ${fmt(begin)} — BSMG советует от 2 с`);
+    const hard = standard === 'BL' ? 1.33 : standard === 'BSMG' ? 0 : 1.5;
+    if (begin < hard) add('hotStart', 'error', first.b, [first.id], `Hot start: первый объект на ${fmt(begin)} (${standard === 'BL' ? 'BL: от 1,33 с' : 'SS: от 1,5 с, BL: от 1,33 с'})`);
+    else if (begin < 2 && (standard === 'all' || standard === 'BSMG')) add('hotStart', 'warn', first.b, [first.id], `Hot start: первый объект на ${fmt(begin)} — BSMG советует от 2 с`);
     const tail = input.songSeconds - sec(last.end);
-    if (tail < 2) add('coldEnd', 'error', last.end, [last.id], `Холодный конец: после последнего объекта ${fmt(Math.max(0, tail))} (нужно от 2 с)`);
-    else if (tail > 15) add('longOutro', 'info', last.end, [last.id], `После последнего объекта ещё ${fmt(tail)} — SS требует меньше 15 с без нот и света`);
+    if (tail < 2) add('coldEnd', 'error', last.end, [last.id], `Cold end: после последнего объекта ${fmt(Math.max(0, tail))} (нужно от 2 с)`);
+    else if (tail > 15) add('longOutro', 'info', last.end, [last.id], `Долгий outro: ещё ${fmt(tail)} после последнего объекта — SS требует меньше 15 с без нот и света`);
   }
   if (on('mapLength')) {
     if (notes.length > 1) {
