@@ -22,8 +22,8 @@ export class Clicks {
   private tick() {
     const editor = this.editor;
     const { metronome, eventClicks, clickVolume } = settings();
-    const noteHits = settings().noteHits && editor.tab === 'notes';
-    if (!editor.isPlaying() || (!metronome && !eventClicks && !noteHits) || clickVolume <= 0) {
+    const noteHits = settings().noteHits && settings().noteHitVolume > 0 && editor.tab === 'notes';
+    if (!editor.isPlaying() || (!metronome && !eventClicks && !noteHits) || (clickVolume <= 0 && !noteHits)) {
       this.until = null;
       return;
     }
@@ -36,13 +36,13 @@ export class Clicks {
     const context = this.audio();
     const start = editor.secondsToBeat(from);
     const end = editor.secondsToBeat(to);
-    const clicks: { beat: number; pitch: number }[] = [];
+    const clicks: { beat: number; pitch: number; volume?: number }[] = [];
     if (metronome) {
       for (let beat = Math.floor(start) + 1; beat <= end; beat++) if (beat > start) clicks.push({ beat, pitch: beat % 4 === 0 ? 1760 : 1320 });
     }
     if (noteHits) {
       const beats = new Set(editor.objects.notes.map((note) => Math.round(note.b * 1000) / 1000));
-      for (const beat of beats) if (beat > start && beat <= end) clicks.push({ beat, pitch: 2900 });
+      for (const beat of beats) if (beat > start && beat <= end) clicks.push({ beat, pitch: 2900, volume: settings().noteHitVolume });
     }
     if (eventClicks && editor.tab === 'lights') {
       const row = editor.libraryRow();
@@ -53,7 +53,7 @@ export class Clicks {
     }
     for (const click of clicks) {
       const wait = (editor.beatToSeconds(click.beat) - now) / editor.rate;
-      this.click(context, context.currentTime + Math.max(0, wait), click.pitch, clickVolume);
+      this.click(context, context.currentTime + Math.max(0, wait), click.pitch, click.volume ?? clickVolume);
     }
   }
 

@@ -259,6 +259,22 @@ export class NotesLanes {
       ctx.fillStyle = found.kind === 'bombs' ? '#9a9eaa' : this.rgb(noteColor((found.item as MapNote).c));
       ctx.fillRect(x - w / 2, y - tall / 2, w, tall);
     }
+    // the map checker's finds: a mark over the lanes (red: an error, yellow: a warning)
+    let lastMark = -Infinity;
+    for (const issue of editor.mapIssues()) {
+      if (issue.beat < from || issue.beat > to || issue.level === 'info') continue;
+      const x = host.beatToX(issue.beat);
+      if (x - lastMark < 3) continue;
+      lastMark = x;
+      ctx.fillStyle = issue.level === 'error' ? 'rgba(255,90,90,0.16)' : 'rgba(241,196,107,0.12)';
+      ctx.fillRect(x - 1, host.lanesTop, 3, host.lanesBottom - host.lanesTop);
+      ctx.fillStyle = issue.level === 'error' ? '#ff5a5a' : '#f1c46b';
+      ctx.beginPath();
+      ctx.moveTo(x - 5, host.lanesTop);
+      ctx.lineTo(x + 5, host.lanesTop);
+      ctx.lineTo(x, host.lanesTop + 7);
+      ctx.fill();
+    }
     // what's being drawn or boxed
     const drag = this.drag;
     if (drag?.kind === 'wall') {

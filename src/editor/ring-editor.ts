@@ -457,13 +457,6 @@ export class RingEditor {
     bars.title = block.mode === 'tracks' ? 'Угол каждого кольца: тяните столбики (Shift — по 1°)' : 'Угол каждого кольца (вручную — только «Каждое кольцо отдельно»)';
     views.append(sketch, bars);
     col.append(views);
-    // (turning too fast to read in a headset: said so, with how fast)
-    const fastest = block.mode === 'event' ? this.editor.ringSpeedBetween(block.start, block.end + 2) : 0;
-    if (fastest >= 1500) {
-      const warning = note(`⚠ Здесь кольца крутятся до ${String(Math.round(fastest))}°/с. Кольцо одинаково через каждые 90°, и в шлеме при такой скорости за кадр оно поворачивается на ${String(Math.round(fastest / 90))}° — это выглядит как беспорядочное мелькание, а на мониторе иначе. Сделайте поворот медленнее или короче (меньше угол, больше время поворота).`);
-      warning.classList.add('ring-warning');
-      col.append(warning);
-    }
     if (block.mode === 'tracks') {
       col.append(note(`Каждое кольцо получает свой трек Chroma (environment) и поворачивается событиями AnimateTrack. Карта будет рекомендовать Chroma; без неё кольца двигаются только обычными событиями. Обычные события вращения колец добавляются поверх этих поз.`));
     } else {

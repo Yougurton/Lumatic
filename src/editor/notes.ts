@@ -107,7 +107,7 @@ export interface MapChain {
  *  have; read, not made.) */
 export type WallKind = 'full' | 'deep' | 'crouch';
 export const WALL_SHAPES: Record<WallKind, { y: number; h: number }> = { full: { y: 0, h: 5 }, deep: { y: 1, h: 4 }, crouch: { y: 2, h: 3 } };
-export const ROW_WALL: WallKind[] = ['full', 'full', 'crouch'];
+export const ROW_WALL: WallKind[] = ['full', 'crouch', 'crouch'];
 export const WALL_NAMES: Record<WallKind, string> = { full: 'Полная стена', deep: 'Низкая стена', crouch: 'Присед' };
 
 /** What a wall is (from its row and height). */

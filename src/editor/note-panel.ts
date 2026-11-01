@@ -2,7 +2,7 @@ import type { Editor } from './editor';
 import { ROW_WALL, WALL_SHAPES, type MapNote } from './notes';
 import { drawGameNote } from './note-draw';
 import { newId } from './model';
-import { setSettings, settings } from './settings';
+import { onSettings, setSettings, settings } from './settings';
 
 /**
  * The notes side's corner (where the lights side has its effects): the grid 4×3 as the player sees it,
@@ -52,7 +52,7 @@ export class NotePanel {
     this.canvas.className = 'np-grid';
     this.label.className = 'np-label nm-dim';
     this.canvas.title = 'Сетка 4×3 на доле курсора, как её видит игрок; предыдущая нота каждой руки — бледная.\nКлик — поставить, потянуть из клетки — стрелка в ту сторону, ПКМ — удалить, средняя кнопка — другой цвет.\nКолёсико — шаг сетки по песне. 1/2/3/4 — красная, синяя, бомба, стена; W/A/S/D/F — направление (две сразу — диагональ).';
-    root.append(this.tools, this.label, this.canvas, this.scaleRow());
+    root.append(this.tools, this.label, this.canvas, this.volumeRow('Громкость песни', 'volume'), this.volumeRow('Удары нот', 'noteHitVolume'), this.scaleRow());
     this.renderTools();
     new ResizeObserver(() => this.resize()).observe(this.canvas);
     editor.onChange(() => {
@@ -73,6 +73,38 @@ export class NotePanel {
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  /** A loudness slider (0–100 %): the song's, the notes' hit sound's. */
+  private volumeRow(name: string, key: 'volume' | 'noteHitVolume') {
+    const row = document.createElement('label');
+    row.className = 'np-scale';
+    const input = Object.assign(document.createElement('input'), { type: 'range', min: '0', max: '1', step: '0.05', value: String(settings()[key]) });
+    const value = Object.assign(document.createElement('span'), { className: 'ins-value' });
+    const show = () => (value.textContent = `${String(Math.round(Number(input.value) * 100))}%`);
+    show();
+    input.addEventListener('input', () => {
+      show();
+      setSettings({ [key]: Number(input.value) });
+    });
+    input.addEventListener(
+      'wheel',
+      (event) => {
+        event.preventDefault();
+        input.value = String(Math.min(1, Math.max(0, Number(input.value) + (event.deltaY < 0 ? 0.05 : -0.05))));
+        input.dispatchEvent(new Event('input'));
+      },
+      { passive: false },
+    );
+    // (changed elsewhere — the settings window: shown here too)
+    onSettings((now) => {
+      if (document.activeElement !== input && Number(input.value) !== now[key]) {
+        input.value = String(now[key]);
+        show();
+      }
+    });
+    row.append(Object.assign(document.createElement('span'), { textContent: name }), input, value);
+    return row;
   }
 
   /** The 3D track's scale: metres a beat (longer: the notes farther apart along it). */
@@ -126,7 +158,7 @@ export class NotePanel {
       button.className = 'np-tool';
       button.classList.toggle('active', tool.kind === item.kind);
       button.title = item.title;
-      button.append(toolIcon(item.kind, item.color, css), Object.assign(document.createElement('span'), { textContent: item.label }), Object.assign(document.createElement('kbd'), { textContent: item.key }));
+      button.append(toolIcon(item.kind, item.color, css), Object.assign(document.createElement('kbd'), { textContent: item.key }));
       button.addEventListener('click', () => {
         editor.noteTool = { ...editor.noteTool, kind: item.kind };
         editor.emit('selection');
@@ -149,8 +181,8 @@ export class NotePanel {
     side.className = 'np-side';
     if (tool.kind === 'wall') {
       for (const [kind, label, title] of [
-        ['full', 'Полная', 'Стена во весь рост: от неё уходят в сторону (на 3D-стене — нижний и средний ряды)'],
-        ['crouch', 'Присед', 'Стена-присед из игры (на 3D-стене — верхний ряд)'],
+        ['full', 'Полная', 'Стена во весь рост: от неё уходят в сторону (на 3D-стене — нижний ряд)'],
+        ['crouch', 'Присед', 'Стена-присед из игры (на 3D-стене — средний и верхний ряды)'],
       ] as const) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -163,7 +195,7 @@ export class NotePanel {
         });
         side.append(button);
       }
-      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На 3D-стене и в сетке: верхний ряд — присед, ниже — полная; протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
+      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На 3D-стене и в сетке: нижний ряд — полная стена, выше — присед; протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
     } else {
       side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'W/A/S/D, F — точка; две сразу — диагональ. У выделенных нот меняется тоже.' }));
     }

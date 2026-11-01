@@ -1,5 +1,6 @@
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
+import { CHECK_RULES, type CheckRule } from './checks';
 
 /**
  * "Settings": the language, pasting, the 3D view, the timeline, the sound, saving — and the hotkeys'
@@ -7,13 +8,14 @@ import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settin
  * the editor starts again — `restart` is asked to, when it can be done now.
  */
 
-type Section = 'general' | 'view' | 'timeline' | 'sound' | 'saving';
+type Section = 'general' | 'view' | 'timeline' | 'sound' | 'checks' | 'saving';
 
 const SECTIONS: [Section, string][] = [
   ['general', 'Язык и вставка'],
   ['view', 'Вид и 3D'],
   ['timeline', 'Таймлайн'],
   ['sound', 'Звук'],
+  ['checks', 'Проверка карты'],
   ['saving', 'Сохранение'],
 ];
 
@@ -219,8 +221,56 @@ export function settingsDialog(restart: () => void) {
       check('Метроном при воспроизведении', () => settings().metronome, (on) => change({ metronome: on })),
       check('Щелчок на событиях выбранной строки', () => settings().eventClicks, (on) => change({ eventClicks: on })),
       check('Удар на каждой ноте (вкладка «Ноты»)', () => settings().noteHits, (on) => change({ noteHits: on })),
+      row('Громкость ударов нот', slider(0, 1, 0.05, () => settings().noteHitVolume, (value) => change({ noteHitVolume: value }), percent)),
       row('Громкость щелчков', slider(0, 1, 0.05, () => settings().clickVolume, (value) => change({ clickVolume: value }), percent)),
     ],
+    checks: () => {
+      const groups: [CheckRule['group'], string][] = [
+        ['notes', 'Ноты'],
+        ['bombs', 'Бомбы'],
+        ['walls', 'Стены'],
+        ['arcs', 'Дуги и цепи'],
+        ['timing', 'Начало, конец, скорость'],
+      ];
+      const boxes: HTMLInputElement[] = [];
+      const set = (id: string, on: boolean) => {
+        const off = new Set(settings().disabledChecks);
+        if (on) off.delete(id);
+        else off.add(id);
+        change({ disabledChecks: [...off] });
+      };
+      const all = (on: boolean) => {
+        change({ disabledChecks: on ? [] : CHECK_RULES.map((rule) => rule.id) });
+        for (const box of boxes) box.checked = on;
+      };
+      const out: HTMLElement[] = [
+        Object.assign(document.createElement('div'), {
+          className: 'nm-dim',
+          textContent: 'Что проверять в нотах на вкладке «Ноты»: ошибки и предупреждения видны в панели справа и метками над дорожками таймлайна. Правила — из руководства BSMG и критериев рейтинга BeatLeader (BL) и ScoreSaber (SS).',
+        }),
+      ];
+      const buttons = document.createElement('div');
+      buttons.className = 'steps-buttons';
+      const on = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Включить все' });
+      const off = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Выключить все' });
+      on.addEventListener('click', () => all(true));
+      off.addEventListener('click', () => all(false));
+      buttons.append(on, off);
+      out.push(buttons);
+      for (const [group, title] of groups) {
+        out.push(Object.assign(document.createElement('div'), { className: 'set-checks-group', textContent: title }));
+        for (const rule of CHECK_RULES.filter((item) => item.group === group)) {
+          const line = document.createElement('label');
+          line.className = 'set-check-rule';
+          const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !settings().disabledChecks.includes(rule.id) });
+          box.addEventListener('change', () => set(rule.id, box.checked));
+          boxes.push(box);
+          line.append(box, Object.assign(document.createElement('span'), { textContent: rule.name }), Object.assign(document.createElement('em'), { textContent: rule.source }), Object.assign(document.createElement('small'), { textContent: rule.about }));
+          out.push(line);
+        }
+      }
+      return out;
+    },
     saving: () => [
       row(
         'Автосохранение',

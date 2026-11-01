@@ -1,6 +1,8 @@
 import type { Editor } from './editor';
 import { mirrorObjects } from './notes-timeline';
 import { jumpOf, jumpWarnings } from './jump';
+import { CHECK_RULES, type MapIssue } from './checks';
+import { onSettings, settings } from './settings';
 import { WALL_NAMES, type WallKind, WALL_SHAPES, wallKindOf, type MapArc, type MapChain, type MapNote, type MapWall } from './notes';
 
 /**
@@ -32,6 +34,11 @@ export class NoteInspector {
     private readonly root: HTMLElement,
   ) {
     editor.onChange(() => this.render());
+    onSettings((now, before) => {
+      if (now.disabledChecks === before.disabledChecks) return;
+      this.shownKey = '';
+      this.render();
+    });
     this.render();
   }
 
@@ -76,7 +83,8 @@ export class NoteInspector {
       stat('Скорость нот (NJS)', `${String(njs)}, смещение ${String(info.noteStartBeatOffset)}`, 'Меняется в свойствах карты');
       stat('Подлёт', `${jump.half.toFixed(2)} доли · ${jump.distance.toFixed(1)} м`, 'Половина времени подлёта (доли) и дальность появления нот (метры)');
       stat('Время реакции', `${String(Math.round(jump.reaction))} мс`, 'Сколько нота видна до удара');
-      for (const warning of jumpWarnings(info.difficulty, njs, jump.distance, jump.reaction, nps)) stats.append(Object.assign(document.createElement('div'), { className: `jump-${warning.level}`, textContent: `⚠ ${warning.text}` }));
+      if (!settings().disabledChecks.includes('jump'))
+        for (const warning of jumpWarnings(info.difficulty, njs, jump.distance, jump.reaction, nps)) stats.append(Object.assign(document.createElement('div'), { className: `jump-${warning.level}`, textContent: `⚠ ${warning.text}` }));
     }
     root.append(stats);
 
@@ -85,7 +93,7 @@ export class NoteInspector {
     section.className = 'ins-section';
     if (picked.length === 0) {
       section.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Ничего не выделено. Клик по ноте на таймлайне или в сетке — выделить; Shift — добавить; протянуть по пустому месту — рамка.' }));
-      root.append(section);
+      root.append(section, this.checks());
       return;
     }
     section.append(Object.assign(document.createElement('h3'), { textContent: picked.length === 1 ? 'Выделенный объект' : `Выделено: ${String(picked.length)}` }));
@@ -166,6 +174,58 @@ export class NoteInspector {
       }
       section.append(form);
     }
-    root.append(section);
+    root.append(section, this.checks());
+  }
+
+  /** The map checker's finds: how many, and each one (a click goes there and selects what's at fault). */
+  private checks() {
+    const editor = this.editor;
+    const issues = editor.mapIssues();
+    const box = document.createElement('div');
+    box.className = 'ins-section ni-checks';
+    const errors = issues.filter((issue) => issue.level === 'error').length;
+    const warnings = issues.filter((issue) => issue.level === 'warn').length;
+    const head = document.createElement('h3');
+    head.textContent = 'Проверка карты';
+    const summary = document.createElement('span');
+    summary.className = 'ni-check-sum';
+    summary.textContent = issues.length === 0 ? '✓ всё в порядке' : `${String(errors)} ош. · ${String(warnings)} пред.`;
+    summary.classList.toggle('bad', errors > 0);
+    head.append(' ', summary);
+    box.append(head);
+    if (issues.length === 0) {
+      box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Правила BSMG, BeatLeader и ScoreSaber. Отключить отдельные — в настройках, «Проверка карты».' }));
+      return box;
+    }
+    const list = document.createElement('div');
+    list.className = 'ni-check-list';
+    const names = new Map(CHECK_RULES.map((rule) => [rule.id, rule]));
+    const item = (issue: MapIssue) => {
+      const line = document.createElement('button');
+      line.type = 'button';
+      line.className = `ni-check ni-check-${issue.level}`;
+      const rule = names.get(issue.rule);
+      line.title = rule === undefined ? '' : `${rule.name} (${rule.source}): ${rule.about}`;
+      const where = Object.assign(document.createElement('b'), { textContent: (Math.round(issue.beat * 100) / 100).toString() });
+      line.append(Object.assign(document.createElement('span'), { className: 'ni-check-icon', textContent: issue.level === 'error' ? '⛔' : issue.level === 'warn' ? '⚠' : 'ℹ' }), where, Object.assign(document.createElement('span'), { textContent: issue.text }));
+      line.addEventListener('click', () => {
+        editor.seek(Math.max(0, issue.beat));
+        const ids = issue.ids.filter((id) => editor.objectById(id) !== null);
+        if (ids.length > 0) editor.selectNotes(ids);
+      });
+      return line;
+    };
+    const shown = 60;
+    list.append(...issues.slice(0, shown).map(item));
+    if (issues.length > shown) {
+      const more = Object.assign(document.createElement('button'), { type: 'button', className: 'ni-check-more', textContent: `Показать все (${String(issues.length)})` });
+      more.addEventListener('click', () => {
+        more.remove();
+        list.append(...issues.slice(shown).map(item));
+      });
+      list.append(more);
+    }
+    box.append(list);
+    return box;
   }
 }

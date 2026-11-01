@@ -51,6 +51,10 @@ export interface Settings {
   eventClicks: boolean;
   /** On the notes side: a hit sound on every note while playing. */
   noteHits: boolean;
+  /** …how loud (0–1). */
+  noteHitVolume: number;
+  /** The map checker's rules switched off (their ids). */
+  disabledChecks: string[];
   clickVolume: number;
 
   /** Saved by itself every so many minutes while there are changes (0: never). */
@@ -86,6 +90,8 @@ export const DEFAULT_SETTINGS: Settings = {
   metronome: false,
   eventClicks: false,
   noteHits: true,
+  noteHitVolume: 0.6,
+  disabledChecks: [],
   clickVolume: 0.6,
   autosave: 0,
   backups: 5,

@@ -95,6 +95,8 @@ type Drag =
   | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number; poses: Map<string, number> }>; anchor: number }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'seek' }
+  /** The notes side: the song swiped under its fixed cursor (a click alone: the song goes there). */
+  | { kind: 'swipe'; x0: number; beat0: number; clickBeat: number; moved: boolean }
   | { kind: 'scroll'; grabY: number; scrollY: number }
   | { kind: 'rowZoom'; edge: 'top' | 'bottom'; grabY: number; thumb: number; scale: number; scrollY: number }
   | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number }
@@ -595,9 +597,7 @@ export class Timeline {
         if (top + h < this.rowsTop || top > this.rowsBottom) continue;
         if (row.kind === 'raw') this.drawRaw(row, top, h);
         else if (row.kind === 'poses') for (const block of this.blocksOf(row)) this.drawRingBlock(block, top, h);
-        // (the rings turning too fast to read in a headset: marked along their rows)
-        if ((row.kind === 'raw' && row.type === 8) || (row.kind === 'poses' && row.ring === 'rotation')) this.drawRingSpeed(top);
-        else for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
+        for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
       }
       // the clip being drawn
       const creating = this.drag?.kind === 'create' && this.drag.moved ? this.drag : null;
@@ -655,18 +655,7 @@ export class Timeline {
     // spectrogram
     this.drawSpectrogram(this.rowsBottom, this.spectroHeight);
 
-    // the song's preview (as Info.dat has it) on the ruler; the picked stretch of the song over all
-    const preview = editor.songPreview;
-    if (preview !== null) {
-      const x0 = this.beatToX(editor.secondsToBeat(preview.start));
-      const x1 = this.beatToX(editor.secondsToBeat(preview.start + preview.duration));
-      if (x1 > GUTTER && x0 < width) {
-        ctx.fillStyle = 'rgba(255,200,80,0.18)';
-        ctx.fillRect(Math.max(GUTTER, x0), RULER_H - 9, x1 - Math.max(GUTTER, x0), 8);
-        ctx.fillStyle = 'rgba(255,205,90,0.9)';
-        ctx.fillRect(x0, RULER_H - 9, Math.max(1, x1 - x0), 2);
-      }
-    }
+    // the picked stretch of the song over all
     const range = editor.songRange;
     if (range !== null) {
       const x0 = this.beatToX(Math.min(range.start, range.end));
@@ -1194,6 +1183,23 @@ export class Timeline {
       ctx.lineTo(x, cy + 6);
       ctx.lineTo(x - 5, cy);
       ctx.fill();
+    }
+    // the lasers' speed: its number beside each speed event (where there's room for it)
+    if (row.type === 12 || row.type === 13) {
+      const speedOf = (event: { value: number; customData?: Record<string, unknown> }) => {
+        const precise = event.customData?.preciseSpeed ?? event.customData?._preciseSpeed ?? event.customData?.speed ?? event.customData?._speed;
+        return typeof precise === 'number' ? precise : event.value;
+      };
+      const marks = [...events.map((event) => ({ beat: event.beat, speed: speedOf(event as never) })), ...this.editor.poseEvents().filter((event) => event.type === row.type).map((event) => ({ beat: event.beat, speed: speedOf(event as never) }))].sort((a, b) => a.beat - b.beat);
+      ctx.font = '600 10px system-ui, sans-serif';
+      ctx.fillStyle = '#e8ffe8';
+      let last = -Infinity;
+      for (const mark of marks) {
+        const x = this.beatToX(mark.beat);
+        if (x < -20 || x > this.width + 10 || x - last < 22) continue;
+        last = x;
+        ctx.fillText(String(Math.round(mark.speed * 10) / 10), x + 6, top + height / 2 - 3);
+      }
     }
   }
 
@@ -2091,6 +2097,10 @@ export class Timeline {
         return;
       }
       if (y < RULER_H || y >= this.rowsBottom) {
+        if (this.notesMode) {
+          this.drag = { kind: 'swipe', x0: x, beat0: this.editor.playhead(), clickBeat: beat, moved: false };
+          return;
+        }
         this.drag = { kind: 'seek' };
         this.editor.seek(Math.max(0, beat));
         this.followPlayhead = true;
@@ -2265,6 +2275,10 @@ export class Timeline {
         this.scrollY = Math.min(this.maxScroll(), Math.max(0, drag.scrollY + ((y - drag.grabY) / Math.max(1, bar.visible - bar.thumb)) * this.maxScroll()));
       } else if (drag.kind === 'seek') {
         this.editor.seek(Math.max(0, beat));
+      } else if (drag.kind === 'swipe') {
+        // (as a tape: dragged left, the song goes on)
+        if (Math.abs(x - drag.x0) > 3) drag.moved = true;
+        if (drag.moved) this.editor.seek(Math.max(0, drag.beat0 - (x - drag.x0) / this.pxPerBeat));
       } else if (drag.kind === 'create') {
         drag.to = snap(beat);
         if (Math.abs(x - drag.x0) > 4) drag.moved = true;
@@ -2369,6 +2383,11 @@ export class Timeline {
       const drag = this.drag;
       this.drag = null;
       if (drag === null) return;
+      if (drag.kind === 'swipe') {
+        // (a click: the song goes there; a swipe: it lands on the grid)
+        this.editor.seek(Math.max(0, this.editor.snapBeat(drag.moved ? this.editor.playhead() : drag.clickBeat)));
+        return;
+      }
       if (drag.kind === 'spectro') this.renderHeaders(true);
       if (drag.kind === 'bookmark' && !drag.moved) {
         // (a click on a flag: the song goes there)

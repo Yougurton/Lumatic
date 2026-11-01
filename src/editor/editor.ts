@@ -48,6 +48,7 @@ import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
+import { checkMap, type MapIssue } from './checks';
 import { allObjects, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
@@ -2400,6 +2401,19 @@ export class Editor {
       if (item !== undefined) return { kind, item: item as MapObjects[typeof kind][number] };
     }
     return null;
+  }
+
+  private issuesKey = '';
+  private issues: MapIssue[] = [];
+  /** What the map checker finds in the difficulty's notes (worked out again only after a change). */
+  mapIssues(): MapIssue[] {
+    const disabled = settings().disabledChecks;
+    const key = `${String(this.noteVersion)}|${this.row?.key ?? ''}|${String(this.duration)}|${disabled.join(',')}`;
+    if (key !== this.issuesKey) {
+      this.issuesKey = key;
+      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: this.row?.infoDifficulty?.difficulty, disabled });
+    }
+    return this.issues;
   }
 
   /** The selected objects with their kinds. */
