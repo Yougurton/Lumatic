@@ -128,3 +128,97 @@ export async function addDifficulty(editor: Editor, spec: NewDifficulty): Promis
   await map.folder.refresh();
   return file;
 }
+
+const NOTE_KEYS = { v3: ['colorNotes', 'bombNotes', 'obstacles', 'sliders', 'burstSliders'], v2: ['_notes', '_obstacles', '_sliders'] };
+const LIGHT_KEYS = {
+  v3: ['basicBeatmapEvents', 'colorBoostBeatmapEvents', 'lightColorEventBoxGroups', 'lightRotationEventBoxGroups', 'lightTranslationEventBoxGroups', 'vfxEventBoxGroups'],
+  v2: ['_events'],
+};
+const LIGHT_CUSTOM = ['_environment', 'environment', '_customEvents', 'customEvents'];
+
+/** One difficulty's notes and/or lights put into another (both v2 or both v3). */
+export async function copyDifficulty(editor: Editor, from: string, to: string, what: 'notes' | 'lights' | 'all') {
+  const folder = editor.map!.folder;
+  const sourceText = await folder.readText(from);
+  if (what === 'all') {
+    await folder.writeText(to, sourceText);
+  } else {
+    const source = JSON.parse(sourceText) as Json;
+    const target = folder.files.includes(to) ? (JSON.parse(await folder.readText(to)) as Json) : (JSON.parse(emptyDifficulty(difficultyVersion(sourceText) === '2' ? '2' : '3')) as Json);
+    const version = difficultyVersion(sourceText) === '2' ? 'v2' : 'v3';
+    if ((difficultyVersion(JSON.stringify(target)) === '2' ? 'v2' : 'v3') !== version) throw new Error('У сложностей разные форматы (v2 и v3) — копировать можно только целиком');
+    for (const key of (what === 'notes' ? NOTE_KEYS : LIGHT_KEYS)[version]) target[key] = structuredClone(source[key] ?? []);
+    if (what === 'lights') {
+      const customKey = version === 'v2' ? '_customData' : 'customData';
+      const sourceCustom = (source[customKey] ?? {}) as Json;
+      const targetCustom = (target[customKey] ?? {}) as Json;
+      for (const key of LIGHT_CUSTOM) {
+        if (sourceCustom[key] !== undefined) targetCustom[key] = structuredClone(sourceCustom[key]);
+        else delete targetCustom[key];
+      }
+      target[customKey] = targetCustom;
+    }
+    await folder.writeText(to, JSON.stringify(target));
+  }
+  // (the lights: the editor's own work on them too)
+  if (what !== 'notes') {
+    const project = await loadProject(folder, from);
+    if (project !== null) await folder.writeText(projectFileName(to), JSON.stringify({ ...project, difficulty: to }));
+  }
+}
+
+/** A difficulty taken out of Info.dat (v2 Info), and its files deleted. */
+async function removeDifficulty(editor: Editor, infoName: string, file: string) {
+  const folder = editor.map!.folder;
+  const info = JSON.parse(await folder.readText(infoName)) as Json;
+  const sets = (info._difficultyBeatmapSets ?? []) as { _difficultyBeatmaps?: Json[] }[];
+  for (const set of sets) set._difficultyBeatmaps = (set._difficultyBeatmaps ?? []).filter((entry) => entry._beatmapFilename !== file);
+  info._difficultyBeatmapSets = sets.filter((set) => (set._difficultyBeatmaps ?? []).length > 0);
+  if (Array.isArray(info.difficultyBeatmaps)) info.difficultyBeatmaps = (info.difficultyBeatmaps as Json[]).filter((entry) => entry.beatmapDataFilename !== file);
+  await folder.writeText(infoName, JSON.stringify(info, null, 2));
+  for (const name of [file, projectFileName(file)]) if (folder.files.includes(name)) await folder.remove?.(name);
+}
+
+/** The difficulties panel's changes written into the map: deleted, made, copied into, their label /
+ *  NJS / offset set. Returns the file of the first one made (to open it), if any. */
+export async function applyDifficulties(editor: Editor, entries: DifficultyEntryLike[], say: (text: string) => void): Promise<string | null> {
+  const map = editor.map;
+  if (map === null) return null;
+  const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat');
+  if (infoName === undefined) return null;
+  let made: string | null = null;
+  for (const entry of entries.filter((item) => item.deleted === true && item.file !== undefined)) {
+    say(`Удаляю ${entry.file!}…`);
+    await removeDifficulty(editor, infoName, entry.file!);
+  }
+  for (const entry of entries.filter((item) => item.enabled && item.file === undefined)) {
+    say(`Создаю ${entry.difficulty}…`);
+    const file = await addDifficulty(editor, { difficulty: entry.difficulty, characteristic: entry.characteristic, label: entry.label, njs: entry.njs, offset: entry.offset, from: 'empty' });
+    if (entry.copy !== undefined) await copyDifficulty(editor, entry.copy.from, file, entry.copy.what);
+    made ??= file;
+  }
+  let info = await map.folder.readText(infoName);
+  for (const entry of entries.filter((item) => item.enabled && item.file !== undefined)) {
+    if (entry.copy !== undefined) {
+      say(`Копирую в ${entry.file!}…`);
+      await copyDifficulty(editor, entry.copy.from, entry.file!, entry.copy.what);
+    }
+    info = setDifficultyInfo(info, entry.file!, { njs: entry.njs, offset: entry.offset, label: entry.label });
+  }
+  await map.folder.writeText(infoName, info);
+  await map.folder.refresh();
+  return made;
+}
+
+/** (what applyDifficulties needs of the panel's entries) */
+export interface DifficultyEntryLike {
+  characteristic: string;
+  difficulty: string;
+  file?: string;
+  enabled: boolean;
+  deleted?: boolean;
+  njs: number;
+  offset: number;
+  label: string;
+  copy?: { from: string; what: 'notes' | 'lights' | 'all' };
+}

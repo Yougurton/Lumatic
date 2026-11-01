@@ -17,6 +17,8 @@ export interface MapFolder {
   /** A copy of a file in the map's "Lumatic backups" folder, keeping that many copies of it (only in
    *  the desktop app). */
   backup?(name: string, keep: number): Promise<void>;
+  /** Deletes a file (the desktop app: a copy of it kept in "Lumatic backups" first). */
+  remove?(name: string): Promise<void>;
 }
 
 interface NativeApi {
@@ -27,6 +29,8 @@ interface NativeApi {
   /** A copy of a file of an opened folder in its "Lumatic backups" folder, the oldest copies of that
    *  file past `keep` deleted. */
   backupFile?(path: string, keep: number): Promise<void>;
+  /** Deletes a file of an opened folder (a copy kept in its "Lumatic backups" folder first). */
+  deleteFile?(path: string): Promise<void>;
   /** The language of the window's own questions (closing with unsaved changes, picking folders). */
   setLanguage?(language: string): void;
   /** The whole window's scale. */
@@ -63,6 +67,10 @@ function nativeFolder(native: NativeApi, opened: { path: string; files: string[]
     writeText: (name, text) => native.writeFile(joinPath(opened.path, name), text),
     writeBinary: (name, data) => native.writeFile(joinPath(opened.path, name), data),
     backup: (name, keep) => native.backupFile?.(joinPath(opened.path, name), keep) ?? Promise.resolve(),
+    remove: async (name) => {
+      await native.deleteFile?.(joinPath(opened.path, name));
+      folder.files = await native.listFolder(opened.path);
+    },
     refresh: async () => {
       folder.files = await native.listFolder(opened.path);
     },
@@ -94,6 +102,11 @@ function memoryFolder(name: string, files: Record<string, string | ArrayBuffer>)
       folder.files = Object.keys(files);
       return Promise.resolve();
     },
+    remove: (file) => {
+      delete files[file];
+      folder.files = Object.keys(files);
+      return Promise.resolve();
+    },
     refresh: () => Promise.resolve(),
   };
   return folder;
@@ -121,6 +134,10 @@ async function handleFolder(handle: FileSystemDirectoryHandle): Promise<MapFolde
       const writable = await (await handle.getFileHandle(name, { create: true })).createWritable();
       await writable.write(data);
       await writable.close();
+    },
+    remove: async (name) => {
+      await handle.removeEntry(name);
+      folder.files = await list();
     },
     refresh: async () => {
       folder.files = await list();

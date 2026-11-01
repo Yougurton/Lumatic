@@ -4,10 +4,13 @@ import { convertMapFolder } from './convert-dialog';
 import { mapVersion } from './convert';
 import type { Editor } from './editor';
 import { difficultyFile, loadProject, projectFileName, transformDifficultyBeats, transformProjectBeats } from './map-io';
-import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
+import { environmentPlate } from './new-map';
 import { previewPicker, type PreviewPicker } from './song-picker';
-import { DEFAULT_NJS, DIFFICULTY_NAMES, jumpEditor } from './jump';
-import { addDifficulty, setDifficultyInfo, takenDifficulties } from './difficulties';
+import { DEFAULT_NJS } from './jump';
+import { applyDifficulties } from './difficulties';
+import { difficultyPanel } from './difficulty-panel';
+import { silencePreview } from './silence-preview';
+import type { EnvironmentChoice } from './environment-gallery';
 
 /**
  * "Map settings": the song's name and authors, the environment, its tempo, its start — silence put
@@ -150,62 +153,78 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     const shade = document.createElement('div');
     shade.className = 'ce-shade';
     const box = document.createElement('form');
-    box.className = 'ce-dialog nm-dialog';
+    box.className = 'ce-dialog nm-dialog nm-new';
     box.innerHTML = `
       <div class="ce-dialog-title">Свойства карты</div>
-      <div class="nm-scroll"><div class="nm-grid">
-        <label>Название<input type="text" data-id="title"></label>
-        <label>Исполнитель<input type="text" data-id="artist"></label>
-        <label>Подзаголовок<input type="text" data-id="sub"></label>
-        <label>Автор карты<input type="text" data-id="mapper"></label>
-        <label class="nm-wide">Окружение<select data-id="env"></select></label>
-        <div class="nm-wide nm-dim" data-id="env-info"></div>
-        <div class="nm-wide nm-section">Сложность</div>
-        <label>Какую настроить<select data-id="diff"></select></label>
-        <label>Подпись в игре<input type="text" data-id="diff-label" placeholder="без подписи"></label>
-        <div class="nm-wide" data-id="jump"></div>
-        <div class="nm-wide nm-newdiff">
-          <button type="button" data-id="new-diff">＋ Новая сложность…</button>
-          <div data-id="new-form" class="nm-row" hidden>
-            <select data-id="nd-name" title="Сложность"></select>
-            <select data-id="nd-char" title="Режим"><option value="Standard">Стандарт</option><option value="OneSaber">Одна сабля</option></select>
-            <select data-id="nd-from" title="С чего начать"><option value="empty">пустая</option><option value="notes">с нотами этой</option><option value="all">с нотами и светом этой</option></select>
-            <input type="text" data-id="nd-label" placeholder="подпись" title="Подпись в игре">
+      <div class="nm-scroll">
+        <div class="nm-song">
+          <button type="button" class="nm-cover-big" data-id="cover-pick" title="Обложка карты: клик — выбрать другую картинку">
+            <img data-id="cover-image" alt="" hidden><span>Обложка</span>
+          </button>
+          <div class="nm-song-main">
+            <div class="nm-row"><span data-id="song" class="nm-dim"></span></div>
+            <div class="nm-grid nm-names">
+              <label>Название<input type="text" data-id="title"></label>
+              <label>Исполнитель<input type="text" data-id="artist"></label>
+              <label>Подзаголовок<input type="text" data-id="sub"></label>
+              <label>Автор карты<input type="text" data-id="mapper"></label>
+            </div>
+            <div class="nm-dim">Обложка: <span data-id="cover">как есть</span></div>
           </div>
-          <div class="nm-dim" data-id="nd-info"></div>
         </div>
-        <label>BPM
-          <span class="nm-row"><input type="number" data-id="bpm" min="10" max="1000" step="any"><button type="button" data-id="detect">Определить</button></span>
-        </label>
-        <label>Проверка на слух
-          <span class="nm-row"><button type="button" data-id="listen">▶ С метрономом</button><span data-id="alts" class="nm-alts"></span></span>
-        </label>
-        <div class="nm-wide nm-dim" data-id="bpm-info"></div>
-        <label class="nm-wide nm-radio">При смене BPM события
-          <span class="nm-row">
-            <label><input type="radio" name="keep" value="beats" checked> остаются на своих долях</label>
-            <label><input type="radio" name="keep" value="time"> остаются на своём месте в песне</label>
-          </span>
-        </label>
-        <label>Тишина в начало
-          <span class="nm-row"><input type="number" data-id="silence" step="any" value="0"><select data-id="unit"><option value="bars">тактов</option><option value="beats">долей</option><option value="seconds">секунд</option></select></span>
-        </label>
-        <label>Долей в такте<input type="number" data-id="bar" min="1" max="16" step="1" value="4"></label>
-        <label class="nm-wide">Подогнать к сетке
-          <span class="nm-row"><button type="button" data-id="align">Первая доля — на целую долю</button><button type="button" data-id="downbeat">Сильная доля — на начало такта</button><button type="button" data-id="unalign">Без подгонки</button></span>
-        </label>
-        <div class="nm-wide nm-dim" data-id="shift-info"></div>
-        <label>Превью с, сек<input type="number" data-id="preview" step="any" min="0"></label>
-        <label>Превью длится, сек
-          <span class="nm-row"><input type="number" data-id="preview-length" step="any" min="1"><button type="button" data-id="from-range" title="Начало и длина превью — по участку, выделенному на таймлайне (Shift + протянуть по линейке или спектрограмме)">Из выделения</button></span>
-        </label>
-        <div class="nm-wide" data-id="picker"></div>
-        <label class="nm-wide">Формат карты
-          <span class="nm-row"><span data-id="format" class="nm-dim"></span><button type="button" data-id="convert"></button></span>
-        </label>
-      </div></div>
-      <div class="nm-status" data-id="status"></div>
-      <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="apply">Применить</button></div>`;
+        <div class="nm-cols">
+          <section class="nm-col">
+            <div class="nm-section">Темп и начало</div>
+            <div class="nm-grid">
+              <label>BPM
+                <span class="nm-row"><input type="number" data-id="bpm" min="10" max="1000" step="any"><button type="button" data-id="detect">Определить</button></span>
+              </label>
+              <label>Проверка на слух
+                <span class="nm-row"><button type="button" data-id="listen">▶ С метрономом</button><span data-id="alts" class="nm-alts"></span></span>
+              </label>
+              <div class="nm-wide nm-dim" data-id="bpm-info"></div>
+              <label class="nm-wide nm-radio">При смене BPM события
+                <span class="nm-row">
+                  <label><input type="radio" name="keep" value="beats" checked> остаются на своих долях</label>
+                  <label><input type="radio" name="keep" value="time"> остаются на своём месте в песне</label>
+                </span>
+              </label>
+              <label>Тишина в начало
+                <span class="nm-row"><input type="number" data-id="silence" step="any" value="0"><select data-id="unit"><option value="bars">тактов</option><option value="beats">долей</option><option value="seconds">секунд</option></select></span>
+              </label>
+              <label>Долей в такте<input type="number" data-id="bar" min="1" max="16" step="1" value="4"></label>
+              <label class="nm-wide">Подогнать к сетке<select data-id="align">
+                <option value="none">Без подгонки</option>
+                <option value="bar">Сильная доля — на начало такта</option>
+                <option value="beat">Первая доля — на целую долю</option>
+              </select></label>
+              <div class="nm-wide nm-dim" data-id="shift-info"></div>
+              <div class="nm-wide" data-id="silence-preview"></div>
+            </div>
+            <div class="nm-section">Окружение</div>
+            <div class="env-plate" data-id="env"></div>
+            <div class="nm-dim" data-id="env-info"></div>
+            <div class="nm-section">Превью в списке песен</div>
+            <div class="nm-grid">
+              <label>Превью с, сек<input type="number" data-id="preview" step="any" min="0"></label>
+              <label>Превью длится, сек
+                <span class="nm-row"><input type="number" data-id="preview-length" step="any" min="1"><button type="button" data-id="from-range" title="Начало и длина превью — по участку, выделенному на таймлайне (Shift + протянуть по линейке или спектрограмме)">Из выделения</button></span>
+              </label>
+            </div>
+            <div data-id="picker"></div>
+            <div class="nm-section">Формат карты</div>
+            <div class="nm-row"><span data-id="format" class="nm-dim"></span><button type="button" data-id="convert"></button></div>
+          </section>
+          <section class="nm-col">
+            <div class="nm-section">Сложности</div>
+            <div data-id="diffs"></div>
+          </section>
+        </div>
+      </div>
+      <div class="nm-foot">
+        <div class="nm-status" data-id="status"></div>
+        <button type="button" data-id="cancel">Отмена</button><button type="submit" class="primary" data-id="apply">Применить</button>
+      </div>`;
     shade.append(box);
     document.body.append(shade);
     const el = <T extends HTMLElement>(id: string) => box.querySelector<T>(`[data-id="${id}"]`)!;
@@ -216,81 +235,77 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     el<HTMLInputElement>('bpm').value = String(fields.bpm);
     el<HTMLInputElement>('preview').value = String(fields.preview);
     el<HTMLInputElement>('preview-length').value = String(fields.previewDuration);
-    // the environment: the classic ones (the editor's lights), the difficulty's own if it isn't one
-    const env = el<HTMLSelectElement>('env');
-    const known = new Set([...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS].map(([id]) => id));
-    const addGroup = (label: string, items: [string, string][]) => {
-      const group = document.createElement('optgroup');
-      group.label = label;
-      for (const [id, name] of items) group.append(Object.assign(document.createElement('option'), { value: id, textContent: name }));
-      env.append(group);
+    // the song, the cover
+    el('song').textContent = `Песня: ${fields.song}`;
+    const coverName = (JSON.parse(infoText) as Record<string, unknown>)._coverImageFilename as string | undefined;
+    let newCover: File | null = null;
+    let coverUrl = '';
+    const coverBlob = editor.cover();
+    const showCover = (blob: Blob | null) => {
+      if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
+      coverUrl = blob === null ? '' : URL.createObjectURL(blob);
+      el<HTMLImageElement>('cover-image').hidden = blob === null;
+      el<HTMLImageElement>('cover-image').src = coverUrl;
     };
-    if (!known.has(fields.environment)) addGroup('Сейчас', [[fields.environment, fields.environment.replace(/Environment$/u, '')]]);
-    addGroup('Шоу-окружения', SHOW_ENVIRONMENTS);
-    addGroup('Остальные', OTHER_ENVIRONMENTS);
-    env.value = fields.environment;
+    showCover(coverBlob);
+    el('cover').textContent = coverName ?? 'нет';
+    el('cover-pick').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/png,image/jpeg';
+      input.addEventListener('change', () => {
+        newCover = input.files?.[0] ?? null;
+        if (newCover === null) return;
+        showCover(newCover);
+        el('cover').textContent = `${newCover.name} (заменит прежнюю)`;
+      });
+      input.click();
+    });
+    // the environment: a plate, the gallery to pick another (a ready-made one is put on after)
+    let choice: EnvironmentChoice = { environment: fields.environment };
     const envInfo = () => {
       el('env-info').textContent =
-        env.value === fields.environment
+        choice.environment === fields.environment && choice.preset === undefined
           ? fields.version === '4'
             ? 'Окружение этой сложности.'
             : `Окружение ${place.allDirections ? 'сложностей 360° и 90°' : 'всех обычных сложностей'} карты (в Info.dat v2 оно общее).`
           : 'Свет останется на тех же группах и light ID — у другого окружения их может быть другое число: проверьте строки ламп.';
     };
-    env.addEventListener('change', envInfo);
+    environmentPlate(el<HTMLElement>('env'), choice, 'Окружение карты', (picked) => {
+      choice = picked;
+      envInfo();
+    });
     envInfo();
-    // the difficulties: their label, NJS and offset (with the reaction time and BSMG's ranges) — and a
-    // new one made
+    // the difficulties, as ChroMapper shows them: made, deleted, copied, their label, NJS and offset
     const rows = editor.difficulties();
-    const diffSelect = el<HTMLSelectElement>('diff');
-    const charName = (name: string) => (name === 'Standard' ? 'Стандарт' : name === 'OneSaber' ? 'Одна сабля' : name);
-    for (const row of rows) diffSelect.append(Object.assign(document.createElement('option'), { value: row.key, textContent: `${row.label} · ${charName(row.infoDifficulty?.characteristic ?? '')}` }));
-    diffSelect.value = editor.row?.key ?? rows[0]?.key ?? '';
-    const edits = new Map<string, { njs: number; offset: number; label: string }>();
-    const valuesOf = (key: string) => {
-      const row = rows.find((item) => item.key === key);
-      const info = row?.infoDifficulty;
-      return edits.get(key) ?? { njs: info !== undefined && info.noteJumpSpeed > 0 ? info.noteJumpSpeed : (DEFAULT_NJS[info?.difficulty ?? ''] ?? 16), offset: info?.noteStartBeatOffset ?? 0, label: info?.customLabel ?? '' };
-    };
-    const npsOf = (key: string) => {
-      if (key !== editor.row?.key) return undefined;
+    const npsNow = () => {
       const beats = editor.objects.notes.map((note) => note.b);
       const span = beats.length > 1 ? editor.beatToSeconds(Math.max(...beats)) - editor.beatToSeconds(Math.min(...beats)) : 0;
       return span > 0 ? editor.objects.notes.length / span : undefined;
     };
-    let shownKey = diffSelect.value;
-    const firstValues = valuesOf(shownKey);
-    const jump = jumpEditor({ bpm: fields.bpm, difficulty: rows.find((row) => row.key === shownKey)?.infoDifficulty?.difficulty ?? '', njs: firstValues.njs, offset: firstValues.offset, nps: npsOf(shownKey) });
-    el('jump').append(jump.element);
-    el<HTMLInputElement>('diff-label').value = firstValues.label;
-    const keepShown = () => edits.set(shownKey, { ...jump.value(), label: el<HTMLInputElement>('diff-label').value.trim() });
-    diffSelect.addEventListener('change', () => {
-      keepShown();
-      shownKey = diffSelect.value;
-      const values = valuesOf(shownKey);
-      el<HTMLInputElement>('diff-label').value = values.label;
-      jump.set({ difficulty: rows.find((row) => row.key === shownKey)?.infoDifficulty?.difficulty ?? '', njs: values.njs, offset: values.offset, nps: npsOf(shownKey) });
+    const current = editor.row === null ? '' : difficultyFile(editor.row);
+    const diffs = difficultyPanel({
+      bpm: fields.bpm,
+      entries: rows.map((row) => {
+        const info = row.infoDifficulty;
+        return {
+          characteristic: info?.characteristic ?? 'Standard',
+          difficulty: info?.difficulty ?? 'ExpertPlus',
+          file: difficultyFile(row),
+          enabled: true,
+          njs: info !== undefined && info.noteJumpSpeed > 0 ? info.noteJumpSpeed : (DEFAULT_NJS[info?.difficulty ?? ''] ?? 16),
+          offset: info?.noteStartBeatOffset ?? 0,
+          label: info?.customLabel ?? '',
+        };
+      }),
+      nps: (entry) => (entry.file === current ? npsNow() : undefined),
     });
-    el('bpm').addEventListener('change', () => jump.set({ bpm: Number(el<HTMLInputElement>('bpm').value) || fields.bpm }));
-    const ndName = el<HTMLSelectElement>('nd-name');
-    const ndChar = el<HTMLSelectElement>('nd-char');
-    const fillNames = () => {
-      const taken = takenDifficulties(infoText, ndChar.value);
-      const was = ndName.value;
-      ndName.replaceChildren(...DIFFICULTY_NAMES.map(([id, label]) => Object.assign(document.createElement('option'), { value: id, textContent: taken.includes(id) ? `${label} (уже есть)` : label, disabled: taken.includes(id) })));
-      const free = DIFFICULTY_NAMES.map(([id]) => id).filter((id) => !taken.includes(id));
-      ndName.value = free.includes(was) ? was : (free.at(-1) ?? '');
-      el('nd-info').textContent = free.length === 0 ? 'В этом режиме все сложности уже есть.' : `Новая сложность получит NJS ${String(DEFAULT_NJS[ndName.value] ?? 16)} — поменяете здесь же после создания. Создаётся при «Применить».`;
-    };
-    ndChar.addEventListener('change', fillNames);
-    ndName.addEventListener('change', fillNames);
-    el('new-diff').addEventListener('click', () => {
-      const form = el('new-form');
-      form.hidden = !form.hidden;
-      el('new-diff').textContent = form.hidden ? '＋ Новая сложность…' : '✕ Не создавать';
-      if (!form.hidden) fillNames();
-      else el('nd-info').textContent = '';
-    });
+    el('diffs').append(diffs.element);
+    if (editor.row?.infoDifficulty !== undefined) diffs.pick(editor.row.infoDifficulty.characteristic, editor.row.infoDifficulty.difficulty);
+    el('bpm').addEventListener('change', () => diffs.setBpm(Number(el<HTMLInputElement>('bpm').value) || fields.bpm));
+    // the song's start as it will be
+    const startView = silencePreview();
+    el('silence-preview').append(startView.element);
 
     // the preview picked on the song's spectrogram (as soon as the song is read)
     let picker: PreviewPicker | null = null;
@@ -311,7 +326,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       // (Info v4: the tempo lives in its audio data file — not changed here yet)
       el<HTMLInputElement>('bpm').disabled = true;
       el<HTMLInputElement>('mapper').disabled = true;
-      for (const id of ['silence', 'unit', 'bar', 'align', 'downbeat', 'unalign']) el<HTMLInputElement>(id).disabled = true;
+      for (const id of ['silence', 'unit', 'bar', 'align']) el<HTMLInputElement>(id).disabled = true;
     }
     const hasBpmChanges = editor.bpmEvents.length > 0;
     if (hasBpmChanges) {
@@ -356,6 +371,8 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
     };
     /** On top of the silence: the nudge that lines the song up with the grid (seconds). */
     let align: { kind: 'none' | 'beat' | 'bar'; seconds: number; note: string } = { kind: 'none', seconds: 0, note: '' };
+    /** The strong beat found (seconds of the song as it is). */
+    let foundDownbeat: number | null = null;
     const totalShift = () => (fields.version === '4' ? 0 : silence() + align.seconds);
     const showShift = () => {
       const total = totalShift();
@@ -365,6 +382,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
         Math.abs(total) > 1e-6 ? 'Ноты, стены и свет всех сложностей сдвинутся вместе с песней.' : '',
       ];
       el('shift-info').textContent = fields.version === '4' ? 'Для карт формата v4 темп и начало песни здесь пока не меняются.' : parts.filter((part) => part !== '').join(' ');
+      startView.update({ spectrogram: editor.spectrogram, lead: total, bpm: bpmNow(), beatsPerBar: beatsPerBar(), firstBeat: detected?.firstBeat ?? null, downbeat: align.kind === 'bar' ? foundDownbeat : null });
     };
     /** Works the nudge out again (the tempo, the silence or the bar changed). */
     const realign = async () => {
@@ -385,6 +403,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
           busy = true;
           const bar = beatsPerBar();
           const found = await findDownbeat(await song(), bpmNow(), firstBeat(), bar);
+          foundDownbeat = found.downbeat;
           busy = false;
           status.textContent = '';
           // silence (not a cut) that puts the strong beat at the start of a bar — unless it is a hair late
@@ -435,9 +454,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
         status.textContent = `Не получилось: ${error instanceof Error ? error.message : String(error)}`;
       });
     };
-    el('align').addEventListener('click', () => alignTo('beat'));
-    el('downbeat').addEventListener('click', () => alignTo('bar'));
-    el('unalign').addEventListener('click', () => alignTo('none'));
+    el('align').addEventListener('change', () => alignTo(el<HTMLSelectElement>('align').value as typeof align.kind));
     for (const id of ['silence', 'unit', 'bar', 'bpm']) el(id).addEventListener('change', () => alignTo(align.kind));
     showShift();
     el('listen').addEventListener('click', () => {
@@ -454,6 +471,8 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       });
     });
     const finish = () => {
+      document.querySelector('.dp-menu')?.remove();
+      if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
       stopListening?.();
       picker?.stop();
       shade.remove();
@@ -500,7 +519,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
             bpm: Number(el<HTMLInputElement>('bpm').value) || fields.bpm,
             preview: Number(el<HTMLInputElement>('preview').value) || 0,
             previewDuration: Number(el<HTMLInputElement>('preview-length').value) || fields.previewDuration,
-            environment: env.value,
+            environment: choice.environment,
           };
           const shift = totalShift();
           const keepTime = box.querySelector<HTMLInputElement>('input[name="keep"]:checked')?.value === 'time';
@@ -529,26 +548,26 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
             next.preview = Math.max(0, next.preview + shift);
           }
           let info = writeInfo(await map.folder.readText(infoName), next, place);
-          // the difficulties' label, NJS and offset as changed here
-          keepShown();
-          for (const [key, values] of edits) {
-            const row = rows.find((item) => item.key === key);
-            if (row === undefined) continue;
-            info = setDifficultyInfo(info, difficultyFile(row), values);
-          }
           await map.folder.writeText(infoName, info);
-          // a new difficulty
-          let made: string | null = null;
-          if (!el('new-form').hidden && ndName.value !== '') {
-            status.textContent = 'Создаю сложность…';
-            made = await addDifficulty(editor, { difficulty: ndName.value, characteristic: ndChar.value, label: el<HTMLInputElement>('nd-label').value.trim(), njs: DEFAULT_NJS[ndName.value] ?? 16, offset: 0, from: el<HTMLSelectElement>('nd-from').value as 'empty' | 'notes' | 'all' });
+          // a new cover
+          if (newCover !== null) {
+            const name = coverName !== undefined && coverName !== '' ? coverName : newCover.type === 'image/png' ? 'cover.png' : 'cover.jpg';
+            await map.folder.writeBinary(name, await newCover.arrayBuffer());
+            if (coverName !== name) {
+              info = JSON.stringify({ ...(JSON.parse(await map.folder.readText(infoName)) as Record<string, unknown>), _coverImageFilename: name }, null, 2);
+              await map.folder.writeText(infoName, info);
+            }
           }
+          // the difficulties: deleted, made, copied, their label / NJS / offset
+          const made = await applyDifficulties(editor, diffs.entries(), (text) => (status.textContent = text));
           await map.folder.refresh();
           const key = editor.row?.key;
           status.textContent = 'Открываю карту заново…';
           await editor.open(map.folder);
-          const row = made !== null ? editor.difficulties().find((item) => difficultyFile(item) === made) : editor.difficulties().find((item) => item.key === key);
+          const row = (made !== null ? editor.difficulties().find((item) => difficultyFile(item) === made) : editor.difficulties().find((item) => item.key === key)) ?? editor.difficulties()[0];
           if (row !== undefined && row !== editor.row) await editor.openDifficulty(row);
+          // (a ready-made environment picked: put on as the Environment window does)
+          if (choice.preset !== undefined) await editor.setEnvironmentMods({ preset: choice.preset });
           editor.setStatus(made !== null ? `Сложность создана: ${made}` : `Свойства карты изменены${dropped > 0 ? ` (отрезано событий до начала песни: ${String(dropped)})` : ''}`);
           finish();
         } catch (error) {

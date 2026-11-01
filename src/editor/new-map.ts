@@ -1,4 +1,7 @@
-import { DEFAULT_NJS, jumpEditor } from './jump';
+import { DEFAULT_NJS } from './jump';
+import { difficultyPanel } from './difficulty-panel';
+import { silencePreview } from './silence-preview';
+import type { Spectrogram } from './spectrogram';
 import { environmentCatalog, isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
 import { choiceLabel, environmentGallery, type EnvironmentChoice } from './environment-gallery';
 import { readTags } from './song-tags';
@@ -45,18 +48,32 @@ export interface NewMapSettings {
   /** Seconds of silence put in front of the song. */
   silence: number;
   environment: string;
-  difficulty: string;
-  label: string;
-  /** The difficulty's note jump speed and start offset. */
-  njs?: number;
-  offset?: number;
+  /** The difficulties made (their mode, name, label, NJS and offset). */
+  difficulties: { characteristic: string; difficulty: string; label: string; njs: number; offset: number }[];
   previewStart: number;
   previewDuration: number;
 }
 
-/** Info.dat (v2.1.0: everything opens it) for a map with one difficulty (v3). */
-export function infoText(settings: NewMapSettings, difficultyFile: string, songFile: string, coverFile: string | null) {
-  const rank = DIFFICULTIES.find(([name]) => name === settings.difficulty)?.[1] ?? 9;
+/** A new difficulty's file name. */
+export const newDifficultyFile = (entry: { characteristic: string; difficulty: string }) => `${entry.difficulty}${entry.characteristic}.dat`;
+
+/** Info.dat (v2.1.0: everything opens it) for a new map and its difficulties. */
+export function infoText(settings: NewMapSettings, songFile: string, coverFile: string | null) {
+  const sets = [...new Set(settings.difficulties.map((entry) => entry.characteristic))].map((characteristic) => ({
+    _beatmapCharacteristicName: characteristic,
+    _difficultyBeatmaps: settings.difficulties
+      .filter((entry) => entry.characteristic === characteristic)
+      .map((entry) => ({ ...entry, rank: DIFFICULTIES.find(([name]) => name === entry.difficulty)?.[1] ?? 9 }))
+      .sort((a, b) => a.rank - b.rank)
+      .map((entry) => ({
+        _difficulty: entry.difficulty,
+        _difficultyRank: entry.rank,
+        _beatmapFilename: newDifficultyFile(entry),
+        _noteJumpMovementSpeed: entry.njs,
+        _noteJumpStartBeatOffset: entry.offset,
+        _customData: { ...(entry.label === '' ? {} : { _difficultyLabel: entry.label }), _suggestions: ['Chroma'] },
+      })),
+  }));
   return JSON.stringify(
     {
       _version: '2.1.0',
@@ -75,21 +92,7 @@ export function infoText(settings: NewMapSettings, difficultyFile: string, songF
       _allDirectionsEnvironmentName: 'GlassDesertEnvironment',
       _songTimeOffset: 0,
       _customData: { _editors: { _lastEditedBy: 'Lumatic', Lumatic: { version: __APP_VERSION__ } } },
-      _difficultyBeatmapSets: [
-        {
-          _beatmapCharacteristicName: 'Standard',
-          _difficultyBeatmaps: [
-            {
-              _difficulty: settings.difficulty,
-              _difficultyRank: rank,
-              _beatmapFilename: difficultyFile,
-              _noteJumpMovementSpeed: settings.njs ?? 16,
-              _noteJumpStartBeatOffset: settings.offset ?? 0,
-              _customData: { _difficultyLabel: settings.label, _suggestions: ['Chroma'] },
-            },
-          ],
-        },
-      ],
+      _difficultyBeatmapSets: sets,
     },
     null,
     2,
@@ -240,19 +243,16 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
                 <option value="none">Без подгонки</option>
               </select></label>
               <div class="nm-wide nm-dim" data-id="silence-info"></div>
+              <div class="nm-wide" data-id="silence-preview"></div>
             </div>
-          </section>
-          <section class="nm-col">
             <div class="nm-section">Окружение</div>
             <div class="env-plate" data-id="env"></div>
-            <div class="nm-section">Сложность</div>
-            <div class="nm-grid">
-              <label>Сложность<select data-id="diff"></select></label>
-              <label>Подпись<input type="text" data-id="label" value="Lightshow"></label>
-              <div class="nm-wide" data-id="jump"></div>
-            </div>
             <div class="nm-section">Превью в списке песен</div>
             <div data-id="picker"><div class="nm-dim">Появится, когда выберете песню.</div></div>
+          </section>
+          <section class="nm-col">
+            <div class="nm-section">Сложности</div>
+            <div data-id="diffs"></div>
           </section>
         </div>
       </div>
@@ -264,61 +264,16 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     document.body.append(shade);
     const el = <T extends HTMLElement>(id: string) => box.querySelector<T>(`[data-id="${id}"]`)!;
     // the environment: a plate (picture, name, who made it) and the gallery to pick from
-    const standard = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS];
     let choice: EnvironmentChoice = { environment: SHOW_ENVIRONMENTS[0]![0] };
-    const plate = el<HTMLElement>('env');
-    const showPlate = () => {
-      const label = choiceLabel(choice, standard);
-      plate.replaceChildren();
-      const image = document.createElement('img');
-      image.src = label.image;
-      image.alt = '';
-      image.addEventListener('error', () => image.classList.add('missing'));
-      const text = document.createElement('div');
-      text.append(Object.assign(document.createElement('div'), { className: 'env-card-name', textContent: label.name }), Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: label.detail }));
-      const change = document.createElement('button');
-      change.type = 'button';
-      change.textContent = 'Выбрать…';
-      change.addEventListener('click', () => {
-        const shade = document.createElement('div');
-        shade.className = 'ce-shade';
-        const picker = document.createElement('div');
-        picker.className = 'ce-dialog env-dialog';
-        picker.append(Object.assign(document.createElement('div'), { className: 'ce-dialog-title', textContent: 'Окружение новой карты' }));
-        const close = () => shade.remove();
-        picker.append(
-          environmentGallery({
-            mode: 'pick',
-            current: choice,
-            standard,
-            version: 'new',
-            choose: (picked) => {
-              choice = picked;
-              showPlate();
-              close();
-            },
-          }),
-        );
-        const buttons = document.createElement('div');
-        buttons.className = 'ce-dialog-buttons';
-        const cancel = document.createElement('button');
-        cancel.type = 'button';
-        cancel.textContent = 'Отмена';
-        cancel.addEventListener('click', close);
-        buttons.append(cancel);
-        picker.append(buttons);
-        shade.append(picker);
-        document.body.append(shade);
-      });
-      plate.append(image, text, change);
-    };
-    showPlate();
-    const diff = el<HTMLSelectElement>('diff');
-    for (const [name] of DIFFICULTIES) diff.append(Object.assign(document.createElement('option'), { value: name, textContent: name === 'ExpertPlus' ? 'Expert+' : name }));
-    // its NJS, offset and reaction time (a new difficulty: its usual NJS)
-    const jump = jumpEditor({ bpm: 120, difficulty: diff.value, njs: DEFAULT_NJS[diff.value] ?? 16, offset: 0 });
-    el('jump').append(jump.element);
-    diff.addEventListener('change', () => jump.set({ difficulty: diff.value, njs: DEFAULT_NJS[diff.value] ?? 16 }));
+    environmentPlate(el<HTMLElement>('env'), choice, 'Окружение новой карты', (picked) => (choice = picked));
+    // the difficulties (as ChroMapper shows them): Expert+ to start with
+    const diffs = difficultyPanel({ bpm: 120, entries: [{ characteristic: 'Standard', difficulty: 'ExpertPlus', enabled: true, njs: DEFAULT_NJS.ExpertPlus ?? 16, offset: 0, label: '' }] });
+    el('diffs').append(diffs.element);
+    const jump = { set: (patch: { bpm?: number }) => patch.bpm !== undefined && diffs.setBpm(patch.bpm) };
+    // the song's start as it will be (the silence, the beats)
+    const startView = silencePreview();
+    el('silence-preview').append(startView.element);
+    let spectrogram: Spectrogram | null = null;
     el<HTMLInputElement>('mapper').value = defaultMapper;
 
     let audio: AudioBuffer | null = null;
@@ -407,6 +362,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
                   : ' Первая доля попадёт ровно на долю сетки.'
             }`;
       picker?.setLead(s);
+      if (audio !== null) startView.update({ spectrogram, lead: s, bpm: Number(bpmInput.value) || 120, beatsPerBar: beatsPerBar(), firstBeat: detected?.firstBeat ?? null, downbeat: strong ? downbeat!.time : null });
       el<HTMLButtonElement>('create').disabled = audio === null || busy || !(Number(bpmInput.value) > 0) || el<HTMLInputElement>('title').value.trim() === '';
       el<HTMLButtonElement>('detect').disabled = audio === null || busy;
       el<HTMLButtonElement>('listen').disabled = audio === null || busy;
@@ -484,7 +440,12 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
           busy = false;
           // the preview: picked on the song (a third of the way in, to start with)
           picker?.stop();
-          picker = previewPicker(audio, computeSpectrogram(audio), audio.duration * 0.35, 10, () => undefined);
+          const computed = computeSpectrogram(audio);
+          void computed.then((made) => {
+            spectrogram = made;
+            refresh();
+          });
+          picker = previewPicker(audio, computed, audio.duration * 0.35, 10, () => undefined);
           el('picker').replaceChildren(picker.element);
           await detect();
         } catch (error) {
@@ -522,6 +483,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
       input.click();
     });
     const finish = (result: { folder: MapFolder; preset?: string } | null) => {
+      document.querySelector('.dp-menu')?.remove();
       if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
       stopListening?.();
       picker?.stop();
@@ -542,10 +504,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
         bpm: Number(bpmInput.value),
         silence: silence(),
         environment: choice.environment,
-        difficulty: diff.value,
-        label: el<HTMLInputElement>('label').value.trim(),
-        njs: jump.value().njs,
-        offset: jump.value().offset,
+        difficulties: diffs.entries().filter((entry) => entry.enabled),
         previewStart: picker?.value().start ?? silence() + audio.duration * 0.35,
         previewDuration: picker?.value().duration ?? 10,
       };
@@ -563,11 +522,11 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
           status.textContent = 'Перевожу песню в ogg… 0%';
           const ogg = await encodeOgg(song, settings.silence, (done) => (status.textContent = `Перевожу песню в ogg… ${String(Math.round(done * 100))}%`));
           status.textContent = 'Записываю карту…';
-          const difficultyFile = `${settings.difficulty}Standard.dat`;
+          if (settings.difficulties.length === 0) throw new Error('Отметьте хотя бы одну сложность');
           await folder.writeBinary('song.ogg', ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
           await folder.writeBinary('cover.jpg', await coverJpeg(cover, settings.title, settings.artist));
-          await folder.writeText(difficultyFile, emptyDifficulty(editorSettings().newFormat));
-          await folder.writeText('Info.dat', infoText(settings, difficultyFile, 'song.ogg', 'cover.jpg'));
+          for (const entry of settings.difficulties) await folder.writeText(newDifficultyFile(entry), emptyDifficulty(editorSettings().newFormat));
+          await folder.writeText('Info.dat', infoText(settings, 'song.ogg', 'cover.jpg'));
           await folder.refresh();
           try {
             localStorage.setItem('chroeditor.mapper', settings.mapper);
@@ -584,4 +543,58 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     });
     refresh();
   });
+}
+
+/** A plate showing an environment (its picture, name, who made it) with a button opening the gallery to
+ *  pick another (the new map's dialog and the map's settings). */
+export function environmentPlate(plate: HTMLElement, initial: EnvironmentChoice, title: string, changed: (choice: EnvironmentChoice) => void) {
+  const standard = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS];
+  let choice = initial;
+  const showPlate = () => {
+    const label = choiceLabel(choice, standard);
+    plate.replaceChildren();
+    const image = document.createElement('img');
+    image.src = label.image;
+    image.alt = '';
+    image.addEventListener('error', () => image.classList.add('missing'));
+    const text = document.createElement('div');
+    text.append(Object.assign(document.createElement('div'), { className: 'env-card-name', textContent: label.name }), Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: label.detail }));
+    const change = document.createElement('button');
+    change.type = 'button';
+    change.textContent = 'Выбрать…';
+    change.addEventListener('click', () => {
+      const shade = document.createElement('div');
+      shade.className = 'ce-shade';
+      const picker = document.createElement('div');
+      picker.className = 'ce-dialog env-dialog';
+      picker.append(Object.assign(document.createElement('div'), { className: 'ce-dialog-title', textContent: title }));
+      const close = () => shade.remove();
+      picker.append(
+        environmentGallery({
+          mode: 'pick',
+          current: choice,
+          standard,
+          version: 'new',
+          choose: (picked) => {
+            choice = picked;
+            changed(picked);
+            showPlate();
+            close();
+          },
+        }),
+      );
+      const buttons = document.createElement('div');
+      buttons.className = 'ce-dialog-buttons';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = 'Отмена';
+      cancel.addEventListener('click', close);
+      buttons.append(cancel);
+      picker.append(buttons);
+      shade.append(picker);
+      document.body.append(shade);
+    });
+    plate.append(image, text, change);
+  };
+  showPlate();
 }

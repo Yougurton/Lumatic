@@ -188,6 +188,12 @@ void app.whenReady().then(() => {
     if (!allowed(file)) throw new Error('not in an opened folder');
     await backupFile(file, keep);
   });
+  ipcMain.handle('delete-file', async (_event, file: string) => {
+    if (!allowed(file)) throw new Error('not in an opened folder');
+    // (a copy kept first: a deleted difficulty can be brought back from "Lumatic backups")
+    await backupFile(file, 50);
+    await fs.unlink(file);
+  });
   ipcMain.on('set-language', (_event, language: string) => {
     english = language === 'en';
   });
