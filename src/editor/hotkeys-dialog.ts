@@ -97,9 +97,11 @@ export function hotkeysDialog(): Promise<void> {
       const combo = comboOf(event);
       if (combo === null) return;
       const { id, old } = waiting;
-      // (a key some other action had: it is this one's now)
+      // (a key some other action had — on the same side of the editor: it is this one's now)
+      const side = ACTIONS.find((action) => action.id === id)?.tab;
       for (const action of ACTIONS) {
         if (action.id === id || !(keys[action.id] ?? []).includes(combo)) continue;
+        if (side !== undefined && action.tab !== undefined && action.tab !== side) continue;
         keys[action.id] = keys[action.id]!.filter((item) => item !== combo);
         status.textContent = `${keyLabel(combo)} больше не «${action.label}»`;
       }

@@ -44,9 +44,18 @@ export class Preview {
   }
 
   /** The settings' 3D view: the platform, the screen distortion, the notes and walls. */
+  /** The notes side is open: its notes are shown whatever the settings say. */
+  private notesSide = false;
+
+  setNotesSide(on: boolean) {
+    if (on === this.notesSide) return;
+    this.notesSide = on;
+    this.applySettings();
+  }
+
   private applySettings() {
     const { platform, distortion, notes } = settings();
-    this.view.setLightshowMode(notes ? 'full' : 'full-lightshow');
+    this.view.setLightshowMode(notes || this.notesSide ? 'full' : 'full-lightshow');
     this.view.setShowPlayerPlatform(platform);
     this.view.setScreenDisplacementEffects(distortion);
   }
@@ -97,11 +106,18 @@ export class Preview {
     this.noodle = noodle;
   }
 
-  /** The difficulty's notes, walls, arcs and chains: shown when the settings ask for them. */
+  /** The difficulty's notes, walls, arcs and chains (null: none shown). */
   private objects: Pick<Difficulty, 'notes' | 'obstacles' | 'arcs' | 'chains'> | null = null;
 
-  setObjects(difficulty: Difficulty | null) {
-    this.objects = difficulty === null ? null : { notes: difficulty.notes, obstacles: difficulty.obstacles, arcs: difficulty.arcs, chains: difficulty.chains };
+  setObjects(objects: Pick<Difficulty, 'notes' | 'obstacles' | 'arcs' | 'chains'> | null) {
+    this.objects = objects;
+  }
+
+  /** How fast the notes come and how far ahead they appear (the difficulty's NJS and offset). */
+  private jump = { speed: 16, offset: 0 };
+
+  setJump(speed: number, offset: number) {
+    this.jump = { speed: speed > 0 ? speed : 16, offset };
   }
 
   /** The lightshow as events (jsonTime beats). */
@@ -110,7 +126,7 @@ export class Preview {
     const difficulty = createDifficulty('3.3.0');
     difficulty.bpmEvents = this.bpmEvents;
     if (this.noodle !== null) difficulty.noodle = this.noodle;
-    if (this.objects !== null && settings().notes) Object.assign(difficulty, this.objects);
+    if (this.objects !== null) Object.assign(difficulty, this.objects);
     difficulty.events = events.map((event): BasicEvent => {
       const customData: Record<string, unknown> = { ...(event.customData ?? {}) };
       if (event.color !== undefined) customData.color = event.color;
@@ -127,8 +143,8 @@ export class Preview {
     });
     difficulty.events.sort((a, b) => a.songBpmTime - b.songBpmTime);
     const data = buildMapRenderData(difficulty, {
-      noteJumpSpeed: 16,
-      noteStartBeatOffset: 0,
+      noteJumpSpeed: this.jump.speed,
+      noteStartBeatOffset: this.jump.offset,
       songBpm: this.songBpm,
       legacyNoodleV2Semantics: false,
       environmentRemoval: [],

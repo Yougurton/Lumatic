@@ -20,6 +20,11 @@ import { Clicks } from './editor/clicks';
 import { onSettings, settings } from './editor/settings';
 import { settingsDialog } from './editor/settings-dialog';
 import { setRingTickRate } from './engine/core/lighting/ring-motion';
+import { NotePanel } from './editor/note-panel';
+import { NoteInspector } from './editor/note-inspector';
+import { FlyCamera } from './editor/fly-camera';
+import { mirrorObjects } from './editor/notes-timeline';
+import { setSettings } from './editor/settings';
 
 // (the rings ticking as often as the settings say the game's do)
 setRingTickRate(settings().ringTicks);
@@ -38,6 +43,40 @@ const library = new Library(editor, byId('library'));
 const presets = library.presets;
 new GlsEditor(editor);
 new RingEditor(editor);
+new NotePanel(editor, byId('note-panel'));
+new NoteInspector(editor, byId('note-inspector'));
+
+// ----- the two sides: the lights and the notes ---------------------------------------------------------
+
+function setTab(tab: 'lights' | 'notes') {
+  document.body.classList.toggle('notes-tab', tab === 'notes');
+  byId('tab-lights').classList.toggle('active', tab === 'lights');
+  byId('tab-notes').classList.toggle('active', tab === 'notes');
+  editor.setTab(tab);
+  timeline.renderHeaders(true);
+  timeline.redraw();
+  syncViewTools();
+}
+byId('tab-lights').addEventListener('click', () => setTab('lights'));
+byId('tab-notes').addEventListener('click', () => setTab('notes'));
+
+// ----- over the 3D view: the lights and the notes at a click, the camera flown back ------------------
+
+const fly = new FlyCamera(preview, byId<HTMLCanvasElement>('preview'), (text) => editor.setStatus(text));
+function syncViewTools() {
+  byId('view-lights').classList.toggle('active', settings().previewLights);
+  byId('view-lights').title = settings().previewLights ? 'Свет карты в 3D включён. Выключить: все лампы будут гореть белым на 30 %' : 'Свет карты в 3D выключен: лампы горят белым на 30 %. Включить';
+  const notesShown = editor.tab === 'notes' || settings().notes;
+  byId('view-notes').classList.toggle('active', notesShown);
+  (byId('view-notes') as HTMLButtonElement).disabled = editor.tab === 'notes';
+  byId('view-notes').title = editor.tab === 'notes' ? 'На вкладке «Ноты» ноты видны всегда' : settings().notes ? 'Ноты, бомбы и стены в 3D видны. Скрыть' : 'Показать ноты, бомбы и стены в 3D';
+  byId('view-reset').hidden = !fly.isFree;
+}
+byId('view-lights').addEventListener('click', () => setSettings({ previewLights: !settings().previewLights }));
+byId('view-notes').addEventListener('click', () => setSettings({ notes: !settings().notes }));
+byId('view-reset').addEventListener('click', () => fly.reset());
+fly.onChange(syncViewTools);
+syncViewTools();
 
 // for tests and the console
 (window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, library, audio: { findBpm, encodeOgg } };
@@ -84,14 +123,15 @@ const selectionInfo = byId('selection-info');
 const clipboardInfo = byId('clipboard-info');
 let shownInfo = '';
 function showSelection() {
-  const selected = editor.selection.size;
-  const board = editor.clipboardInfo();
-  const key = `${String(selected)}|${board === null ? '' : `${String(board.count)}/${String(board.rows)}`}`;
+  const notes = editor.tab === 'notes';
+  const selected = notes ? editor.noteSelection.size : editor.selection.size;
+  const board = notes ? (editor.notesClipboardSize() > 0 ? { count: editor.notesClipboardSize(), rows: 1 } : null) : editor.clipboardInfo();
+  const key = `${String(notes)}|${String(selected)}|${board === null ? '' : `${String(board.count)}/${String(board.rows)}`}`;
   if (key === shownInfo) return;
   shownInfo = key;
   selectionInfo.hidden = selected === 0;
   selectionInfo.textContent = tr('▣ Выделено: {0}', selected);
-  selectionInfo.title = tr('Выделено событий: {0}. Esc — снять выделение', selected);
+  selectionInfo.title = notes ? tr('Выделено объектов: {0}. Esc — снять выделение', selected) : tr('Выделено событий: {0}. Esc — снять выделение', selected);
   clipboardInfo.hidden = board === null || board.count === 0;
   if (board !== null) {
     clipboardInfo.textContent = board.rows > 1 ? tr('📋 В буфере: {0} ({1} стр.)', board.count, board.rows) : tr('📋 В буфере: {0}', board.count);
@@ -202,7 +242,8 @@ applyScale();
 onSettings((now, before) => {
   if (now.volume !== before.volume) editor.clock?.setVolume(now.volume);
   if (now.uiScale !== before.uiScale) applyScale();
-  if (now.notes !== before.notes) editor.rebuildPreview(true);
+  if (now.notes !== before.notes || now.previewLights !== before.previewLights) editor.rebuildPreview(true);
+  syncViewTools();
   if (now.ringTicks !== before.ringTicks) {
     setRingTickRate(now.ringTicks);
     editor.ringTimingChanged();
@@ -353,10 +394,67 @@ const ACTIONS_RUN: Record<string, () => void> = {
   adjust: () => adjustDialog(editor),
   group: () => void timeline.groupSelected(),
   preset: () => void presets.saveSelection(),
+  noteRed: () => noteKind('red'),
+  noteBlue: () => noteKind('blue'),
+  noteBomb: () => noteKind('bomb'),
+  noteWall: () => noteKind('wall'),
+  dirUp: () => editor.setNoteDirection(held.has('KeyA') ? 4 : held.has('KeyD') ? 5 : 0),
+  dirDown: () => editor.setNoteDirection(held.has('KeyA') ? 6 : held.has('KeyD') ? 7 : 1),
+  dirLeft: () => editor.setNoteDirection(held.has('KeyW') ? 4 : held.has('KeyS') ? 6 : 2),
+  dirRight: () => editor.setNoteDirection(held.has('KeyW') ? 5 : held.has('KeyS') ? 7 : 3),
+  dirUpLeft: () => editor.setNoteDirection(4),
+  dirUpRight: () => editor.setNoteDirection(5),
+  dirDownLeft: () => editor.setNoteDirection(6),
+  dirDownRight: () => editor.setNoteDirection(7),
+  dirDot: () => editor.setNoteDirection(8),
+  swapColor: () =>
+    editor.updateObjects(editor.noteSelection, (_kind, item) => {
+      if ('c' in item) item.c = 1 - item.c;
+    }),
+  noteArc: () => void editor.makeArc(),
+  noteChain: () => void editor.makeChain(),
+  notesTab: () => setTab(editor.tab === 'notes' ? 'lights' : 'notes'),
   save: () => void save(),
   open: () => void openMapFolder().then(openFolder),
   new: () => void newMap(),
 };
+/** On the notes side the editing keys work on its objects. */
+const NOTES_RUN: Record<string, () => void> = {
+  copy: () => editor.copyNotes(),
+  cut: () => editor.cutNotes(),
+  paste: () => {
+    const over = timeline.pointer();
+    editor.pasteNotes(editor.snapBeat(settings().pasteAt === 'mouse' && over !== null ? over.beat : editor.playhead()));
+  },
+  duplicate: () => {
+    editor.copyNotes();
+    const picked = editor.selectedObjects();
+    if (picked.length === 0) return;
+    const last = Math.max(...picked.map(({ item }) => item.b));
+    editor.pasteNotes(last + (editor.snap || 0.25));
+  },
+  delete: () => editor.deleteNoteSelection(),
+  selectAll: () => editor.selectAllNotes(),
+  deselect: () => editor.selectNotes([]),
+  mirror: () => mirrorObjects(editor),
+};
+
+function noteKind(kind: 'red' | 'blue' | 'bomb' | 'wall') {
+  editor.noteTool = { ...editor.noteTool, kind };
+  // (notes picked: they take the colour)
+  if ((kind === 'red' || kind === 'blue') && editor.noteSelection.size > 0) {
+    editor.updateObjects(editor.noteSelection, (objectKind, item) => {
+      if (objectKind === 'notes' && 'c' in item) item.c = kind === 'red' ? 0 : 1;
+    });
+  } else editor.emit('selection');
+}
+
+/** The direction keys held (two at once: a diagonal). */
+const held = new Set<string>();
+window.addEventListener('keydown', (event) => held.add(event.code));
+window.addEventListener('keyup', (event) => held.delete(event.code));
+window.addEventListener('blur', () => held.clear());
+
 // the number pad types its digits in a field whether NumLock is on or not (off, its keys are arrows,
 // Home, End… — and in a number field the arrows would change the number), its point a point in a
 // number field (a Russian layout gives a comma there, which a number field won't take)
@@ -382,6 +480,12 @@ window.addEventListener('keydown', (event) => {
   const ctrl = event.ctrlKey || event.metaKey;
   if (target.tagName === 'SELECT' && !ctrl) return;
   if (event.code === 'Escape' && !ctrl) {
+    if (editor.tab === 'notes') {
+      if (editor.songRange !== null) editor.setSongRange(null);
+      else editor.selectNotes([]);
+      event.preventDefault();
+      return;
+    }
     if (editor.previewExtra !== null) editor.stopTrial();
     else if (editor.songRange !== null) editor.setSongRange(null);
     else if (editor.tool.kind !== 'clip') {
@@ -396,9 +500,10 @@ window.addEventListener('keydown', (event) => {
     return;
   }
   const combo = comboOf(event);
-  const action = combo === null ? null : actionFor(combo);
+  const action = combo === null ? null : actionFor(combo, editor.tab);
   if (action === null) return;
-  ACTIONS_RUN[action]?.();
+  if (editor.tab === 'notes' && NOTES_RUN[action] !== undefined) NOTES_RUN[action]();
+  else ACTIONS_RUN[action]?.();
   event.preventDefault();
 });
 

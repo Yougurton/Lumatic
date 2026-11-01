@@ -1,0 +1,618 @@
+import type { Editor } from './editor';
+import { DIR_ANGLE, MIRROR_DIR, objectSpan, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
+import { newId } from './model';
+
+/**
+ * The notes side's timeline (as in ChroViewer): the grid's four columns as four lanes, time going right.
+ * A note is a mark in its colour with its arrow (or dot), and three pips on its side — the lit one its
+ * row (bottom, middle, top); a bomb a dark ball; a wall a band across its columns for its length; an arc
+ * a curve from its head to its tail, a chain a line with its links. The timeline around it (the ruler,
+ * the spectrogram, bookmarks, the song cursor, zoom) is the lights' one.
+ *
+ * A click on an empty lane puts in what the tool is (a wall: drawn along); a drag there picks
+ * everything in its box. Objects: click — pick (Shift/Ctrl: add), drag — move in time and across
+ * lanes (Alt: a copy), right click — delete, middle click — the other colour, Alt+wheel — turn.
+ */
+
+export interface LaneHost {
+  readonly editor: Editor;
+  beatToX(beat: number): number;
+  xToBeat(x: number): number;
+  readonly lanesTop: number;
+  readonly lanesBottom: number;
+  readonly left: number;
+  readonly width: number;
+  readonly pxPerBeat: number;
+  redraw(): void;
+}
+
+type AnyObject = MapNote | MapBomb | MapWall | MapArc | MapChain;
+type Found = { kind: ObjectKind; item: AnyObject };
+
+type Drag =
+  | { kind: 'move'; grabBeat: number; grabLane: number; anchor: number; origin: Map<string, { b: number; tb?: number; x: number; tx?: number }>; moved: boolean }
+  | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
+  | { kind: 'wall'; from: number; to: number; lane: number; lane2: number }
+  | { kind: 'place'; x0: number; y0: number; beat: number; lane: number; additive: boolean };
+
+const ROW_NAMES = ['низ', 'середина', 'верх'];
+const DIR_NAMES: Record<number, string> = { 0: '↑', 1: '↓', 2: '←', 3: '→', 4: '↖', 5: '↗', 6: '↙', 7: '↘', 8: '•' };
+
+export class NotesLanes {
+  private drag: Drag | null = null;
+  hover: { x: number; y: number } | null = null;
+
+  constructor(private readonly host: LaneHost) {}
+
+  private get editor() {
+    return this.host.editor;
+  }
+
+  laneHeight() {
+    return Math.max(18, (this.host.lanesBottom - this.host.lanesTop) / 4);
+  }
+
+  laneTop(lane: number) {
+    return this.host.lanesTop + lane * this.laneHeight();
+  }
+
+  laneAt(y: number): number | null {
+    if (y < this.host.lanesTop || y >= this.host.lanesBottom) return null;
+    return Math.max(0, Math.min(3, Math.floor((y - this.host.lanesTop) / this.laneHeight())));
+  }
+
+  private markSize() {
+    return Math.max(10, Math.min(24, this.laneHeight() * 0.62));
+  }
+
+  // ----- what's where ------------------------------------------------------------------------------------
+
+  /** The marks drawn for the notes and bombs in view: their boxes (several at one beat in a lane
+   *  side by side). */
+  private marks(): { found: Found; x: number; y: number; size: number }[] {
+    const host = this.host;
+    const size = this.markSize();
+    const from = host.xToBeat(host.left - size);
+    const to = host.xToBeat(host.width + size);
+    const out: { found: Found; x: number; y: number; size: number }[] = [];
+    const groups = new Map<string, Found[]>();
+    const put = (kind: ObjectKind, item: MapNote | MapBomb) => {
+      if (item.b < from || item.b > to) return;
+      const lane = Math.max(0, Math.min(3, Math.round(item.x)));
+      const key = `${String(Math.round(item.b * 1000))}:${String(lane)}`;
+      const list = groups.get(key) ?? [];
+      list.push({ kind, item });
+      groups.set(key, list);
+    };
+    for (const item of this.editor.objects.notes) put('notes', item);
+    for (const item of this.editor.objects.bombs) put('bombs', item);
+    for (const list of groups.values()) {
+      list.sort((a, b) => b.item.y - a.item.y);
+      const first = list[0]!.item;
+      const lane = Math.max(0, Math.min(3, Math.round(first.x)));
+      const cx = host.beatToX(first.b);
+      const cy = this.laneTop(lane) + this.laneHeight() / 2;
+      const step = list.length > 1 ? Math.min(size * 0.55, (this.host.pxPerBeat * 0.2) / 1) : 0;
+      list.forEach((found, index) => {
+        out.push({ found, x: cx + (index - (list.length - 1) / 2) * Math.max(step, size * 0.45), y: cy, size: list.length > 1 ? size * 0.85 : size });
+      });
+    }
+    return out;
+  }
+
+  private wallRect(wall: MapWall) {
+    const x0 = this.host.beatToX(wall.b);
+    const x1 = this.host.beatToX(wall.b + Math.max(0, wall.d));
+    const first = Math.max(0, Math.min(3, Math.round(wall.x)));
+    const last = Math.max(first, Math.min(3, Math.round(wall.x + wall.w - 1)));
+    const top = this.laneTop(first) + 3;
+    const bottom = this.laneTop(last) + this.laneHeight() - 3;
+    return { x: x0, y: top, w: Math.max(3, x1 - x0), h: bottom - top };
+  }
+
+  private laneCenter(x: number) {
+    const lane = Math.max(0, Math.min(3, Math.round(x)));
+    return this.laneTop(lane) + this.laneHeight() / 2;
+  }
+
+  /** The object under the mouse (marks before walls, arcs and chains). */
+  hit(x: number, y: number): Found | null {
+    const marks = this.marks();
+    for (let i = marks.length - 1; i >= 0; i--) {
+      const mark = marks[i]!;
+      if (Math.abs(x - mark.x) <= mark.size / 2 + 2 && Math.abs(y - mark.y) <= mark.size / 2 + 2) return mark.found;
+    }
+    // (an arc or a chain: by its head or its tail)
+    for (const kind of ['chains', 'arcs'] as const) {
+      for (const item of this.editor.objects[kind]) {
+        const hx = this.host.beatToX(item.b);
+        const tx = this.host.beatToX(item.tb);
+        const reach = kind === 'chains' ? this.markSize() / 2 + 2 : 7;
+        if (Math.hypot(x - hx, y - this.laneCenter(item.x)) <= reach || Math.hypot(x - tx, y - this.laneCenter(item.tx)) <= 7) return { kind, item };
+      }
+    }
+    for (const wall of this.editor.objects.walls) {
+      const r = this.wallRect(wall);
+      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return { kind: 'walls', item: wall };
+    }
+    return null;
+  }
+
+  // ----- drawing ------------------------------------------------------------------------------------------
+
+  private rgb(color: readonly number[], alpha = 1) {
+    return `rgba(${color
+      .slice(0, 3)
+      .map((value) => Math.round(Math.max(0, Math.min(1, value)) * 255))
+      .join(',')},${String(alpha)})`;
+  }
+
+  draw(ctx: CanvasRenderingContext2D) {
+    const host = this.host;
+    const editor = this.editor;
+    const colors = editor.preview.colors;
+    const noteColor = (c: number) => (c === 0 ? colors.leftNote : colors.rightNote);
+    const h = this.laneHeight();
+    // lanes
+    for (let lane = 0; lane < 4; lane++) {
+      const top = this.laneTop(lane);
+      ctx.fillStyle = lane % 2 === 0 ? '#17181e' : '#191a20';
+      ctx.fillRect(0, top, host.width, h);
+      ctx.fillStyle = '#25272f';
+      ctx.fillRect(0, top + h - 1, host.width, 1);
+    }
+    // (the middle: between the left hand's columns and the right hand's)
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(0, this.laneTop(2) - 1, host.width, 1);
+  }
+
+  /** The objects over the lanes (and the grid drawn between). */
+  drawObjects(ctx: CanvasRenderingContext2D) {
+    const host = this.host;
+    const editor = this.editor;
+    const colors = editor.preview.colors;
+    const noteColor = (c: number) => (c === 0 ? colors.leftNote : colors.rightNote);
+    const h = this.laneHeight();
+    const from = host.xToBeat(host.left - 40);
+    const to = host.xToBeat(host.width + 40);
+    // walls
+    for (const wall of editor.objects.walls) {
+      if (wall.b + wall.d < from || wall.b > to) continue;
+      const r = this.wallRect(wall);
+      const picked = editor.noteSelection.has(wall.id);
+      const crouch = wall.y >= 2;
+      ctx.fillStyle = this.rgb(colors.obstacle, picked ? 0.45 : 0.28);
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      if (crouch) {
+        // (a crouch wall: hatched, the player ducks under it)
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(r.x, r.y, r.w, r.h);
+        ctx.clip();
+        ctx.strokeStyle = this.rgb(colors.obstacle, 0.55);
+        ctx.lineWidth = 1;
+        for (let x = r.x - r.h; x < r.x + r.w; x += 7) {
+          ctx.beginPath();
+          ctx.moveTo(x, r.y + r.h);
+          ctx.lineTo(x + r.h, r.y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      ctx.strokeStyle = picked ? '#ffe27a' : this.rgb(colors.obstacle, 0.9);
+      ctx.lineWidth = picked ? 2 : 1;
+      ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+      if (r.w > 40 && r.h > 14) {
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.fillText(crouch ? 'присед' : wall.y === 0 && wall.h >= 5 ? 'стена' : `стена ${String(wall.y)}–${String(wall.y + wall.h)}`, r.x + 4, r.y + 11);
+      }
+    }
+    // arcs and chains
+    for (const arc of editor.objects.arcs) {
+      if (arc.tb < from || arc.b > to) continue;
+      const x0 = host.beatToX(arc.b);
+      const x1 = host.beatToX(arc.tb);
+      const y0 = this.laneCenter(arc.x);
+      const y1 = this.laneCenter(arc.tx);
+      const picked = editor.noteSelection.has(arc.id);
+      ctx.strokeStyle = picked ? '#ffe27a' : this.rgb(noteColor(arc.c), 0.8);
+      ctx.lineWidth = picked ? 3 : 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      const bend = arc.m === 1 ? -h * 0.5 : arc.m === 2 ? h * 0.5 : 0;
+      ctx.bezierCurveTo(x0 + (x1 - x0) * 0.35, y0 + bend, x0 + (x1 - x0) * 0.65, y1 + bend, x1, y1);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (const [x, y] of [
+        [x0, y0],
+        [x1, y1],
+      ] as const) {
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = this.rgb(noteColor(arc.c), 1);
+        ctx.fill();
+      }
+    }
+    for (const chain of editor.objects.chains) {
+      if (chain.tb < from || chain.b > to) continue;
+      const x0 = host.beatToX(chain.b);
+      const x1 = host.beatToX(chain.tb);
+      const y0 = this.laneCenter(chain.x);
+      const y1 = this.laneCenter(chain.tx);
+      const picked = editor.noteSelection.has(chain.id);
+      ctx.strokeStyle = picked ? '#ffe27a' : this.rgb(noteColor(chain.c), 0.9);
+      ctx.lineWidth = picked ? 3 : 2;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      const links = Math.max(1, Math.round(chain.sc) - 1);
+      ctx.fillStyle = this.rgb(noteColor(chain.c), 1);
+      for (let k = 1; k <= links; k++) {
+        const t = (k / links) * Math.max(0, Math.min(1, chain.s));
+        ctx.fillRect(x0 + (x1 - x0) * t - 2, y0 + (y1 - y0) * t - 4, 4, 8);
+      }
+      // (its head: a note of its own, half a block — drawn as a note with a notch)
+      const size = this.markSize() * 0.9;
+      this.drawNote(ctx, { id: chain.id, b: chain.b, x: chain.x, y: chain.y, c: chain.c, d: chain.d, a: 0 }, x0, y0, size, this.rgb(noteColor(chain.c)), picked);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(x0 - size / 2, y0 + size * 0.12, size, 2);
+    }
+    // notes and bombs
+    for (const { found, x, y, size } of this.marks()) {
+      const picked = editor.noteSelection.has(found.item.id);
+      if (found.kind === 'bombs') this.drawBomb(ctx, x, y, size, picked);
+      else this.drawNote(ctx, found.item as MapNote, x, y, size, this.rgb(noteColor((found.item as MapNote).c)), picked);
+    }
+    // what's being drawn or boxed
+    const drag = this.drag;
+    if (drag?.kind === 'wall') {
+      const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
+      const lane = Math.min(drag.lane, drag.lane2);
+      const wall: MapWall = { id: '', b: a, d: Math.max(b - a, editor.snap || 0.25), x: lane, y: 0, w: Math.abs(drag.lane2 - drag.lane) + 1, h: 5 };
+      const r = this.wallRect(wall);
+      ctx.fillStyle = this.rgb(colors.obstacle, 0.3);
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = '#ffe27a';
+      ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    }
+    if (drag?.kind === 'box') {
+      const { x0, y0, x1, y1 } = drag;
+      ctx.fillStyle = 'rgba(120,170,255,0.12)';
+      ctx.strokeStyle = 'rgba(140,180,255,0.8)';
+      ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      ctx.strokeRect(Math.min(x0, x1) + 0.5, Math.min(y0, y1) + 0.5, Math.abs(x1 - x0), Math.abs(y1 - y0));
+    }
+    this.drawTip(ctx);
+  }
+
+  private drawNote(ctx: CanvasRenderingContext2D, note: MapNote, x: number, y: number, size: number, color: string, picked: boolean) {
+    const half = size / 2;
+    ctx.fillStyle = color;
+    roundRect(ctx, x - half, y - half, size, size, Math.max(2, size * 0.18));
+    ctx.fill();
+    ctx.strokeStyle = picked ? '#ffe27a' : 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = picked ? 2.5 : 1;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    if (note.d === 8) {
+      ctx.beginPath();
+      ctx.arc(x, y, size * 0.14, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const angle = (((DIR_ANGLE[note.d] ?? 270) + note.a) * Math.PI) / 180;
+      // (the arrow: a chevron pointing where the cut goes — screen y goes down)
+      const dx = Math.cos(angle);
+      const dy = -Math.sin(angle);
+      const tip = size * 0.3;
+      const back = size * 0.08;
+      const wing = size * 0.28;
+      ctx.beginPath();
+      ctx.moveTo(x + dx * tip, y + dy * tip);
+      ctx.lineTo(x - dx * back - dy * wing, y - dy * back + dx * wing);
+      ctx.lineTo(x - dx * back + dy * wing, y - dy * back - dx * wing);
+      ctx.closePath();
+      ctx.fill();
+    }
+    this.drawPips(ctx, x + half + 3, y, size, note.y);
+  }
+
+  private drawBomb(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, picked: boolean) {
+    const r = size * 0.42;
+    ctx.fillStyle = '#2b2d33';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = picked ? '#ffe27a' : '#c9ccd6';
+    ctx.lineWidth = picked ? 2.5 : 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.6, y + r * 0.6);
+    ctx.lineTo(x + r * 0.6, y - r * 0.6);
+    ctx.stroke();
+  }
+
+  /** Three pips beside a mark, bottom to top: the lit one is the note's row. */
+  private drawPips(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, row: number) {
+    const gap = Math.max(3, size * 0.26);
+    for (let k = 0; k < 3; k++) {
+      ctx.fillStyle = k === Math.round(row) ? '#ffffff' : 'rgba(255,255,255,0.18)';
+      ctx.beginPath();
+      ctx.arc(x, y + (1 - k) * gap, Math.max(1.3, size * 0.07), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** A note on what's under the mouse (what it is, when, where). */
+  private drawTip(ctx: CanvasRenderingContext2D) {
+    const hover = this.hover;
+    if (hover === null || this.drag !== null) return;
+    const found = this.hit(hover.x, hover.y);
+    if (found === null) return;
+    const editor = this.editor;
+    const item = found.item;
+    const seconds = editor.beatToSeconds(item.b);
+    const time = `${String(Math.floor(seconds / 60))}:${(seconds % 60).toFixed(2).padStart(5, '0')} · доля ${item.b.toFixed(3)}`;
+    let title: string;
+    let where = `колонка ${String(item.x + 1)}, ряд ${ROW_NAMES[Math.round((item as MapNote).y)] ?? String((item as MapNote).y)}`;
+    if (found.kind === 'notes') {
+      const note = item as MapNote;
+      title = `${note.c === 0 ? 'Красная' : 'Синяя'} нота ${DIR_NAMES[note.d] ?? ''}`;
+    } else if (found.kind === 'bombs') title = 'Бомба';
+    else if (found.kind === 'walls') {
+      const wall = item as MapWall;
+      title = wall.y >= 2 ? 'Стена-присед' : 'Стена';
+      where = `колонки ${String(wall.x + 1)}–${String(wall.x + wall.w)}, длина ${wall.d.toFixed(2)} доли`;
+    } else {
+      const span = objectSpan(found.kind, item);
+      title = found.kind === 'arcs' ? 'Дуга' : `Цепь (${String((item as MapChain).sc)} звеньев)`;
+      where = `${where} → доля ${span[1].toFixed(3)}`;
+    }
+    const lines = [title, time, where];
+    ctx.font = '600 12px system-ui, sans-serif';
+    const w = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 18;
+    const hgt = 16 * lines.length + 10;
+    let x = hover.x + 14;
+    let y = hover.y - hgt - 8;
+    if (x + w > this.host.width) x = hover.x - w - 14;
+    if (y < 2) y = hover.y + 16;
+    ctx.fillStyle = 'rgba(20,22,28,0.94)';
+    roundRect(ctx, x, y, w, hgt, 8);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    lines.forEach((line, index) => {
+      ctx.font = index === 0 ? '600 12px system-ui, sans-serif' : '12px system-ui, sans-serif';
+      ctx.fillStyle = index === 0 ? '#fff' : '#9aa0ad';
+      ctx.fillText(line, x + 9, y + 18 + index * 16);
+    });
+  }
+
+  // ----- the mouse -------------------------------------------------------------------------------------
+
+  cursor(x: number, y: number) {
+    if (this.drag !== null) return this.drag.kind === 'move' ? 'grabbing' : 'default';
+    return this.hit(x, y) !== null ? 'grab' : this.laneAt(y) !== null ? 'crosshair' : 'default';
+  }
+
+  /** A mouse button down on the lanes. */
+  mouseDown(event: MouseEvent, x: number, y: number) {
+    const editor = this.editor;
+    const lane = this.laneAt(y);
+    if (lane === null) return;
+    const beat = this.host.xToBeat(x);
+    const found = this.hit(x, y);
+    if (event.button === 1) {
+      // middle click: the other colour (as in ChroMapper)
+      event.preventDefault();
+      if (found !== null && 'c' in found.item) editor.updateObjects([found.item.id], (_kind, item) => ((item as MapNote).c = 1 - (item as MapNote).c));
+      return;
+    }
+    if (event.button === 2) {
+      if (found !== null) {
+        if (!editor.noteSelection.has(found.item.id)) editor.selectNotes([found.item.id]);
+        editor.deleteNoteSelection();
+      }
+      return;
+    }
+    if (event.button !== 0) return;
+    if (found === null) {
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        this.drag = { kind: 'box', x0: x, y0: y, x1: x, y1: y, additive: true };
+        return;
+      }
+      if (editor.noteTool.kind === 'wall') {
+        const from = editor.snapBeat(Math.max(0, beat));
+        this.drag = { kind: 'wall', from, to: from, lane, lane2: lane };
+        return;
+      }
+      // (a click puts in a note — a drag boxes)
+      this.drag = { kind: 'place', x0: x, y0: y, beat: editor.snapBeat(Math.max(0, beat)), lane, additive: false };
+      return;
+    }
+    const id = found.item.id;
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      editor.selectNotes([id], 'toggle');
+      return;
+    }
+    if (!editor.noteSelection.has(id)) editor.selectNotes([id]);
+    editor.noteCheckpoint();
+    if (event.altKey) {
+      // Alt: drag a copy
+      const copies = editor.selectedObjects().map(({ kind, item }) => ({ kind, item: { ...structuredClone(item), id: newId('n') } as AnyObject }));
+      for (const { kind, item } of copies) (editor.objects[kind] as AnyObject[]).push(item);
+      editor.noteSelection = new Set(copies.map(({ item }) => item.id));
+    }
+    const origin = new Map<string, { b: number; tb?: number; x: number; tx?: number }>();
+    for (const { item } of editor.selectedObjects()) origin.set(item.id, { b: item.b, x: item.x, ...('tb' in item ? { tb: item.tb, tx: item.tx } : {}) });
+    this.drag = { kind: 'move', grabBeat: beat, grabLane: lane, anchor: found.item.b, origin, moved: event.altKey };
+  }
+
+  /** The mouse moved (a drag going on: true). */
+  mouseMove(x: number, y: number): boolean {
+    this.hover = { x, y };
+    const drag = this.drag;
+    if (drag === null) return false;
+    const editor = this.editor;
+    const beat = this.host.xToBeat(x);
+    if (drag.kind === 'place') {
+      if (Math.hypot(x - drag.x0, y - drag.y0) > 5) this.drag = { kind: 'box', x0: drag.x0, y0: drag.y0, x1: x, y1: y, additive: drag.additive };
+      this.host.redraw();
+      return true;
+    }
+    if (drag.kind === 'box') {
+      drag.x1 = x;
+      drag.y1 = y;
+    } else if (drag.kind === 'wall') {
+      drag.to = editor.snapBeat(Math.max(0, beat));
+      drag.lane2 = this.laneAt(Math.max(this.host.lanesTop, Math.min(this.host.lanesBottom - 1, y))) ?? drag.lane2;
+    } else {
+      const target = editor.snapBeat(drag.anchor + (beat - drag.grabBeat));
+      const shift = Math.max(-Math.min(...[...drag.origin.values()].map((o) => o.b)), target - drag.anchor);
+      const lane = this.laneAt(Math.max(this.host.lanesTop, Math.min(this.host.lanesBottom - 1, y))) ?? drag.grabLane;
+      let laneShift = lane - drag.grabLane;
+      // (nothing goes off the grid)
+      for (const found of editor.selectedObjects()) {
+        const o = drag.origin.get(found.item.id);
+        if (o === undefined) continue;
+        const width = found.kind === 'walls' ? (found.item as MapWall).w : 1;
+        const lows = [o.x, o.tx ?? o.x];
+        const highs = [o.x + width - 1, o.tx ?? o.x];
+        laneShift = Math.max(laneShift, -Math.min(...lows));
+        laneShift = Math.min(laneShift, 3 - Math.max(...highs));
+      }
+      if (shift !== 0 || laneShift !== 0) drag.moved = true;
+      for (const found of editor.selectedObjects()) {
+        const o = drag.origin.get(found.item.id);
+        if (o === undefined) continue;
+        const item = found.item;
+        item.b = round(o.b + shift);
+        item.x = o.x + laneShift;
+        if ('tb' in item && o.tb !== undefined && o.tx !== undefined) {
+          item.tb = round(o.tb + shift);
+          item.tx = o.tx + laneShift;
+        }
+      }
+      editor.noteVersion++;
+      editor.rebuildPreview();
+    }
+    this.host.redraw();
+    return true;
+  }
+
+  mouseUp(event: MouseEvent) {
+    const drag = this.drag;
+    this.drag = null;
+    if (drag === null) return;
+    const editor = this.editor;
+    if (drag.kind === 'place') {
+      this.place(drag.beat, drag.lane);
+    } else if (drag.kind === 'box') {
+      const [x0, x1] = [Math.min(drag.x0, drag.x1), Math.max(drag.x0, drag.x1)];
+      const [y0, y1] = [Math.min(drag.y0, drag.y1), Math.max(drag.y0, drag.y1)];
+      const inside = new Set<string>();
+      for (const mark of this.marks()) if (mark.x >= x0 && mark.x <= x1 && mark.y >= y0 && mark.y <= y1) inside.add(mark.found.item.id);
+      for (const wall of editor.objects.walls) {
+        const r = this.wallRect(wall);
+        if (r.x <= x1 && r.x + r.w >= x0 && r.y <= y1 && r.y + r.h >= y0) inside.add(wall.id);
+      }
+      for (const kind of ['arcs', 'chains'] as const) {
+        for (const item of editor.objects[kind]) {
+          const hx = this.host.beatToX(item.b);
+          const hy = this.laneCenter(item.x);
+          if (hx >= x0 && hx <= x1 && hy >= y0 && hy <= y1) inside.add(item.id);
+        }
+      }
+      editor.selectNotes(inside, drag.additive || event.shiftKey ? 'add' : 'replace');
+    } else if (drag.kind === 'wall') {
+      const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
+      const lane = Math.min(drag.lane, drag.lane2);
+      const wide = Math.abs(drag.lane2 - drag.lane) + 1;
+      const length = Math.max(b - a, editor.snap || 0.25);
+      editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: a, x: lane, y: editor.wallKind === 'crouch' ? 2 : 0, d: round(length), w: wide, h: editor.wallKind === 'crouch' ? 3 : 5 } }], false);
+    } else if (!drag.moved) {
+      editor.noteUndoDiscard();
+    } else {
+      editor.notesChanged(true);
+    }
+    this.host.redraw();
+  }
+
+  /** What the tool puts in at a beat in a lane (its row: the one picked on the grid). */
+  place(beat: number, lane: number, row = this.editor.noteRow) {
+    const editor = this.editor;
+    const tool = editor.noteTool;
+    const same = (item: { b: number; x: number; y: number }) => Math.abs(item.b - beat) < 1e-4 && item.x === lane && item.y === row;
+    const there = [...editor.objects.notes, ...editor.objects.bombs].find(same);
+    if (there !== undefined) {
+      editor.selectNotes([there.id]);
+      return;
+    }
+    if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: lane, y: row } }], false);
+    else if (tool.kind === 'wall') editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: lane, y: editor.wallKind === 'crouch' ? 2 : 0, d: editor.snap || 1, w: 1, h: editor.wallKind === 'crouch' ? 3 : 5 } }], false);
+    else editor.addObjects([{ kind: 'notes', item: { id: newId('n'), b: beat, x: lane, y: row, c: tool.kind === 'red' ? 0 : 1, d: tool.direction, a: 0 } }], false);
+  }
+
+  /** Alt+wheel over a note: its arrow turned an eighth (true: done). */
+  wheel(event: WheelEvent, x: number, y: number) {
+    if (!event.altKey) return false;
+    const found = this.hit(x, y);
+    if (found !== null && found.kind === 'chains') {
+      // (a chain: its links one more or less)
+      this.editor.updateObjects([found.item.id], (_kind, item) => ((item as MapChain).sc = Math.max(2, Math.min(32, (item as MapChain).sc + (event.deltaY < 0 ? 1 : -1)))));
+      return true;
+    }
+    if (found === null || found.kind !== 'notes') return false;
+    const order = [0, 5, 3, 7, 1, 6, 2, 4];
+    this.editor.updateObjects(this.editor.noteSelection.has(found.item.id) ? this.editor.noteSelection : [found.item.id], (kind, item) => {
+      if (kind !== 'notes') return;
+      const note = item as MapNote;
+      if (note.d === 8) return;
+      const at = order.indexOf(note.d);
+      note.d = order[(at + (event.deltaY > 0 ? 1 : -1) + 8) % 8]!;
+    });
+    return true;
+  }
+
+  leave() {
+    this.hover = null;
+    this.host.redraw();
+  }
+}
+
+/** The selected objects mirrored left ↔ right: columns, directions, colours (as in ChroMapper). */
+export function mirrorObjects(editor: Editor) {
+  const ids = [...editor.noteSelection];
+  if (ids.length === 0) return;
+  editor.updateObjects(ids, (kind, item) => {
+    if (kind === 'walls') {
+      const wall = item as MapWall;
+      wall.x = 4 - wall.x - wall.w;
+      return;
+    }
+    item.x = 3 - item.x;
+    if ('c' in item) item.c = 1 - item.c;
+    if ('d' in item) item.d = MIRROR_DIR[item.d] ?? item.d;
+    if ('a' in item) item.a = -item.a;
+    if ('tx' in item) item.tx = 3 - item.tx;
+    if ('tc' in item) item.tc = MIRROR_DIR[item.tc] ?? item.tc;
+    if ('m' in item && item.m !== 0) item.m = 3 - item.m;
+  });
+}
+
+const round = (value: number) => Math.round(value * 1e6) / 1e6;
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+export type { MapObjects };

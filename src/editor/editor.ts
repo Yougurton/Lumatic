@@ -6,7 +6,7 @@ import { createAudioClock, createSilentClock, type SongClock } from '../engine/c
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import { bakeLights, rawEvents, type OutEvent, type SchemeColors } from './bake';
 import { importEvents } from './import';
-import { difficultyFile, loadMap, loadProject, projectFileName, readBookmarks, requirementsOf, setRequirements, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
+import { difficultyFile, difficultyVersion, loadMap, loadProject, projectFileName, readBookmarks, requirementsOf, setRequirements, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
 import { EMPTY_FRAGMENT, fragmentRequirements, geometrySystems, hasMods, isEmptyFragment, loadPreset, modsFragment, ringSystemParts, type EnvironmentFragment, type EnvironmentMods } from './environment-mods';
 import { setInfoEnvironment } from './map-settings';
 import { loadEnvironmentData } from '../engine/renderer/environment/environment-worker-client';
@@ -48,6 +48,8 @@ import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
+import { allObjects, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind } from './notes';
+import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
 import { chromaCustomData, cloneRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
@@ -178,6 +180,29 @@ export class Editor {
   ringEditorHook: ((id: string) => void) | null = null;
   status = '';
   dirty = false;
+
+  // ----- the notes side ---------------------------------------------------------------------------
+
+  /** Which side of the editor is open: the lights or the notes. */
+  tab: 'lights' | 'notes' = 'lights';
+  /** The difficulty's notes, bombs, walls, arcs and chains (written back on saving). */
+  objects: MapObjects = emptyObjects();
+  /** The open difficulty's format ('2', '3', '4'). */
+  fileVersion: '2' | '3' | '4' = '3';
+  /** The notes side's selected objects (their ids). */
+  noteSelection = new Set<string>();
+  /** Grows with every change to the objects. */
+  noteVersion = 0;
+  /** What the notes side places: a red or blue note, a bomb, a wall; the arrows' direction. */
+  noteTool: { kind: 'red' | 'blue' | 'bomb' | 'wall'; direction: number } = { kind: 'red', direction: 1 };
+  /** The grid's row new notes and bombs go into from the timeline (0 bottom … 2 top). */
+  noteRow = 0;
+  /** What walls are drawn as: full height (dodged) or crouch ones. */
+  wallKind: 'full' | 'crouch' = 'full';
+  private noteUndo: string[] = [];
+  private noteRedo: string[] = [];
+  private noteClipboard: { kind: ObjectKind; item: MapObjects[ObjectKind][number] }[] | null = null;
+
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private listeners = new Set<Listener>();
@@ -380,7 +405,6 @@ export class Editor {
     this.mapNoodle = difficulty.noodle;
     this.ringParentKey = '';
     this.preview.setNoodle(difficulty.noodle);
-    this.preview.setObjects(difficulty);
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);
@@ -402,7 +426,21 @@ export class Editor {
     for (const list of this.lightsByType.values()) list.sort((a, b) => a - b);
     const file = difficultyFile(row);
     const saved = await loadProject(map.folder, file);
-    const fileBookmarks = readBookmarks(await map.folder.readText(file).catch(() => ''));
+    const fileText = await map.folder.readText(file).catch(() => '');
+    const fileBookmarks = readBookmarks(fileText);
+    try {
+      this.objects = fileText === '' ? emptyObjects() : readObjects(fileText);
+      this.fileVersion = fileText === '' ? '3' : difficultyVersion(fileText);
+    } catch (error) {
+      console.error('[lumatic] reading the notes failed', error);
+      this.objects = emptyObjects();
+    }
+    this.noteSelection.clear();
+    this.noteUndo = [];
+    this.noteRedo = [];
+    this.noteVersion++;
+    const info = row.infoDifficulty;
+    if (info !== undefined) this.preview.setJump(effectiveNoteJumpSpeed(info), info.noteStartBeatOffset);
     if (saved !== null) this.project = { ...saved, groups: saved.groups ?? [], expandedGroups: saved.expandedGroups ?? [], effects: saved.effects ?? [], ringBlocks: saved.ringBlocks ?? [], bookmarks: saved.bookmarks ?? fileBookmarks };
     else {
       const lastBeat = Math.max(0, ...difficulty.events.map((event) => event.jsonTime), ...difficulty.notes.map((note) => note.jsonTime));
@@ -628,7 +666,8 @@ export class Editor {
     const mods = project.environmentMods;
     const fragment = await this.environmentFragment(mods, environment);
     const changes = hasMods(mods) || !isEmptyFragment(project.writtenEnvironment) ? { previous: project.writtenEnvironment, next: fragment } : undefined;
-    const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks, changes);
+    const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks, changes, this.objects);
+    const lost = unsupported(this.objects, difficultyVersion(original));
     if (changes !== undefined) project.writtenEnvironment = isEmptyFragment(fragment) ? undefined : fragment;
     // (a copy of the difficulty as it was, in the map's "Lumatic backups" — when the settings keep any)
     if (settings().backups > 0) await map.folder.backup?.(file, settings().backups).catch((error: unknown) => console.error('[lumatic] backup failed', error));
@@ -650,7 +689,8 @@ export class Editor {
     await map.folder.writeText(projectFileName(file), JSON.stringify(project));
     await map.folder.refresh();
     this.dirty = false;
-    this.setStatus(`Сохранено: ${file} (${String(events.length)} событий)`);
+    const counts = `${String(this.objects.notes.length)} нот, ${String(this.objects.bombs.length)} бомб, ${String(this.objects.walls.length)} стен`;
+    this.setStatus(lost.length > 0 ? `Сохранено: ${file}, но не записаны ${lost.join('; ')}` : `Сохранено: ${file} (${String(events.length)} событий, ${counts})`);
   }
 
   // ----- rows ----------------------------------------------------------------------------------------
@@ -1341,6 +1381,10 @@ export class Editor {
   }
 
   undo() {
+    if (this.tab === 'notes') {
+      this.undoNotes();
+      return;
+    }
     const state = this.undoStack.pop();
     if (state === undefined || this.project === null) return;
     this.redoStack.push(this.snapshot());
@@ -1348,6 +1392,10 @@ export class Editor {
   }
 
   redo() {
+    if (this.tab === 'notes') {
+      this.redoNotes();
+      return;
+    }
     const state = this.redoStack.pop();
     if (state === undefined || this.project === null) return;
     this.undoStack.push(this.snapshot());
@@ -2331,7 +2379,217 @@ export class Editor {
     if (this.playhead() > extra.end + 1) this.seek(Math.max(0, extra.start - 0.5));
   }
 
+  // ----- the notes side ------------------------------------------------------------------------------
+
+  /** Opens the lights or the notes side. */
+  setTab(tab: 'lights' | 'notes') {
+    if (tab === this.tab) return;
+    this.tab = tab;
+    this.rebuildPreview(true);
+    this.emit('all');
+  }
+
+  /** An object of the notes side by its id, with its kind. */
+  objectById(id: string) {
+    for (const kind of Object.keys(this.objects) as ObjectKind[]) {
+      const item = (this.objects[kind] as { id: string }[]).find((entry) => entry.id === id);
+      if (item !== undefined) return { kind, item: item as MapObjects[typeof kind][number] };
+    }
+    return null;
+  }
+
+  /** The selected objects with their kinds. */
+  selectedObjects() {
+    return allObjects(this.objects).filter(({ item }) => this.noteSelection.has(item.id));
+  }
+
+  selectNotes(ids: Iterable<string>, mode: 'replace' | 'add' | 'toggle' = 'replace') {
+    if (mode === 'replace') this.noteSelection = new Set(ids);
+    else for (const id of ids) {
+      if (mode === 'toggle' && this.noteSelection.has(id)) this.noteSelection.delete(id);
+      else this.noteSelection.add(id);
+    }
+    this.emit('selection');
+  }
+
+  private noteSnapshot() {
+    return JSON.stringify(this.objects);
+  }
+
+  /** Call before a change to the objects (one undo step of the notes side). */
+  noteCheckpoint() {
+    this.noteUndo.push(this.noteSnapshot());
+    if (this.noteUndo.length > 300) this.noteUndo.shift();
+    this.noteRedo = [];
+  }
+
+  /** The last checkpoint wasn't needed. */
+  noteUndoDiscard() {
+    this.noteUndo.pop();
+  }
+
+  /** After a change to the objects: drawn again, the 3D view too. */
+  notesChanged(rebuildNow = false) {
+    this.noteVersion++;
+    this.dirty = true;
+    this.rebuildPreview(rebuildNow);
+    this.emit('clips');
+  }
+
+  private restoreNotes(state: string) {
+    this.objects = JSON.parse(state) as MapObjects;
+    const ids = new Set(allObjects(this.objects).map(({ item }) => item.id));
+    for (const id of [...this.noteSelection]) if (!ids.has(id)) this.noteSelection.delete(id);
+    this.notesChanged(true);
+  }
+
+  undoNotes() {
+    const state = this.noteUndo.pop();
+    if (state === undefined) return;
+    this.noteRedo.push(this.noteSnapshot());
+    this.restoreNotes(state);
+  }
+
+  redoNotes() {
+    const state = this.noteRedo.pop();
+    if (state === undefined) return;
+    this.noteUndo.push(this.noteSnapshot());
+    this.restoreNotes(state);
+  }
+
+  /** Puts objects in (one undo step); they become the selection. */
+  addObjects(items: { kind: ObjectKind; item: MapObjects[ObjectKind][number] }[], select = true) {
+    if (items.length === 0) return;
+    this.noteCheckpoint();
+    for (const { kind, item } of items) (this.objects[kind] as unknown[]).push(item);
+    if (select) this.noteSelection = new Set(items.map(({ item }) => item.id));
+    this.notesChanged();
+  }
+
+  /** Takes objects out (without an undo step of its own: call noteCheckpoint first). */
+  removeObjects(ids: ReadonlySet<string>) {
+    for (const kind of Object.keys(this.objects) as ObjectKind[]) {
+      (this.objects as Record<ObjectKind, { id: string }[]>)[kind] = (this.objects[kind] as { id: string }[]).filter((item) => !ids.has(item.id));
+    }
+    for (const id of ids) this.noteSelection.delete(id);
+  }
+
+  deleteNoteSelection() {
+    if (this.noteSelection.size === 0) return;
+    this.noteCheckpoint();
+    this.removeObjects(new Set(this.noteSelection));
+    this.notesChanged();
+  }
+
+  /** Changes the selected objects (one undo step). */
+  updateObjects(ids: Iterable<string>, patch: (kind: ObjectKind, item: MapObjects[ObjectKind][number]) => void) {
+    const wanted = new Set(ids);
+    const found = allObjects(this.objects).filter(({ item }) => wanted.has(item.id));
+    if (found.length === 0) return;
+    this.noteCheckpoint();
+    for (const { kind, item } of found) patch(kind, item);
+    this.notesChanged();
+  }
+
+  copyNotes() {
+    const picked = this.selectedObjects();
+    if (picked.length === 0) return;
+    this.noteClipboard = picked.map(({ kind, item }) => ({ kind, item: structuredClone(item) }));
+    this.setStatus(`Скопировано объектов: ${String(picked.length)}`);
+  }
+
+  cutNotes() {
+    this.copyNotes();
+    this.deleteNoteSelection();
+  }
+
+  notesClipboardSize() {
+    return this.noteClipboard?.length ?? 0;
+  }
+
+  /** The copied objects put in with the first of them at `at` (beats). */
+  pasteNotes(at: number) {
+    const board = this.noteClipboard;
+    if (board === null || board.length === 0) return;
+    const first = Math.min(...board.map(({ item }) => item.b));
+    const shift = at - first;
+    const made = board.map(({ kind, item }) => {
+      const copy = { ...structuredClone(item), id: newId('n'), b: item.b + shift } as MapObjects[ObjectKind][number];
+      if ('tb' in copy) copy.tb += shift;
+      return { kind, item: copy };
+    });
+    this.addObjects(made);
+  }
+
+  /** The arrows' direction for new notes — and the selected notes' too. */
+  setNoteDirection(direction: number) {
+    this.noteTool = { ...this.noteTool, kind: this.noteTool.kind === 'bomb' || this.noteTool.kind === 'wall' ? 'red' : this.noteTool.kind, direction };
+    const notes = this.objects.notes.filter((note) => this.noteSelection.has(note.id));
+    if (notes.length > 0) this.updateObjects(notes.map((note) => note.id), (kind, item) => {
+      if (kind === 'notes') (item as { d: number }).d = direction;
+    });
+    else this.emit('selection');
+  }
+
+  /** The two selected notes, earlier first (null: not two notes, or both at one beat). */
+  private selectedPair() {
+    const notes = this.objects.notes.filter((note) => this.noteSelection.has(note.id)).sort((a, b) => a.b - b.b);
+    if (notes.length !== 2 || Math.abs(notes[1]!.b - notes[0]!.b) < 1e-6) return null;
+    return [notes[0]!, notes[1]!] as const;
+  }
+
+  /** An arc from the first of two selected notes to the second (the notes stay: an arc leads between
+   *  them). */
+  makeArc(): boolean {
+    const pair = this.selectedPair();
+    if (pair === null) {
+      this.setStatus('Для дуги выделите две ноты на разных долях');
+      return false;
+    }
+    const [head, tail] = pair;
+    const arc = { id: newId('n'), c: head.c, b: head.b, x: head.x, y: head.y, d: head.d, mu: 1, tb: tail.b, tx: tail.x, ty: tail.y, tc: tail.d, tmu: 1, m: 0 };
+    this.addObjects([{ kind: 'arcs', item: arc }]);
+    this.setStatus('Дуга добавлена: её изгиб и сила — справа');
+    return true;
+  }
+
+  /** A chain from the first of two selected notes to where the second is (the chain's head takes the
+   *  first note's place; the second only marks where it ends). */
+  makeChain(): boolean {
+    const pair = this.selectedPair();
+    if (pair === null) {
+      this.setStatus('Для цепи выделите две ноты на разных долях: начало и конец');
+      return false;
+    }
+    if (difficultyVersionOf(this) === '2') {
+      this.setStatus('В формате v2 цепей нет — переведите сложность в v3');
+      return false;
+    }
+    const [head, tail] = pair;
+    const chain = { id: newId('n'), c: head.c, b: head.b, x: head.x, y: head.y, d: head.d === 8 ? 1 : head.d, tb: tail.b, tx: tail.x, ty: tail.y, sc: 5, s: 1 };
+    this.noteCheckpoint();
+    this.removeObjects(new Set([head.id, tail.id]));
+    this.objects.chains.push(chain);
+    this.noteSelection = new Set([chain.id]);
+    this.notesChanged();
+    this.setStatus('Цепь добавлена: число звеньев — справа или Alt+колесо');
+    return true;
+  }
+
+  /** Every object of the notes side selected. */
+  selectAllNotes() {
+    this.selectNotes(allObjects(this.objects).map(({ item }) => item.id));
+  }
+
+  /** The 3D view's lights when the quick switch has them off: every lamp lit white at 30 %, nothing
+   *  moving — the environment never goes dark. */
+  private dimLights(): OutEvent[] {
+    return [...this.lightsByType.keys()].map((type) => ({ beat: 0, type, value: 1, floatValue: 0.3, color: [1, 1, 1, 1] as [number, number, number, number] }));
+  }
+
   // ----- preview --------------------------------------------------------------------------------------
+
+  private shownNotes = -1;
 
   rebuildPreview(now = false) {
     if (this.rebuildTimer !== null) window.clearTimeout(this.rebuildTimer);
@@ -2339,7 +2597,14 @@ export class Editor {
       this.rebuildTimer = null;
       try {
         this.syncRingTracks();
-        this.preview.setEvents(this.previewEvents());
+        const show = this.tab === 'notes' || settings().notes;
+        this.preview.setNotesSide(this.tab === 'notes');
+        const key = show ? this.noteVersion : -2;
+        if (key !== this.shownNotes) {
+          this.shownNotes = key;
+          this.preview.setObjects(show ? engineObjects(this.objects, this.toSong) : null);
+        }
+        this.preview.setEvents(settings().previewLights ? this.previewEvents() : this.dimLights());
       } catch (error) {
         console.error('[chroeditor] preview rebuild failed', error);
       }
@@ -2398,4 +2663,9 @@ function angleOf(dx: number, dy: number) {
   // (lights straight above the centre sit a hair either side of it: those count as the top)
   const angle = Math.atan2(Math.abs(dx) < 1e-4 ? 0 : dx, dy);
   return angle < -1e-6 ? angle + Math.PI * 2 : Math.max(0, angle);
+}
+
+/** The open difficulty's file format, as read when it was opened. */
+function difficultyVersionOf(editor: Editor): '2' | '3' | '4' {
+  return editor.fileVersion;
 }

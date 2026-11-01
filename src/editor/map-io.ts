@@ -7,11 +7,13 @@ import { newId, type Bookmark, type Project } from './model';
 import { chromaCustomData, TRACK_PREFIX, type RingAnimation, type RingEnhancement } from './rings';
 import { replaceFragment, type EnvironmentFragment } from './environment-mods';
 import type { MapFolder } from './platform';
+import { writeObjects, type MapObjects } from './notes';
 
 /**
  * A map folder in and out: Info.dat and its difficulties read with ChroPaper's parsers; a
- * difficulty written back in its own format (v2 or v3) with its events replaced by the editor's —
- * notes, walls and everything else in the file stay exactly as they were. The editor's own work
+ * difficulty written back in its own format (v2 or v3) with its events replaced by the editor's, and
+ * its notes, bombs, walls, arcs and chains by the notes side's — everything else in the file stays
+ * exactly as it was. The editor's own work
  * (clips, layers, groups) goes next to it in "<difficulty>.lumatic.json" (read from
  * "<difficulty>.chroeditor.json" too — the name it had when the editor was ChroEditor).
  */
@@ -139,9 +141,11 @@ export function writeDifficulty(
   rings?: { enhancements: readonly RingEnhancement[]; animations: readonly RingAnimation[] },
   bookmarks?: readonly Bookmark[],
   environment?: { previous: EnvironmentFragment | undefined; next: EnvironmentFragment },
+  objects?: MapObjects,
 ): string {
   const version = difficultyVersion(original);
   const root = JSON.parse(original) as Record<string, unknown>;
+  if (objects !== undefined && version !== '4') writeObjects(root, objects, version);
   if (environment !== undefined && version !== '4') {
     const key = version === '2' ? '_customData' : 'customData';
     const custom = replaceFragment((typeof root[key] === 'object' && root[key] !== null ? root[key] : {}) as Record<string, unknown>, environment.previous, environment.next, version === '2');

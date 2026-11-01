@@ -217,6 +217,7 @@ export function settingsDialog(restart: () => void) {
       ),
       check('Метроном при воспроизведении', () => settings().metronome, (on) => change({ metronome: on })),
       check('Щелчок на событиях выбранной строки', () => settings().eventClicks, (on) => change({ eventClicks: on })),
+      check('Удар на каждой ноте (вкладка «Ноты»)', () => settings().noteHits, (on) => change({ noteHits: on })),
       row('Громкость щелчков', slider(0, 1, 0.05, () => settings().clickVolume, (value) => change({ clickVolume: value }), percent)),
     ],
     saving: () => [

@@ -11,6 +11,8 @@ export interface HotkeyAction {
   keys: string[];
   /** Also ChroMapper's keys. */
   chromapper?: boolean;
+  /** Only on this side of the editor (none: on both). */
+  tab?: 'lights' | 'notes';
 }
 
 export const ACTIONS: HotkeyAction[] = [
@@ -31,13 +33,13 @@ export const ACTIONS: HotkeyAction[] = [
   { id: 'bookmark', group: 'Метки', label: 'Метка у курсора', keys: ['KeyB'], chromapper: true },
   { id: 'prevBookmark', group: 'Метки', label: 'К предыдущей метке', keys: ['BracketLeft', 'Ctrl+ArrowLeft'], chromapper: true },
   { id: 'nextBookmark', group: 'Метки', label: 'К следующей метке', keys: ['BracketRight', 'Ctrl+ArrowRight'], chromapper: true },
-  { id: 'on', group: 'Кисть', label: 'Начало: включить', keys: ['KeyW'], chromapper: true },
-  { id: 'flash', group: 'Кисть', label: 'Начало: вспышка', keys: ['KeyA'], chromapper: true },
-  { id: 'fade', group: 'Кисть', label: 'Начало: угасание', keys: ['KeyD'], chromapper: true },
-  { id: 'fadeIn', group: 'Кисть', label: 'Начало: нарастание (в ChroMapper — переход)', keys: ['KeyC'], chromapper: true },
-  { id: 'left', group: 'Кисть', label: 'Цвет: левый (красный)', keys: ['Digit1'], chromapper: true },
-  { id: 'right', group: 'Кисть', label: 'Цвет: правый (синий)', keys: ['Digit2'], chromapper: true },
-  { id: 'white', group: 'Кисть', label: 'Цвет: белый', keys: ['Digit3'] },
+  { id: 'on', group: 'Кисть', label: 'Начало: включить', keys: ['KeyW'], chromapper: true, tab: 'lights' },
+  { id: 'flash', group: 'Кисть', label: 'Начало: вспышка', keys: ['KeyA'], chromapper: true, tab: 'lights' },
+  { id: 'fade', group: 'Кисть', label: 'Начало: угасание', keys: ['KeyD'], chromapper: true, tab: 'lights' },
+  { id: 'fadeIn', group: 'Кисть', label: 'Начало: нарастание (в ChroMapper — переход)', keys: ['KeyC'], chromapper: true, tab: 'lights' },
+  { id: 'left', group: 'Кисть', label: 'Цвет: левый (красный)', keys: ['Digit1'], chromapper: true, tab: 'lights' },
+  { id: 'right', group: 'Кисть', label: 'Цвет: правый (синий)', keys: ['Digit2'], chromapper: true, tab: 'lights' },
+  { id: 'white', group: 'Кисть', label: 'Цвет: белый', keys: ['Digit3'], tab: 'lights' },
   { id: 'undo', group: 'Правка', label: 'Отменить', keys: ['Ctrl+KeyZ'], chromapper: true },
   { id: 'redo', group: 'Правка', label: 'Вернуть', keys: ['Ctrl+KeyY', 'Ctrl+Shift+KeyZ'], chromapper: true },
   { id: 'copy', group: 'Правка', label: 'Копировать', keys: ['Ctrl+KeyC'], chromapper: true },
@@ -48,10 +50,27 @@ export const ACTIONS: HotkeyAction[] = [
   { id: 'deselect', group: 'Правка', label: 'Снять выделение', keys: ['Ctrl+KeyA'], chromapper: true },
   { id: 'selectAll', group: 'Правка', label: 'Выделить всё', keys: [] },
   { id: 'mirror', group: 'Правка', label: 'Зеркально по строкам', keys: ['KeyM'], chromapper: true },
-  { id: 'mirrorTime', group: 'Правка', label: 'Зеркально во времени', keys: ['Alt+KeyM'], chromapper: true },
-  { id: 'adjust', group: 'Правка', label: 'Изменить свет выделенного…', keys: ['KeyH'] },
-  { id: 'group', group: 'Правка', label: 'Группа из выбранных ламп', keys: ['Ctrl+KeyG'] },
-  { id: 'preset', group: 'Правка', label: 'Сохранить выделенное как пресет', keys: ['Ctrl+Shift+KeyP'] },
+  { id: 'mirrorTime', group: 'Правка', label: 'Зеркально во времени', keys: ['Alt+KeyM'], chromapper: true, tab: 'lights' },
+  { id: 'adjust', group: 'Правка', label: 'Изменить свет выделенного…', keys: ['KeyH'], tab: 'lights' },
+  { id: 'group', group: 'Правка', label: 'Группа из выбранных ламп', keys: ['Ctrl+KeyG'], tab: 'lights' },
+  { id: 'preset', group: 'Правка', label: 'Сохранить выделенное как пресет', keys: ['Ctrl+Shift+KeyP'], tab: 'lights' },
+  { id: 'noteRed', group: 'Ноты', label: 'Красная нота', keys: ['Digit1'], chromapper: true, tab: 'notes' },
+  { id: 'noteBlue', group: 'Ноты', label: 'Синяя нота', keys: ['Digit2'], chromapper: true, tab: 'notes' },
+  { id: 'noteBomb', group: 'Ноты', label: 'Бомба', keys: ['Digit3'], chromapper: true, tab: 'notes' },
+  { id: 'noteWall', group: 'Ноты', label: 'Стена', keys: ['Digit4'], chromapper: true, tab: 'notes' },
+  { id: 'dirUp', group: 'Ноты', label: 'Стрелка вверх (с A/D — по диагонали)', keys: ['KeyW', 'Numpad8'], chromapper: true, tab: 'notes' },
+  { id: 'dirDown', group: 'Ноты', label: 'Стрелка вниз (с A/D — по диагонали)', keys: ['KeyS', 'Numpad2'], chromapper: true, tab: 'notes' },
+  { id: 'dirLeft', group: 'Ноты', label: 'Стрелка влево', keys: ['KeyA', 'Numpad4'], chromapper: true, tab: 'notes' },
+  { id: 'dirRight', group: 'Ноты', label: 'Стрелка вправо', keys: ['KeyD', 'Numpad6'], chromapper: true, tab: 'notes' },
+  { id: 'dirUpLeft', group: 'Ноты', label: 'Стрелка вверх-влево', keys: ['Numpad7'], tab: 'notes' },
+  { id: 'dirUpRight', group: 'Ноты', label: 'Стрелка вверх-вправо', keys: ['Numpad9'], tab: 'notes' },
+  { id: 'dirDownLeft', group: 'Ноты', label: 'Стрелка вниз-влево', keys: ['Numpad1'], tab: 'notes' },
+  { id: 'dirDownRight', group: 'Ноты', label: 'Стрелка вниз-вправо', keys: ['Numpad3'], tab: 'notes' },
+  { id: 'dirDot', group: 'Ноты', label: 'Точка (любое направление)', keys: ['KeyF', 'Numpad5'], chromapper: true, tab: 'notes' },
+  { id: 'noteArc', group: 'Ноты', label: 'Дуга между двумя выделенными нотами', keys: ['KeyV'], tab: 'notes' },
+  { id: 'noteChain', group: 'Ноты', label: 'Цепь от первой выделенной ноты ко второй', keys: ['KeyC'], tab: 'notes' },
+  { id: 'swapColor', group: 'Ноты', label: 'Поменять цвет выделенных нот', keys: ['KeyX'], tab: 'notes' },
+  { id: 'notesTab', group: 'Карта', label: 'Вкладка «Ноты» / «Свет»', keys: ['Tab'] },
   { id: 'save', group: 'Карта', label: 'Сохранить', keys: ['Ctrl+KeyS'], chromapper: true },
   { id: 'open', group: 'Карта', label: 'Открыть карту', keys: ['Ctrl+KeyO'] },
   { id: 'new', group: 'Карта', label: 'Новая карта', keys: ['Ctrl+KeyN'] },
@@ -90,12 +109,16 @@ export function comboOf(event: KeyboardEvent): string | null {
   return [event.ctrlKey || event.metaKey ? 'Ctrl' : '', event.shiftKey ? 'Shift' : '', event.altKey ? 'Alt' : '', code].filter(Boolean).join('+');
 }
 
-/** The action a key string does (null: none). */
-export function actionFor(combo: string): string | null {
-  for (const [id, keys] of Object.entries(bindings())) if (keys.includes(combo)) return id;
+/** The action a key string does on a side of the editor (null: none). */
+export function actionFor(combo: string, tab?: 'lights' | 'notes'): string | null {
+  const own = bindings();
+  for (const action of ACTIONS) {
+    if (tab !== undefined && action.tab !== undefined && action.tab !== tab) continue;
+    if (own[action.id]?.includes(combo) === true) return action.id;
+  }
   // (the number pad's keys do what the same keys above the letters do, unless given their own)
   const main = combo.replace(/Numpad(\d)$/u, 'Digit$1').replace(/NumpadSubtract$/u, 'Minus').replace(/NumpadAdd$/u, 'Equal');
-  return main !== combo ? actionFor(main) : null;
+  return main !== combo ? actionFor(main, tab) : null;
 }
 
 const NAMES: Record<string, string> = {

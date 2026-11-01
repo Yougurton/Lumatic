@@ -19,8 +19,10 @@ export interface Settings {
   platform: boolean;
   /** The game's heat haze and other screen distortion. */
   distortion: boolean;
-  /** Notes, bombs and walls in the 3D view too. */
+  /** Notes, bombs and walls in the 3D view too (on the lights side: the notes side always has them). */
   notes: boolean;
+  /** The show's lights in the 3D view (off: every lamp a dim white, nothing moving). */
+  previewLights: boolean;
   /** How many times a second the game's ring motion ticks (measured: ~30.6; Unity's usual step: 50):
    *  the 3D view's rings and the ring events the editor makes are worked out for it. */
   ringTicks: number;
@@ -43,6 +45,8 @@ export interface Settings {
   metronome: boolean;
   /** A click at the start of every event on the picked row while playing. */
   eventClicks: boolean;
+  /** On the notes side: a hit sound on every note while playing. */
+  noteHits: boolean;
   clickVolume: number;
 
   /** Saved by itself every so many minutes while there are changes (0: never). */
@@ -64,6 +68,7 @@ export const DEFAULT_SETTINGS: Settings = {
   platform: true,
   distortion: true,
   notes: false,
+  previewLights: true,
   ringTicks: 30.6,
   uiScale: 1,
   wheel: 'time',
@@ -74,6 +79,7 @@ export const DEFAULT_SETTINGS: Settings = {
   latency: 0,
   metronome: false,
   eventClicks: false,
+  noteHits: true,
   clickVolume: 0.6,
   autosave: 0,
   backups: 5,

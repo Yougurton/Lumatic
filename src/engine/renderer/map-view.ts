@@ -160,6 +160,11 @@ export class MapView implements RenderView {
 
   private data: MapRenderData | null = null;
   private beatSource: () => number = () => 0;
+  /** A camera flown by hand (world position, turn left/right and up/down in radians); null: the
+   *  player's. */
+  private freeCamera: { position: [number, number, number]; yaw: number; pitch: number } | null = null;
+  private readonly freeEuler = new Euler(0, 0, 0, 'YXZ');
+  private readonly playerCameraLocal = new Vector3();
 
   constructor(
     quality = DEFAULT_QUALITY,
@@ -170,6 +175,7 @@ export class MapView implements RenderView {
     this.postBloom = new PostBloomPipeline();
     this.mirror = new PlanarMirror(quality, 6, 400);
     this.camera.position.set(...fixedCameraPosition(DEFAULT_REPLAY_CAMERA_SETTINGS.previewCameraDistance));
+    this.playerCameraLocal.copy(this.camera.position);
     this.scene.matrixAutoUpdate = false;
     this.scene.matrixWorldAutoUpdate = false;
     this.camera.layers.enable(MAIN_ONLY_LAYER);
@@ -774,6 +780,27 @@ export class MapView implements RenderView {
     this.playerCameraHead.scale.set(1, 1, 1);
   }
 
+  /** Flies the camera (null: back to where the player stands). */
+  setFreeCamera(pose: { position: [number, number, number]; yaw: number; pitch: number } | null) {
+    this.freeCamera = pose === null ? null : { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    if (pose === null) {
+      this.camera.position.copy(this.playerCameraLocal);
+      this.camera.quaternion.identity();
+    }
+  }
+
+  /** Where the camera is and where it looks (yaw, pitch in radians), in the world. */
+  cameraPose(): { position: [number, number, number]; yaw: number; pitch: number } {
+    if (this.freeCamera !== null) return { position: [...this.freeCamera.position], yaw: this.freeCamera.yaw, pitch: this.freeCamera.pitch };
+    this.scene.updateMatrixWorld();
+    const position = new Vector3();
+    const quaternion = new Quaternion();
+    this.camera.getWorldPosition(position);
+    this.camera.getWorldQuaternion(quaternion);
+    const euler = new Euler().setFromQuaternion(quaternion, 'YXZ');
+    return { position: [position.x, position.y, position.z], yaw: euler.y, pitch: euler.x };
+  }
+
   render(renderer: WebGLRenderer) {
     const now = this.environment === null && this.data === null ? 0 : this.beatSource();
     this.update(now);
@@ -812,6 +839,12 @@ export class MapView implements RenderView {
       this.parallaxEuler.set(this.parallaxCurrentY * -maxTilt, this.parallaxCurrentX * maxTilt, 0, 'YXZ');
       this.parallaxQuaternion.setFromEuler(this.parallaxEuler);
       this.playerCameraRoot.quaternion.multiply(this.parallaxQuaternion);
+    }
+    if (this.freeCamera !== null) {
+      this.resetPlayerCameraRig();
+      this.camera.position.set(...this.freeCamera.position);
+      this.freeEuler.set(this.freeCamera.pitch, this.freeCamera.yaw, 0, 'YXZ');
+      this.camera.quaternion.setFromEuler(this.freeEuler);
     }
     this.scene.updateMatrixWorld();
     if (this.environment?.applyConstraints() === true) this.scene.updateMatrixWorld();

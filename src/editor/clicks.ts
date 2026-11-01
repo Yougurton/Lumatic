@@ -22,7 +22,8 @@ export class Clicks {
   private tick() {
     const editor = this.editor;
     const { metronome, eventClicks, clickVolume } = settings();
-    if (!editor.isPlaying() || (!metronome && !eventClicks) || clickVolume <= 0) {
+    const noteHits = settings().noteHits && editor.tab === 'notes';
+    if (!editor.isPlaying() || (!metronome && !eventClicks && !noteHits) || clickVolume <= 0) {
       this.until = null;
       return;
     }
@@ -39,7 +40,11 @@ export class Clicks {
     if (metronome) {
       for (let beat = Math.floor(start) + 1; beat <= end; beat++) if (beat > start) clicks.push({ beat, pitch: beat % 4 === 0 ? 1760 : 1320 });
     }
-    if (eventClicks) {
+    if (noteHits) {
+      const beats = new Set(editor.objects.notes.map((note) => Math.round(note.b * 1000) / 1000));
+      for (const beat of beats) if (beat > start && beat <= end) clicks.push({ beat, pitch: 2900 });
+    }
+    if (eventClicks && editor.tab === 'lights') {
       const row = editor.libraryRow();
       if (row !== null) {
         const starts = new Set(editor.rowClips(row).map((shown) => Math.round(shown.clip.start * 1000) / 1000));

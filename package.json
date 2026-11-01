@@ -2,7 +2,7 @@
   "name": "lumatic",
   "productName": "Lumatic",
   "private": true,
-  "version": "0.15.10",
+  "version": "0.16.0",
   "description": "Beat Saber lightshow editor: a timeline with layers, light ID groups and effects, previewed with ChroPaper's renderer",
   "author": "Yougurton",
   "license": "GPL-2.0-only",
