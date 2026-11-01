@@ -1298,4 +1298,10 @@ export const EN: Record<string, string> = {
   "В формате v2 цепей нет — переведите сложность в v3": "The v2 format has no chains — convert the difficulty to v3",
   "Цепь добавлена: число звеньев — справа или Alt+колесо": "Chain added: its links are on the right or Alt+wheel",
   "Удар на каждой ноте": "A hit sound on every note",
+  "Сетка 4×3 на доле курсора, как её видит игрок; предыдущая нота каждой руки — бледная. Клик — поставить, потянуть из клетки — стрелка в ту сторону, ПКМ — удалить, средняя кнопка — другой цвет. Колёсико — шаг сетки по песне. 1/2/3/4 — красная, синяя, бомба, стена; W/A/S/D/F — направление (две сразу — диагональ).": "The 4×3 grid at the cursor's beat as the player sees it; each hand's previous note is faded. Click — place, drag out of a cell — the arrow that way, RMB — delete, middle button — the other colour. Wheel — a grid step through the song. 1/2/3/4 — red, blue, bomb, wall; W/A/S/D/F — direction (two at once — a diagonal).",
+  "Красная линия видимости на дорожке нот (половина времени подлёта)": "Red sight line on the notes track (half jump duration)",
+  "🎮 Как в игре": "🎮 As in game",
+  "🛤 Дорожка": "🛤 Track",
+  "Показать ноты как в игре: они летят к игроку": "Show the notes as in the game: flying at the player",
+  "Вернуть дорожку редактора: ноты стоят вдоль неё, ставятся на стену у курсора": "Back to the editor's track: notes stand along it and are placed on the wall at the cursor",
 };

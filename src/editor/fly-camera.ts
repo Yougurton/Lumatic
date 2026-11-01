@@ -106,10 +106,18 @@ export class FlyCamera {
     this.listeners.push(listener);
   }
 
-  /** Back to where the player stands. */
+  /** Where the camera stands when not flown (null: where the player stands). */
+  private home: { position: [number, number, number]; yaw: number; pitch: number } | null = null;
+
+  setHome(pose: { position: [number, number, number]; yaw: number; pitch: number } | null) {
+    this.home = pose === null ? null : { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    this.reset();
+  }
+
+  /** Back home (where the player stands, or the notes track's view). */
   reset() {
     this.free = false;
-    this.preview.view.setFreeCamera(null);
+    this.preview.view.setFreeCamera(this.home);
     for (const listener of this.listeners) listener();
   }
 
@@ -119,7 +127,7 @@ export class FlyCamera {
     this.rightDown = true;
     this.lastMouse = null;
     this.moved = false;
-    if (!this.free) this.pose = this.preview.view.cameraPose();
+    if (!this.free) this.pose = this.home !== null ? { position: [...this.home.position], yaw: this.home.yaw, pitch: this.home.pitch } : this.preview.view.cameraPose();
     this.keys.clear();
     this.last = performance.now();
     try {

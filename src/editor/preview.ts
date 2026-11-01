@@ -44,18 +44,20 @@ export class Preview {
   }
 
   /** The settings' 3D view: the platform, the screen distortion, the notes and walls. */
-  /** The notes side is open: its notes are shown whatever the settings say. */
-  private notesSide = false;
+  /** The notes in the game's view: shown, hidden (the notes side's track has them), or as the
+   *  settings say. */
+  private notesMode: 'auto' | 'show' | 'hide' = 'auto';
 
-  setNotesSide(on: boolean) {
-    if (on === this.notesSide) return;
-    this.notesSide = on;
+  setNotesMode(mode: 'auto' | 'show' | 'hide') {
+    if (mode === this.notesMode) return;
+    this.notesMode = mode;
     this.applySettings();
   }
 
   private applySettings() {
     const { platform, distortion, notes } = settings();
-    this.view.setLightshowMode(notes || this.notesSide ? 'full' : 'full-lightshow');
+    const shown = this.notesMode === 'show' || (this.notesMode === 'auto' && notes);
+    this.view.setLightshowMode(shown ? 'full' : 'full-lightshow');
     this.view.setShowPlayerPlatform(platform);
     this.view.setScreenDisplacementEffects(distortion);
   }

@@ -23,6 +23,7 @@ import { setRingTickRate } from './engine/core/lighting/ring-motion';
 import { NotePanel } from './editor/note-panel';
 import { NoteInspector } from './editor/note-inspector';
 import { FlyCamera } from './editor/fly-camera';
+import { NoteTrack, TRACK_POSE } from './editor/note-track';
 import { mirrorObjects } from './editor/notes-timeline';
 import { setSettings } from './editor/settings';
 
@@ -53,9 +54,9 @@ function setTab(tab: 'lights' | 'notes') {
   byId('tab-lights').classList.toggle('active', tab === 'lights');
   byId('tab-notes').classList.toggle('active', tab === 'notes');
   editor.setTab(tab);
+  applyNoteView();
   timeline.renderHeaders(true);
   timeline.redraw();
-  syncViewTools();
 }
 byId('tab-lights').addEventListener('click', () => setTab('lights'));
 byId('tab-notes').addEventListener('click', () => setTab('notes'));
@@ -71,11 +72,30 @@ function syncViewTools() {
   (byId('view-notes') as HTMLButtonElement).disabled = editor.tab === 'notes';
   byId('view-notes').title = editor.tab === 'notes' ? 'На вкладке «Ноты» ноты видны всегда' : settings().notes ? 'Ноты, бомбы и стены в 3D видны. Скрыть' : 'Показать ноты, бомбы и стены в 3D';
   byId('view-reset').hidden = !fly.isFree;
+  const mode = byId('view-mode');
+  mode.hidden = editor.tab !== 'notes';
+  mode.textContent = editor.noteView === 'track' ? '🎮 Как в игре' : '🛤 Дорожка';
+  mode.title = editor.noteView === 'track' ? 'Показать ноты как в игре: они летят к игроку' : 'Вернуть дорожку редактора: ноты стоят вдоль неё, ставятся на стену у курсора';
 }
 byId('view-lights').addEventListener('click', () => setSettings({ previewLights: !settings().previewLights }));
 byId('view-notes').addEventListener('click', () => setSettings({ notes: !settings().notes }));
 byId('view-reset').addEventListener('click', () => fly.reset());
 fly.onChange(syncViewTools);
+const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
+/** The notes side's 3D view: the editor's track (the camera behind its wall) or the game's view. */
+function applyNoteView() {
+  const track = editor.tab === 'notes' && editor.noteView === 'track';
+  noteTrack.setActive(track);
+  preview.view.setHorizontalFov(track ? 80 : null);
+  fly.setHome(track ? TRACK_POSE : null);
+  editor.rebuildPreview(true);
+  syncViewTools();
+}
+byId('view-mode').addEventListener('click', () => {
+  editor.noteView = editor.noteView === 'track' ? 'game' : 'track';
+  applyNoteView();
+});
+editor.stepSnap = (finer) => stepGrid(finer);
 syncViewTools();
 
 // for tests and the console
@@ -563,3 +583,6 @@ window.addEventListener('beforeunload', (event) => {
 }
 
 refreshToolbar();
+
+// (the notes side's track and camera too, for tests and the console)
+Object.assign((window as unknown as { chroeditor: Record<string, unknown> }).chroeditor, { noteTrack, fly });

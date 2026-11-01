@@ -177,6 +177,7 @@ export function settingsDialog(restart: () => void) {
       check('Платформа игрока', () => settings().platform, (on) => change({ platform: on })),
       check('Искажения экрана (жар и т. п., как в игре)', () => settings().distortion, (on) => change({ distortion: on })),
       check('Ноты, бомбы и стены карты', () => settings().notes, (on) => change({ notes: on })),
+      check('Красная линия видимости на дорожке нот (половина времени подлёта)', () => settings().visionLine, (on) => change({ visionLine: on })),
       row(
         'Тиков колец в секунду',
         choice<number>(

@@ -21,6 +21,8 @@ export interface Settings {
   distortion: boolean;
   /** Notes, bombs and walls in the 3D view too (on the lights side: the notes side always has them). */
   notes: boolean;
+  /** The notes side's track: the red line where the player's sight ends (the half jump). */
+  visionLine: boolean;
   /** The show's lights in the 3D view (off: every lamp a dim white, nothing moving). */
   previewLights: boolean;
   /** How many times a second the game's ring motion ticks (measured: ~30.6; Unity's usual step: 50):
@@ -69,6 +71,7 @@ export const DEFAULT_SETTINGS: Settings = {
   distortion: true,
   notes: false,
   previewLights: true,
+  visionLine: true,
   ringTicks: 30.6,
   uiScale: 1,
   wheel: 'time',

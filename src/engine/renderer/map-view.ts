@@ -2,7 +2,16 @@ import { Result } from 'better-result';
 import {
   BufferAttribute,
   BufferGeometry,
+  Color,
+  CustomBlending,
   Euler,
+  MeshBasicMaterial,
+  OneFactor,
+  OneMinusSrcAlphaFactor,
+  OrthographicCamera,
+  PlaneGeometry,
+  Vector2,
+  WebGLRenderTarget,
   Group,
   Mesh,
   type Object3D,
@@ -160,6 +169,33 @@ export class MapView implements RenderView {
 
   private data: MapRenderData | null = null;
   private beatSource: () => number = () => 0;
+  /** Drawn over the finished picture (the editor's note track); `overlayUpdate` runs before. */
+  readonly overlayScene = new Scene();
+  overlayUpdate: (() => void) | null = null;
+  private overlayTarget: WebGLRenderTarget | null = null;
+  private overlayQuad: Mesh | null = null;
+  private readonly overlayQuadScene = new Scene();
+  private readonly overlayCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  /** A field of view across (degrees) kept whatever the view's shape (null: the usual one). */
+  private horizontalFov: number | null = null;
+  private usualFov: number | null = null;
+
+  setHorizontalFov(degrees: number | null) {
+    if (degrees !== null && this.usualFov === null) this.usualFov = this.camera.fov;
+    this.horizontalFov = degrees;
+    if (degrees === null && this.usualFov !== null) {
+      this.camera.fov = this.usualFov;
+      this.usualFov = null;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** The camera the view is seen through (for picking things in it). */
+  get viewCamera(): PerspectiveCamera {
+    return this.camera;
+  }
+
   /** A camera flown by hand (world position, turn left/right and up/down in radians); null: the
    *  player's. */
   private freeCamera: { position: [number, number, number]; yaw: number; pitch: number } | null = null;
@@ -840,6 +876,15 @@ export class MapView implements RenderView {
       this.parallaxQuaternion.setFromEuler(this.parallaxEuler);
       this.playerCameraRoot.quaternion.multiply(this.parallaxQuaternion);
     }
+    if (this.horizontalFov !== null) {
+      const aspect = Math.max(0.2, this.camera.aspect);
+      const vertical = (2 * Math.atan(Math.tan((this.horizontalFov * Math.PI) / 360) / aspect) * 180) / Math.PI;
+      const fov = Math.max(42, Math.min(75, vertical));
+      if (Math.abs(fov - this.camera.fov) > 0.01) {
+        this.camera.fov = fov;
+        this.camera.updateProjectionMatrix();
+      }
+    }
     if (this.freeCamera !== null) {
       this.resetPlayerCameraRig();
       this.camera.position.set(...this.freeCamera.position);
@@ -857,6 +902,35 @@ export class MapView implements RenderView {
     }
     this.pipeline.render(renderer, this.camera, this.environmentLights.lightSegments);
     this.postBloom.render(renderer, this.scene, this.camera, this.mapRoot.visible && this.mapObjects.wallsVisible);
+    // (the editor's own things — its note track — over the finished picture, with their own depth)
+    if (this.overlayScene.children.some((child) => child.visible && child.children.length > 0)) {
+      this.overlayUpdate?.();
+      this.overlayScene.updateMatrixWorld();
+      // (the screen has no depth of its own: drawn into a target that has, then laid over it)
+      const size = renderer.getDrawingBufferSize(new Vector2());
+      if (this.overlayTarget === null) {
+        this.overlayTarget = new WebGLRenderTarget(size.x, size.y, { samples: 4 });
+        this.overlayQuad = new Mesh(new PlaneGeometry(2, 2), new MeshBasicMaterial({ map: this.overlayTarget.texture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, blending: CustomBlending, blendSrc: OneFactor, blendDst: OneMinusSrcAlphaFactor }));
+        this.overlayQuadScene.add(this.overlayQuad);
+      }
+      if (this.overlayTarget.width !== size.x || this.overlayTarget.height !== size.y) this.overlayTarget.setSize(size.x, size.y);
+      const previousTarget = renderer.getRenderTarget();
+      const autoClear = renderer.autoClear;
+      const clipping = renderer.localClippingEnabled;
+      const clearColor = renderer.getClearColor(new Color());
+      const clearAlpha = renderer.getClearAlpha();
+      renderer.setRenderTarget(this.overlayTarget);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, true, true);
+      renderer.autoClear = false;
+      renderer.localClippingEnabled = true;
+      renderer.render(this.overlayScene, this.camera);
+      renderer.setRenderTarget(previousTarget);
+      renderer.render(this.overlayQuadScene, this.overlayCamera);
+      renderer.setClearColor(clearColor, clearAlpha);
+      renderer.autoClear = autoClear;
+      renderer.localClippingEnabled = clipping;
+    }
     if (this.orthoCameraEnabled && this.replayView.hasReplay && !isForcedLightshowMode(this.lightshowMode)) {
       const element = this.orthoOverlayElement();
       if (element !== null) this.renderOrthographicOverlay(renderer, element, now);

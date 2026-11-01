@@ -195,6 +195,10 @@ export class Editor {
   noteVersion = 0;
   /** What the notes side places: a red or blue note, a bomb, a wall; the arrows' direction. */
   noteTool: { kind: 'red' | 'blue' | 'bomb' | 'wall'; direction: number } = { kind: 'red', direction: 1 };
+  /** How the notes side's 3D view shows the notes: on the editor's track, or as in the game. */
+  noteView: 'track' | 'game' = 'track';
+  /** Makes the grid finer or coarser (set by the app). */
+  stepSnap: ((finer: boolean) => void) | null = null;
   /** The grid's row new notes and bombs go into from the timeline (0 bottom … 2 top). */
   noteRow = 0;
   /** What walls are drawn as: full height (dodged) or crouch ones. */
@@ -2597,8 +2601,9 @@ export class Editor {
       this.rebuildTimer = null;
       try {
         this.syncRingTracks();
-        const show = this.tab === 'notes' || settings().notes;
-        this.preview.setNotesSide(this.tab === 'notes');
+        const track = this.tab === 'notes' && this.noteView === 'track';
+        const show = !track && (this.tab === 'notes' || settings().notes);
+        this.preview.setNotesMode(track ? 'hide' : this.tab === 'notes' ? 'show' : 'auto');
         const key = show ? this.noteVersion : -2;
         if (key !== this.shownNotes) {
           this.shownNotes = key;

@@ -4,8 +4,8 @@ import { newId } from './model';
 
 /**
  * The notes side's corner (where the lights side has its effects): the grid 4×3 as the player sees it,
- * at the song cursor. What's at the cursor is drawn whole; what comes next fades in from behind, the
- * nearer the stronger. A click on a cell puts in what the tool is (a drag from it: the arrow that way);
+ * at the song cursor (as ChroMapper's little grid). What's at the cursor is drawn whole; each hand's
+ * note before it faded — where the swing comes from. A click on a cell puts in what the tool is (a drag from it: the arrow that way);
  * on a note there: picks it, right click deletes it, middle click gives it the other colour. The wheel
  * moves the cursor a grid step (up: on through the song). Above it: the tools (1 red, 2 blue, 3 bomb,
  * 4 wall) and the arrow's direction (W/A/S/D, F — a dot; two at once — a diagonal).
@@ -23,7 +23,9 @@ const DIRS: { dir: number; label: string; key: string }[] = [
   { dir: 7, label: '↘', key: 'S+D' },
 ];
 
-/** How far ahead (beats) the coming objects show through. */
+/** How far back (beats) the notes before the cursor are looked for. */
+const BACK = 4;
+/** How far ahead (beats) the coming walls show through. */
 const AHEAD = 2;
 
 export class NotePanel {
@@ -47,7 +49,7 @@ export class NotePanel {
     this.tools.className = 'np-tools';
     this.canvas.className = 'np-grid';
     this.label.className = 'np-label nm-dim';
-    this.canvas.title = 'Сетка 4×3 на доле курсора, как её видит игрок; следующие ноты — полупрозрачные.\nКлик — поставить, потянуть из клетки — стрелка в ту сторону, ПКМ — удалить, средняя кнопка — другой цвет.\nКолёсико — шаг сетки по песне. 1/2/3/4 — красная, синяя, бомба, стена; W/A/S/D/F — направление (две сразу — диагональ).';
+    this.canvas.title = 'Сетка 4×3 на доле курсора, как её видит игрок; предыдущая нота каждой руки — бледная.\nКлик — поставить, потянуть из клетки — стрелка в ту сторону, ПКМ — удалить, средняя кнопка — другой цвет.\nКолёсико — шаг сетки по песне. 1/2/3/4 — красная, синяя, бомба, стена; W/A/S/D/F — направление (две сразу — диагональ).';
     root.append(this.tools, this.label, this.canvas);
     this.renderTools();
     new ResizeObserver(() => this.resize()).observe(this.canvas);
@@ -222,17 +224,19 @@ export class NotePanel {
       ctx.strokeStyle = this.rgb(colors.obstacle, now ? 0.9 : 0.4);
       ctx.strokeRect(x0 + 0.5, Math.max(top, y0) + 0.5, x1 - x0 - 1, Math.max(4, y1 - Math.max(top, y0)) - 1);
     }
-    // the coming objects (farther: fainter and smaller), then the ones at the cursor
-    const coming = [...editor.objects.notes.map((item) => ({ kind: 'notes' as const, item })), ...editor.objects.bombs.map((item) => ({ kind: 'bombs' as const, item }))]
-      .filter(({ item }) => item.b > beat + 1e-3 && item.b <= beat + AHEAD)
-      .sort((a, b) => b.item.b - a.item.b);
-    for (const { kind, item } of coming) {
-      const t = (item.b - beat) / AHEAD;
+    // the notes before the cursor (as in ChroMapper: the last ones of each hand, faded), then the ones
+    // at the cursor
+    const all = [...editor.objects.notes.map((item) => ({ kind: 'notes' as const, item })), ...editor.objects.bombs.map((item) => ({ kind: 'bombs' as const, item }))];
+    const before = all.filter(({ item }) => item.b < beat - 1e-3 && item.b >= beat - BACK);
+    const lastOf = (color: number) => Math.max(-Infinity, ...before.filter(({ kind, item }) => kind === 'notes' && (item as MapNote).c === color).map(({ item }) => item.b));
+    const lastRed = lastOf(0);
+    const lastBlue = lastOf(1);
+    const previous = before.filter(({ kind, item }) => (kind === 'notes' ? Math.abs(item.b - ((item as MapNote).c === 0 ? lastRed : lastBlue)) < 1e-3 : Math.abs(item.b - Math.max(lastRed, lastBlue)) < 1e-3));
+    for (const { kind, item } of previous) {
       const [cx, cy] = center(item.x, item.y);
-      const size = cell * (0.62 - 0.3 * t);
-      ctx.globalAlpha = 0.55 * (1 - t) + 0.08;
-      if (kind === 'bombs') this.bomb(ctx, cx, cy, size, false);
-      else this.note(ctx, item as MapNote, cx, cy, size, this.rgb(noteColor((item as MapNote).c), 1), false);
+      ctx.globalAlpha = 0.32;
+      if (kind === 'bombs') this.bomb(ctx, cx, cy, cell * 0.6, false);
+      else this.note(ctx, item as MapNote, cx, cy, cell * 0.6, this.rgb(noteColor((item as MapNote).c), 1), false);
     }
     ctx.globalAlpha = 1;
     for (const kind of ['bombs', 'notes'] as const) {
