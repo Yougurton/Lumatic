@@ -54,6 +54,7 @@ function setTab(tab: 'lights' | 'notes') {
   byId('tab-lights').classList.toggle('active', tab === 'lights');
   byId('tab-notes').classList.toggle('active', tab === 'notes');
   editor.setTab(tab);
+  applySplit();
   applyNoteView();
   timeline.renderHeaders(true);
   timeline.redraw();
@@ -82,19 +83,21 @@ byId('view-notes').addEventListener('click', () => setSettings({ notes: !setting
 byId('view-reset').addEventListener('click', () => fly.reset());
 fly.onChange(syncViewTools);
 const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
-/** The notes side's 3D view: the editor's track (the camera behind its wall) or the game's view. */
-function applyNoteView() {
+/** The notes side's 3D view: the editor's track (the camera behind its wall) or the game's view.
+ *  `keep`: the camera stays where it is (switching between the track and the game's view). */
+function applyNoteView(keep = false) {
   const track = editor.tab === 'notes' && editor.noteView === 'track';
   noteTrack.setActive(track);
   preview.view.setHorizontalFov(track ? 80 : null);
-  fly.setHome(track ? TRACK_POSE : null);
+  fly.setHome(track ? TRACK_POSE : null, keep);
   editor.rebuildPreview(true);
   syncViewTools();
 }
 byId('view-mode').addEventListener('click', () => {
   editor.noteView = editor.noteView === 'track' ? 'game' : 'track';
-  applyNoteView();
+  applyNoteView(true);
 });
+fly.onRightClick = (x, y) => noteTrack.rightClick(x, y);
 editor.stepSnap = (finer) => stepGrid(finer);
 syncViewTools();
 
@@ -567,13 +570,48 @@ window.addEventListener('beforeunload', (event) => {
   if (!isDesktop() && editor.dirty) event.preventDefault();
 });
 
-// the splitter between the 3D view and the timeline
+// the splitter between the 3D view and the timeline (where it is: kept for each side — the notes side
+// gives the 3D view more room at first)
+const SPLIT_KEY = 'lumatic.split';
+function applySplit() {
+  const app = byId('app');
+  let saved: Record<string, number> = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(SPLIT_KEY) ?? '{}') as Record<string, number>;
+  } catch {
+    saved = {};
+  }
+  const top = saved[editor.tab];
+  if (top !== undefined) app.style.gridTemplateRows = `auto ${String(Math.min(window.innerHeight - 220, Math.max(140, top)))}px 6px 1fr`;
+  else app.style.gridTemplateRows = editor.tab === 'notes' ? 'auto minmax(160px, 62%) 6px 1fr' : '';
+}
 {
   const app = byId('app');
   const splitter = byId('splitter');
   let dragging = false;
   splitter.addEventListener('mousedown', () => (dragging = true));
-  window.addEventListener('mouseup', () => (dragging = false));
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    try {
+      const saved = JSON.parse(localStorage.getItem(SPLIT_KEY) ?? '{}') as Record<string, number>;
+      saved[editor.tab] = byId('preview-wrap').getBoundingClientRect().height;
+      localStorage.setItem(SPLIT_KEY, JSON.stringify(saved));
+    } catch {
+      // (only a convenience)
+    }
+  });
+  splitter.addEventListener('dblclick', () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SPLIT_KEY) ?? '{}') as Record<string, number>;
+      delete saved[editor.tab];
+      localStorage.setItem(SPLIT_KEY, JSON.stringify(saved));
+    } catch {
+      // (only a convenience)
+    }
+    applySplit();
+  });
+  splitter.title = 'Тяните, чтобы поменять высоту таймлайна (у света и у нот она своя); двойной клик — как было';
   window.addEventListener('mousemove', (event) => {
     if (!dragging) return;
     const bar = byId('toolbar').getBoundingClientRect().bottom;
@@ -581,6 +619,7 @@ window.addEventListener('beforeunload', (event) => {
     app.style.gridTemplateRows = `auto ${String(top)}px 6px 1fr`;
   });
 }
+applySplit();
 
 refreshToolbar();
 

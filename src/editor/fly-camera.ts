@@ -32,6 +32,8 @@ export class FlyCamera {
     canvas.addEventListener('mousedown', (event) => {
       if (event.button !== 2) return;
       event.preventDefault();
+      this.downAt = { x: event.clientX, y: event.clientY };
+      this.flew = false;
       this.start();
     });
     window.addEventListener('mouseup', (event) => {
@@ -53,6 +55,8 @@ export class FlyCamera {
       const dx = locked ? event.movementX : last === null ? 0 : event.clientX - last.x;
       const dy = locked ? event.movementY : last === null ? 0 : event.clientY - last.y;
       if (Math.abs(dx) > 250 || Math.abs(dy) > 250 || (dx === 0 && dy === 0)) return;
+      // (a hand's tremble is not a look around: a right click stays a click)
+      if (!this.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
       this.moved = true;
       this.pose.yaw -= dx * LOOK;
       this.pose.pitch = Math.max(-1.55, Math.min(1.55, this.pose.pitch - dy * LOOK));
@@ -109,9 +113,18 @@ export class FlyCamera {
   /** Where the camera stands when not flown (null: where the player stands). */
   private home: { position: [number, number, number]; yaw: number; pitch: number } | null = null;
 
-  setHome(pose: { position: [number, number, number]; yaw: number; pitch: number } | null) {
+  /** `keep`: the camera stays where it is (flown from there on), only "reset" goes to the new home. */
+  setHome(pose: { position: [number, number, number]; yaw: number; pitch: number } | null, keep = false) {
+    const here = this.preview.view.cameraPose();
     this.home = pose === null ? null : { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
-    this.reset();
+    if (!keep) {
+      this.reset();
+      return;
+    }
+    this.pose = here;
+    this.free = true;
+    this.preview.view.setFreeCamera(here);
+    for (const listener of this.listeners) listener();
   }
 
   /** Back home (where the player stands, or the notes track's view). */
@@ -138,8 +151,15 @@ export class FlyCamera {
     requestAnimationFrame(this.step);
   }
 
+  /** A right click that flew nothing (no mouse move, no keys): handed on (where it went down). */
+  onRightClick: ((clientX: number, clientY: number) => void) | null = null;
+  private downAt: { x: number; y: number } | null = null;
+  private flew = false;
+
   private stop() {
     this.flying = false;
+    if (!this.moved && !this.flew && this.downAt !== null) this.onRightClick?.(this.downAt.x, this.downAt.y);
+    this.downAt = null;
     this.keys.clear();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
@@ -172,6 +192,7 @@ export class FlyCamera {
     if (this.keys.has('ControlLeft') || this.keys.has('ControlRight') || this.keys.has('KeyQ')) move[1]! -= 1;
     const length = Math.hypot(move[0]!, move[1]!, move[2]!);
     if (length > 0) {
+      this.flew = true;
       const fast = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 3 : 1;
       const distance = (this.speed * fast * dt) / length;
       for (let i = 0; i < 3; i++) this.pose.position[i]! += move[i]! * distance;

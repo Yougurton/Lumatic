@@ -61,43 +61,30 @@ export class NotesLanes {
     return Math.max(0, Math.min(3, Math.floor((y - this.host.lanesTop) / this.laneHeight())));
   }
 
-  private markSize() {
-    return Math.max(10, Math.min(24, this.laneHeight() * 0.62));
-  }
-
   // ----- what's where ------------------------------------------------------------------------------------
 
-  /** The marks drawn for the notes and bombs in view: their boxes (several at one beat in a lane
-   *  side by side). */
-  private marks(): { found: Found; x: number; y: number; size: number }[] {
+  /** The ticks drawn for the notes and bombs in view (as ChroViewer's): a thin stroke in its colour,
+   *  in its lane's third that is its row (the top third: the top row). `w`, `h`: its box. */
+  private marks(): { found: Found; x: number; y: number; w: number; h: number }[] {
     const host = this.host;
-    const size = this.markSize();
-    const from = host.xToBeat(host.left - size);
-    const to = host.xToBeat(host.width + size);
-    const out: { found: Found; x: number; y: number; size: number }[] = [];
-    const groups = new Map<string, Found[]>();
+    const from = host.xToBeat(host.left - 8);
+    const to = host.xToBeat(host.width + 8);
+    const third = this.laneHeight() / 3;
+    const out: { found: Found; x: number; y: number; w: number; h: number }[] = [];
     const put = (kind: ObjectKind, item: MapNote | MapBomb) => {
       if (item.b < from || item.b > to) return;
       const lane = Math.max(0, Math.min(3, Math.round(item.x)));
-      const key = `${String(Math.round(item.b * 1000))}:${String(lane)}`;
-      const list = groups.get(key) ?? [];
-      list.push({ kind, item });
-      groups.set(key, list);
+      const row = Math.max(0, Math.min(2, Math.round(item.y)));
+      out.push({ found: { kind, item }, x: host.beatToX(item.b), y: this.laneTop(lane) + (2 - row + 0.5) * third, w: 4, h: Math.max(4, third - 3) });
     };
-    for (const item of this.editor.objects.notes) put('notes', item);
     for (const item of this.editor.objects.bombs) put('bombs', item);
-    for (const list of groups.values()) {
-      list.sort((a, b) => b.item.y - a.item.y);
-      const first = list[0]!.item;
-      const lane = Math.max(0, Math.min(3, Math.round(first.x)));
-      const cx = host.beatToX(first.b);
-      const cy = this.laneTop(lane) + this.laneHeight() / 2;
-      const step = list.length > 1 ? Math.min(size * 0.55, (this.host.pxPerBeat * 0.2) / 1) : 0;
-      list.forEach((found, index) => {
-        out.push({ found, x: cx + (index - (list.length - 1) / 2) * Math.max(step, size * 0.45), y: cy, size: list.length > 1 ? size * 0.85 : size });
-      });
-    }
+    for (const item of this.editor.objects.notes) put('notes', item);
     return out;
+  }
+
+  /** How big the arcs' and chains' ends are drawn. */
+  private markSize() {
+    return Math.max(6, Math.min(14, this.laneHeight() * 0.3));
   }
 
   private wallRect(wall: MapWall) {
@@ -120,7 +107,7 @@ export class NotesLanes {
     const marks = this.marks();
     for (let i = marks.length - 1; i >= 0; i--) {
       const mark = marks[i]!;
-      if (Math.abs(x - mark.x) <= mark.size / 2 + 2 && Math.abs(y - mark.y) <= mark.size / 2 + 2) return mark.found;
+      if (Math.abs(x - mark.x) <= mark.w / 2 + 3 && Math.abs(y - mark.y) <= mark.h / 2 + 1) return mark.found;
     }
     // (an arc or a chain: by its head or its tail)
     for (const kind of ['chains', 'arcs'] as const) {
@@ -261,10 +248,14 @@ export class NotesLanes {
       ctx.fillRect(x0 - size / 2, y0 + size * 0.12, size, 2);
     }
     // notes and bombs
-    for (const { found, x, y, size } of this.marks()) {
+    for (const { found, x, y, w, h: tall } of this.marks()) {
       const picked = editor.noteSelection.has(found.item.id);
-      if (found.kind === 'bombs') this.drawBomb(ctx, x, y, size, picked);
-      else this.drawNote(ctx, found.item as MapNote, x, y, size, this.rgb(noteColor((found.item as MapNote).c)), picked);
+      if (picked) {
+        ctx.fillStyle = '#ffe27a';
+        ctx.fillRect(x - w / 2 - 2, y - tall / 2 - 2, w + 4, tall + 4);
+      }
+      ctx.fillStyle = found.kind === 'bombs' ? '#9a9eaa' : this.rgb(noteColor((found.item as MapNote).c));
+      ctx.fillRect(x - w / 2, y - tall / 2, w, tall);
     }
     // what's being drawn or boxed
     const drag = this.drag;
@@ -562,18 +553,22 @@ export class NotesLanes {
     const found = this.hit(x, y);
     if (found !== null && found.kind === 'chains') {
       // (a chain: its links one more or less)
-      this.editor.updateObjects([found.item.id], (_kind, item) => ((item as MapChain).sc = Math.max(2, Math.min(32, (item as MapChain).sc + (event.deltaY < 0 ? 1 : -1)))));
+      this.editor.updateObjects([found.item.id], (_kind, item) => ((item as MapChain).sc = Math.max(2, Math.min(32, (item as MapChain).sc + (event.deltaY < 0 ? 1 : -1)))), `links:${found.item.id}`);
       return true;
     }
     if (found === null || found.kind !== 'notes') return false;
     const order = [0, 5, 3, 7, 1, 6, 2, 4];
-    this.editor.updateObjects(this.editor.noteSelection.has(found.item.id) ? this.editor.noteSelection : [found.item.id], (kind, item) => {
-      if (kind !== 'notes') return;
-      const note = item as MapNote;
-      if (note.d === 8) return;
-      const at = order.indexOf(note.d);
-      note.d = order[(at + (event.deltaY > 0 ? 1 : -1) + 8) % 8]!;
-    });
+    this.editor.updateObjects(
+      this.editor.noteSelection.has(found.item.id) ? this.editor.noteSelection : [found.item.id],
+      (kind, item) => {
+        if (kind !== 'notes') return;
+        const note = item as MapNote;
+        if (note.d === 8) return;
+        const at = order.indexOf(note.d);
+        note.d = order[(at + (event.deltaY > 0 ? 1 : -1) + 8) % 8]!;
+      },
+      `turn:${found.item.id}`,
+    );
     return true;
   }
 

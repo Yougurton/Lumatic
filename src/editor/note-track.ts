@@ -11,20 +11,17 @@ import {
   EdgesGeometry,
   Float32BufferAttribute,
   Group,
-  IcosahedronGeometry,
   InstancedMesh,
   LineBasicMaterial,
   LineSegments,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
-  MeshLambertMaterial,
+  MeshStandardMaterial,
   Plane,
   PlaneGeometry,
   Quaternion,
   Raycaster,
-  ShapeGeometry,
-  Shape,
   Sprite,
   SpriteMaterial,
   TubeGeometry,
@@ -37,17 +34,20 @@ import { DIR_VECTOR, type MapArc, type MapChain, type MapNote, type MapWall, typ
 import { newId } from './model';
 import { jumpOf } from './note-inspector';
 import { settings } from './settings';
+import { arrowGeometry, bombGeometry, chainLinkGeometry, dotGeometry, noteBodyGeometry } from '../engine/renderer/object-geometry';
 
 /**
- * The notes side's 3D track (as in ChroMapper): the notes stand still along a track going away from
- * the song cursor — a beat every metre and a half — and at the cursor stands the grid 4×3, the "wall"
- * notes are put on: the mouse over one of its cells shows the note there, a click puts it in (a drag
- * from it: its arrow that way). Notes on the track are picked with a click beside the wall, or
- * Shift/Ctrl+click anywhere (behind the wall too; more than one), the
- * middle button gives them the other colour, Alt+wheel turns them. The wheel moves the song cursor a
- * grid step, Ctrl+wheel makes the grid finer or coarser. A red line across the track: how far the
- * player sees ahead — the half jump: what's put in the same half of the grid before it is easily hidden
- * behind a note in the middle (a vision block). The environment and its lights go on around it.
+ * The notes side's 3D track (as in ChroMapper): the notes — the game's own models — stand still along
+ * a track going away from the song cursor, a beat every metre and a half; at the cursor stands the grid
+ * 4×3, the "wall" notes are put on. What has gone through the wall is see-through.
+ *
+ * The mouse: over an empty cell — the note it would get; a click puts it in, a drag from it points its
+ * arrow. Over a note: lit; a click picks it (Shift/Ctrl: adds, also behind the wall), a drag moves the
+ * picked ones across the cells (Ctrl: along the track, in time; the wheel while dragging: a grid step
+ * in time). A drag over an empty place: a box picking what's in it (Shift: adding). A short right click
+ * on a note deletes it (held, the right button flies the camera). Middle click: the other colour;
+ * Alt+wheel: an arrow turned. The wheel moves the song cursor a grid step, Ctrl+wheel the grid. A red
+ * line across the track: where the player's sight ends — the half jump.
  */
 
 /** Metres a beat along the track. */
@@ -57,7 +57,9 @@ const WIDTH = LANE * 4;
 const NOTE = 0.5;
 /** The beats shown ahead of the cursor and behind it. */
 const AHEAD = 40;
-const BEHIND = 1;
+const BEHIND = 1.5;
+/** Where things count as gone through the wall (just past the notes at the cursor). */
+const PASSED = NOTE / 2 + 0.02;
 const rowY = (row: number) => LANE / 2 + row * LANE;
 const colX = (col: number) => (col - 1.5) * LANE;
 
@@ -68,6 +70,55 @@ export const TRACK_POSE = { position: [0, 2.6, 5.2] as [number, number, number],
 const ROLL: Record<number, number> = { 0: 180, 1: 0, 2: -90, 3: 90, 4: -135, 5: 135, 6: -45, 7: 45, 8: 0 };
 
 type Hit = { kind: ObjectKind; id: string };
+type AnyObject = MapObjectsItem;
+type MapObjectsItem = { id: string; b: number; x: number; y: number; tb?: number; tx?: number; ty?: number };
+
+/** A mesh drawn twice: whole before the wall, see-through past it (they share their instances). */
+class Pair {
+  solid: InstancedMesh;
+  faded: InstancedMesh;
+
+  constructor(
+    private readonly geometry: BufferGeometry,
+    private readonly material: Material,
+    private readonly fadedMaterial: Material,
+    private readonly parent: Group,
+  ) {
+    this.solid = new InstancedMesh(geometry, material, 16);
+    this.faded = new InstancedMesh(geometry, fadedMaterial, 16);
+    this.share();
+  }
+
+  private share() {
+    for (const mesh of [this.solid, this.faded]) {
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      this.parent.add(mesh);
+    }
+    this.faded.instanceMatrix = this.solid.instanceMatrix;
+  }
+
+  /** Room for `count` instances (anew when there isn't). */
+  reserve(count: number) {
+    if (this.solid.instanceMatrix.count >= count) return;
+    this.parent.remove(this.solid, this.faded);
+    this.solid.dispose();
+    const size = Math.max(16, Math.ceil(count * 1.5));
+    this.solid = new InstancedMesh(this.geometry, this.material, size);
+    this.faded = new InstancedMesh(this.geometry, this.fadedMaterial, size);
+    this.share();
+  }
+
+  finish(count: number) {
+    this.solid.count = count;
+    this.faded.count = count;
+    this.faded.instanceColor = this.solid.instanceColor;
+    this.solid.instanceMatrix.needsUpdate = true;
+    if (this.solid.instanceColor !== null) this.solid.instanceColor.needsUpdate = true;
+    this.solid.computeBoundingSphere();
+    this.faded.boundingSphere = this.solid.boundingSphere;
+  }
+}
 
 export class NoteTrack {
   private readonly root = new Group();
@@ -76,27 +127,38 @@ export class NoteTrack {
   private readonly wall = new Group();
   private readonly ghost = new Group();
   private readonly redLine: Mesh;
-  private notes: InstancedMesh;
-  private arrows: InstancedMesh;
-  private dots: InstancedMesh;
-  private bombs: InstancedMesh;
-  private links: InstancedMesh;
-  private noteIds: { kind: ObjectKind; id: string }[] = [];
-  private bombIds: string[] = [];
-  private linkIds: string[] = [];
   private readonly extras = new Group();
   private readonly beatLines = new Group();
   private readonly numbers: Sprite[] = [];
   private readonly numberTextures = new Map<number, CanvasTexture>();
+  private readonly ahead = new Plane(new Vector3(0, 0, 1), AHEAD * METRES_PER_BEAT);
+  private readonly behind = new Plane(new Vector3(0, 0, -1), BEHIND * METRES_PER_BEAT);
+  private readonly solidClip = [this.ahead, new Plane(new Vector3(0, 0, -1), PASSED)];
+  private readonly fadedClip = [this.behind, new Plane(new Vector3(0, 0, 1), -PASSED)];
+  private readonly trackClip = [this.ahead, this.behind];
+  private readonly notes: Pair;
+  private readonly arrows: Pair;
+  private readonly dots: Pair;
+  private readonly bombs: Pair;
+  private readonly links: Pair;
+  private noteIds: Hit[] = [];
+  private bombIds: string[] = [];
+  private linkIds: string[] = [];
   private builtKey = '';
   private linesKey = '';
   private numbersKey = '';
-  private readonly clip: Plane[] = [new Plane(new Vector3(0, 0, 1), AHEAD * METRES_PER_BEAT), new Plane(new Vector3(0, 0, -1), BEHIND * METRES_PER_BEAT)];
   private readonly raycaster = new Raycaster();
   private hoverCell: { col: number; row: number } | null = null;
-  private press: { x: number; y: number; col: number; row: number } | null = null;
+  private hovered: string | null = null;
   private wheelSum = 0;
   private active = false;
+  private readonly box = document.createElement('div');
+  private lastMouse: { x: number; y: number } | null = null;
+  private drag:
+    | { kind: 'place'; x: number; y: number; col: number; row: number }
+    | { kind: 'pick'; x: number; y: number; hit: Hit; adding: boolean; moving: boolean; plane: Plane; grab: Vector3; origin: Map<string, AnyObject>; time: number; timeOnly: boolean }
+    | { kind: 'box'; x: number; y: number; adding: boolean }
+    | null = null;
 
   constructor(
     private readonly editor: Editor,
@@ -104,10 +166,13 @@ export class NoteTrack {
   ) {
     const view = editor.preview.view;
     const scene = view.overlayScene;
-    scene.add(new AmbientLight(0xffffff, 1.6));
-    const sun = new DirectionalLight(0xffffff, 1.6);
-    sun.position.set(0.6, 2, 3);
+    scene.add(new AmbientLight(0xffffff, 1.1));
+    const sun = new DirectionalLight(0xffffff, 2.2);
+    sun.position.set(0.8, 2.5, 3);
     scene.add(sun);
+    const back = new DirectionalLight(0x9fb4ff, 0.8);
+    back.position.set(-1.5, 1, -2);
+    scene.add(back);
     scene.add(this.root);
     this.root.visible = false;
     this.root.add(this.moving, this.wall, this.ghost);
@@ -116,56 +181,89 @@ export class NoteTrack {
     // the track's floor and its four lanes
     const floor = new Mesh(new PlaneGeometry(WIDTH + 0.3, (AHEAD + BEHIND) * METRES_PER_BEAT), new MeshBasicMaterial({ color: 0x2a2d36, transparent: true, opacity: 0.9, depthWrite: false }));
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, -0.002, -((AHEAD - BEHIND) * METRES_PER_BEAT) / 2);
+    floor.position.set(0, -0.004, -((AHEAD - BEHIND) * METRES_PER_BEAT) / 2);
+    floor.renderOrder = -2;
     this.root.add(floor);
-    const lanes: number[] = [];
-    for (let k = 0; k <= 4; k++) lanes.push(colX(k - 0.5), 0, BEHIND * METRES_PER_BEAT, colX(k - 0.5), 0, -AHEAD * METRES_PER_BEAT);
-    this.root.add(this.lines(lanes, 0xd0d4de, 0.8));
+    const lanes: number[][] = [];
+    for (let k = 0; k <= 4; k++) lanes.push([colX(k - 0.5), BEHIND * METRES_PER_BEAT, colX(k - 0.5), -AHEAD * METRES_PER_BEAT]);
+    this.root.add(this.floorStrips(lanes, k(lanes.length, (index) => (index === 0 || index === 4 ? 0.045 : index === 2 ? 0.035 : 0.022)), 0xe6e9f0, 0.85));
 
     // the wall at the cursor: the grid 4×3 notes go on
     const pane = new Mesh(new PlaneGeometry(WIDTH, LANE * 3), new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, side: DoubleSide, depthWrite: false }));
     pane.position.set(0, LANE * 1.5, 0);
     this.wall.add(pane);
-    const grid: number[] = [];
-    for (let k = 0; k <= 4; k++) grid.push(colX(k - 0.5), 0, 0, colX(k - 0.5), LANE * 3, 0);
-    for (let k = 0; k <= 3; k++) grid.push(-WIDTH / 2, k * LANE, 0, WIDTH / 2, k * LANE, 0);
-    this.wall.add(this.lines(grid, 0xffffff, 0.55));
-    this.redLine = new Mesh(new PlaneGeometry(WIDTH + 0.6, 0.05), new MeshBasicMaterial({ color: 0xff3040, transparent: true, opacity: 0.9, depthWrite: false }));
+    const grid: number[][] = [];
+    for (let col = 0; col <= 4; col++) grid.push([colX(col - 0.5), 0, colX(col - 0.5), LANE * 3]);
+    for (let row = 0; row <= 3; row++) grid.push([-WIDTH / 2, row * LANE, WIDTH / 2, row * LANE]);
+    this.wall.add(this.wallStrips(grid, 0.028, 0xffffff, 0.8));
+    this.redLine = new Mesh(new PlaneGeometry(WIDTH + 0.6, 0.07), new MeshBasicMaterial({ color: 0xff3040, transparent: true, opacity: 0.95, depthWrite: false }));
     this.redLine.rotation.x = -Math.PI / 2;
-    this.redLine.position.y = 0.004;
+    this.redLine.position.y = 0.006;
     this.root.add(this.redLine);
 
-    this.notes = this.instanced(new BoxGeometry(NOTE, NOTE, NOTE), new MeshLambertMaterial({ clippingPlanes: this.clip }), 1);
-    this.arrows = this.instanced(this.arrowGeometry(), new MeshBasicMaterial({ color: 0xffffff, clippingPlanes: this.clip }), 1);
-    this.dots = this.instanced(new CircleGeometry(0.07, 16), new MeshBasicMaterial({ color: 0xffffff, clippingPlanes: this.clip }), 1);
-    this.bombs = this.instanced(new IcosahedronGeometry(0.2, 0), new MeshLambertMaterial({ color: 0x3a3c44, clippingPlanes: this.clip }), 1);
-    this.links = this.instanced(new BoxGeometry(NOTE, 0.12, NOTE), new MeshLambertMaterial({ clippingPlanes: this.clip }), 1);
+    // the game's notes, bombs and chain links (the faded copies past the wall)
+    const solid = (material: MeshStandardMaterial | MeshBasicMaterial) => {
+      material.clippingPlanes = this.solidClip;
+      return material;
+    };
+    const faded = (material: MeshStandardMaterial | MeshBasicMaterial) => {
+      material.clippingPlanes = this.fadedClip;
+      material.transparent = true;
+      material.opacity = 0.22;
+      material.depthWrite = false;
+      return material;
+    };
+    const body = () => new MeshStandardMaterial({ roughness: 0.32, metalness: 0.15 });
+    this.notes = new Pair(noteBodyGeometry(), solid(body()), faded(body()), this.moving);
+    this.arrows = new Pair(arrowGeometry(), solid(new MeshBasicMaterial({ color: 0xffffff })), faded(new MeshBasicMaterial({ color: 0xffffff })), this.moving);
+    this.dots = new Pair(dotGeometry(), solid(new MeshBasicMaterial({ color: 0xffffff })), faded(new MeshBasicMaterial({ color: 0xffffff })), this.moving);
+    const bomb = () => new MeshStandardMaterial({ roughness: 0.4, metalness: 0.5 });
+    this.bombs = new Pair(bombGeometry(), solid(bomb()), faded(bomb()), this.moving);
+    this.links = new Pair(chainLinkGeometry(), solid(body()), faded(body()), this.moving);
+
+    this.box.className = 'track-box';
+    this.box.hidden = true;
+    canvas.parentElement?.append(this.box);
 
     view.overlayUpdate = () => this.update();
     this.bind();
   }
 
-  private lines(points: number[], color: number, opacity: number) {
+  /** Flat strips on the floor (x0, z0, x1, z1 each), `widths` across. */
+  private floorStrips(segments: number[][], widths: number[], color: number, opacity: number, clip = this.trackClip) {
+    const points: number[] = [];
+    segments.forEach(([x0, z0, x1, z1], index) => {
+      const w = (widths[index] ?? widths[0] ?? 0.02) / 2;
+      const dx = x1! - x0!;
+      const dz = z1! - z0!;
+      const length = Math.hypot(dx, dz) || 1;
+      const nx = (-dz / length) * w;
+      const nz = (dx / length) * w;
+      const y = 0.002;
+      points.push(x0! + nx, y, z0! + nz, x1! + nx, y, z1! + nz, x1! - nx, y, z1! - nz, x0! + nx, y, z0! + nz, x1! - nx, y, z1! - nz, x0! - nx, y, z0! - nz);
+    });
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-    return new LineSegments(geometry, new LineBasicMaterial({ color, transparent: true, opacity, clippingPlanes: this.clip }));
-  }
-
-  private instanced(geometry: BufferGeometry, material: Material, count: number) {
-    const mesh = new InstancedMesh(geometry, material, Math.max(1, count));
-    mesh.count = 0;
-    mesh.frustumCulled = false;
+    const mesh = new Mesh(geometry, new MeshBasicMaterial({ color, transparent: true, opacity, side: DoubleSide, depthWrite: false, clippingPlanes: clip }));
+    mesh.renderOrder = -1;
     return mesh;
   }
 
-  private arrowGeometry() {
-    // (the game's chevron, pointing down, on the note's face)
-    const shape = new Shape();
-    shape.moveTo(-0.17, 0.06);
-    shape.lineTo(0.17, 0.06);
-    shape.lineTo(0, -0.1);
-    shape.closePath();
-    return new ShapeGeometry(shape);
+  /** Strips standing in the wall's plane (x0, y0, x1, y1 each). */
+  private wallStrips(segments: number[][], width: number, color: number, opacity: number) {
+    const points: number[] = [];
+    const w = width / 2;
+    for (const [x0, y0, x1, y1] of segments) {
+      const dx = x1! - x0!;
+      const dy = y1! - y0!;
+      const length = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / length) * w;
+      const ny = (dx / length) * w;
+      points.push(x0! + nx, y0! + ny, 0, x1! + nx, y1! + ny, 0, x1! - nx, y1! - ny, 0, x0! + nx, y0! + ny, 0, x1! - nx, y1! - ny, 0, x0! - nx, y0! - ny, 0);
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
+    return new Mesh(geometry, new MeshBasicMaterial({ color, transparent: true, opacity, side: DoubleSide, depthWrite: false }));
   }
 
   /** The track shown (the notes side, its track view) or not. */
@@ -173,7 +271,12 @@ export class NoteTrack {
     this.active = on;
     this.root.visible = on;
     this.canvas.style.cursor = on ? 'crosshair' : '';
-    if (!on) this.hoverCell = null;
+    if (!on) {
+      this.hoverCell = null;
+      this.hovered = null;
+      this.drag = null;
+      this.box.hidden = true;
+    }
   }
 
   // ----- building --------------------------------------------------------------------------------------
@@ -182,97 +285,94 @@ export class NoteTrack {
     return new Color(color[0] ?? 1, color[1] ?? 1, color[2] ?? 1);
   }
 
-  /** The objects as meshes (again when they, the selection or the colours change). */
-  private build() {
+  /** The objects near the cursor as meshes (again when they, the selection, the hovered one, the
+   *  colours change — or the cursor goes on to the next stretch of the song). */
+  private build(cursor: number) {
     const editor = this.editor;
     const colors = editor.preview.colors;
-    const key = `${String(editor.noteVersion)}|${[...editor.noteSelection].join(',')}|${[...colors.leftNote, ...colors.rightNote, ...colors.obstacle].join(',')}`;
+    const stretch = Math.floor(cursor / 4);
+    const key = `${String(stretch)}|${String(editor.noteVersion)}|${[...editor.noteSelection].join(',')}|${String(this.hovered)}|${[...colors.leftNote, ...colors.rightNote, ...colors.obstacle].join(',')}`;
     if (key === this.builtKey) return;
     this.builtKey = key;
-    const objects = editor.objects;
+    // (only what's on the track's shown stretch from here to the next build: the game's models are heavy)
+    const from = stretch * 4 - BEHIND - 1;
+    const to = stretch * 4 + 4 + AHEAD + 1;
+    const near = (item: { b: number }) => item.b >= from && item.b <= to;
+    const nearSpan = (item: { b: number; tb: number }) => item.tb >= from && item.b <= to;
+    const all = editor.objects;
+    const objects = {
+      notes: all.notes.filter(near),
+      bombs: all.bombs.filter(near),
+      chains: all.chains.filter(nearSpan),
+      arcs: all.arcs.filter(nearSpan),
+      walls: all.walls.filter((wall) => wall.b + wall.d >= from && wall.b <= to),
+    };
     const picked = editor.noteSelection;
     const z = (beat: number) => -beat * METRES_PER_BEAT;
     const matrix = new Matrix4();
     const quaternion = new Quaternion();
-    const scale = new Vector3(1, 1, 1);
+    const one = new Vector3(1, 1, 1);
     const position = new Vector3();
     const axis = new Vector3(0, 0, 1);
-    const highlight = new Color(1, 0.9, 0.45);
+    const highlight = new Color(1, 0.88, 0.35);
+    const lit = (color: Color, id: string) => {
+      if (picked.has(id)) color.lerp(highlight, 0.6);
+      else if (this.hovered === id) color.lerp(new Color(1, 1, 1), 0.35);
+      return color;
+    };
 
     // notes and chains' heads
     const heads: { kind: ObjectKind; note: Pick<MapNote, 'id' | 'b' | 'x' | 'y' | 'c' | 'd' | 'a'> }[] = [
       ...objects.notes.map((note) => ({ kind: 'notes' as ObjectKind, note })),
       ...objects.chains.map((chain) => ({ kind: 'chains' as ObjectKind, note: { id: chain.id, b: chain.b, x: chain.x, y: chain.y, c: chain.c, d: chain.d, a: 0 } })),
     ];
-    const replace = (old: InstancedMesh, count: number) => {
-      if (old.instanceMatrix.count >= count) return old;
-      const next = new InstancedMesh(old.geometry, old.material, Math.max(16, Math.ceil(count * 1.5)));
-      next.count = 0;
-      next.frustumCulled = false;
-      this.moving.remove(old);
-      old.dispose();
-      return next;
-    };
-    this.notes = replace(this.notes, heads.length);
-    this.arrows = replace(this.arrows, heads.length);
-    this.dots = replace(this.dots, heads.length);
-    this.bombs = replace(this.bombs, objects.bombs.length);
+    this.notes.reserve(heads.length);
+    this.arrows.reserve(heads.length);
+    this.dots.reserve(heads.length);
+    this.bombs.reserve(objects.bombs.length);
     const linkCount = objects.chains.reduce((sum, chain) => sum + Math.max(1, chain.sc - 1), 0);
-    this.links = replace(this.links, linkCount);
-    for (const mesh of [this.notes, this.arrows, this.dots, this.bombs, this.links]) if (mesh.parent !== this.moving) this.moving.add(mesh);
+    this.links.reserve(linkCount);
     this.noteIds = [];
     let arrows = 0;
     let dots = 0;
     heads.forEach(({ kind, note }, index) => {
       quaternion.setFromAxisAngle(axis, (((ROLL[note.d] ?? 0) + note.a) * Math.PI) / 180);
       position.set(colX(note.x), rowY(note.y), z(note.b));
-      matrix.compose(position, quaternion, scale);
-      this.notes.setMatrixAt(index, matrix);
-      const color = this.rgb(note.c === 0 ? colors.leftNote : colors.rightNote);
-      if (picked.has(note.id)) color.lerp(highlight, 0.55);
-      this.notes.setColorAt(index, color);
+      matrix.compose(position, quaternion, one);
+      this.notes.solid.setMatrixAt(index, matrix);
+      this.notes.solid.setColorAt(index, lit(this.rgb(note.c === 0 ? colors.leftNote : colors.rightNote), note.id));
       this.noteIds.push({ kind, id: note.id });
-      // (the face the player sees: towards the cursor)
-      const face = new Vector3(0, 0, NOTE / 2 + 0.002).applyQuaternion(quaternion);
-      matrix.compose(position.clone().add(face), quaternion, scale);
-      if (note.d === 8) this.dots.setMatrixAt(dots++, matrix);
-      else this.arrows.setMatrixAt(arrows++, matrix);
+      if (note.d === 8) this.dots.solid.setMatrixAt(dots++, matrix);
+      else this.arrows.solid.setMatrixAt(arrows++, matrix);
     });
-    this.notes.count = heads.length;
-    this.arrows.count = arrows;
-    this.dots.count = dots;
+    this.notes.finish(heads.length);
+    this.arrows.finish(arrows);
+    this.dots.finish(dots);
     this.bombIds = [];
     objects.bombs.forEach((bomb, index) => {
       position.set(colX(bomb.x), rowY(bomb.y), z(bomb.b));
-      matrix.compose(position, quaternion.identity(), picked.has(bomb.id) ? new Vector3(1.3, 1.3, 1.3) : scale);
-      this.bombs.setMatrixAt(index, matrix);
-      this.bombs.setColorAt(index, picked.has(bomb.id) ? highlight : new Color(0x3a3c44));
+      matrix.compose(position, quaternion.identity(), one);
+      this.bombs.solid.setMatrixAt(index, matrix);
+      this.bombs.solid.setColorAt(index, lit(new Color(0x2c2e36), bomb.id));
       this.bombIds.push(bomb.id);
     });
-    this.bombs.count = objects.bombs.length;
-    // chains' links: flat slices from the head to the tail
+    this.bombs.finish(objects.bombs.length);
+    // chains' links: slices from the head to the tail
     this.linkIds = [];
     let link = 0;
     for (const chain of objects.chains) {
       const pieces = Math.max(1, chain.sc - 1);
-      const color = this.rgb(chain.c === 0 ? colors.leftNote : colors.rightNote);
-      if (picked.has(chain.id)) color.lerp(highlight, 0.55);
       for (let k = 1; k <= pieces; k++) {
         const t = (k / pieces) * Math.max(0.05, Math.min(1, chain.s));
         position.set(colX(chain.x + (chain.tx - chain.x) * t), rowY(chain.y + (chain.ty - chain.y) * t), z(chain.b + (chain.tb - chain.b) * t));
-        matrix.compose(position, quaternion.setFromAxisAngle(axis, ((ROLL[chain.d] ?? 0) * Math.PI) / 180), scale);
-        this.links.setMatrixAt(link, matrix);
-        this.links.setColorAt(link, color);
+        matrix.compose(position, quaternion.setFromAxisAngle(axis, ((ROLL[chain.d] ?? 0) * Math.PI) / 180), one);
+        this.links.solid.setMatrixAt(link, matrix);
+        this.links.solid.setColorAt(link, lit(this.rgb(chain.c === 0 ? colors.leftNote : colors.rightNote), chain.id));
         this.linkIds.push(chain.id);
         link++;
       }
     }
-    this.links.count = link;
-    for (const mesh of [this.notes, this.arrows, this.dots, this.bombs, this.links]) {
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor !== null) mesh.instanceColor.needsUpdate = true;
-      mesh.computeBoundingSphere();
-    }
+    this.links.finish(link);
 
     // walls, arcs, the picked objects' outlines
     for (const child of [...this.extras.children]) {
@@ -287,11 +387,12 @@ export class NoteTrack {
       const top = Math.max(bottom + 0.1, (wall.y + wall.h) * LANE - 0.45);
       const length = Math.max(0.02, wall.d * METRES_PER_BEAT);
       const geometry = new BoxGeometry(wall.w * LANE - 0.04, top - bottom, length);
-      const mesh = new Mesh(geometry, new MeshBasicMaterial({ color: obstacle, transparent: true, opacity: picked.has(wall.id) ? 0.4 : 0.22, depthWrite: false, clippingPlanes: this.clip }));
+      const on = picked.has(wall.id) || this.hovered === wall.id;
+      const mesh = new Mesh(geometry, new MeshBasicMaterial({ color: obstacle, transparent: true, opacity: on ? 0.4 : 0.2, depthWrite: false, clippingPlanes: this.trackClip }));
       mesh.position.set(colX(wall.x) + ((wall.w - 1) * LANE) / 2, (top + bottom) / 2, z(wall.b) - length / 2);
       mesh.userData = { kind: 'walls', id: wall.id };
       this.extras.add(mesh);
-      const edges = new LineSegments(new EdgesGeometry(geometry), new LineBasicMaterial({ color: picked.has(wall.id) ? 0xffe27a : obstacle, clippingPlanes: this.clip }));
+      const edges = new LineSegments(new EdgesGeometry(geometry), new LineBasicMaterial({ color: picked.has(wall.id) ? 0xffe27a : obstacle, clippingPlanes: this.trackClip }));
       edges.position.copy(mesh.position);
       this.extras.add(edges);
     }
@@ -302,14 +403,14 @@ export class NoteTrack {
       const [tx, ty] = DIR_VECTOR[arc.tc] ?? [0, 0];
       const reach = Math.max(0.6, head.distanceTo(tail) * 0.35);
       const curve = new CubicBezierCurve3(head, head.clone().add(new Vector3(hx * arc.mu * 0.8, hy * arc.mu * 0.8, -reach)), tail.clone().add(new Vector3(-tx * arc.tmu * 0.8, -ty * arc.tmu * 0.8, reach)), tail);
+      const on = picked.has(arc.id) || this.hovered === arc.id;
       const color = this.rgb(arc.c === 0 ? colors.leftNote : colors.rightNote);
-      const mesh = new Mesh(new TubeGeometry(curve, 24, picked.has(arc.id) ? 0.04 : 0.025, 6), new MeshBasicMaterial({ color: picked.has(arc.id) ? 0xffe27a : color, transparent: true, opacity: 0.85, clippingPlanes: this.clip }));
+      const mesh = new Mesh(new TubeGeometry(curve, 24, on ? 0.04 : 0.025, 6), new MeshBasicMaterial({ color: picked.has(arc.id) ? 0xffe27a : color, transparent: true, opacity: 0.85, clippingPlanes: this.trackClip }));
       mesh.userData = { kind: 'arcs', id: arc.id };
       this.extras.add(mesh);
     }
-    // (the picked notes and bombs: an outline each)
     const outline: number[] = [];
-    const box = new EdgesGeometry(new BoxGeometry(NOTE + 0.08, NOTE + 0.08, NOTE + 0.08));
+    const box = new EdgesGeometry(new BoxGeometry(NOTE + 0.07, NOTE + 0.07, NOTE + 0.07));
     const corners = box.getAttribute('position');
     for (const { kind, note } of heads) {
       if (!picked.has(note.id) || kind !== 'notes') continue;
@@ -318,38 +419,46 @@ export class NoteTrack {
     if (outline.length > 0) {
       const geometry = new BufferGeometry();
       geometry.setAttribute('position', new Float32BufferAttribute(outline, 3));
-      this.extras.add(new LineSegments(geometry, new LineBasicMaterial({ color: 0xffe27a, clippingPlanes: this.clip })));
+      this.extras.add(new LineSegments(geometry, new LineBasicMaterial({ color: 0xffe27a, clippingPlanes: this.trackClip })));
     }
   }
 
-  /** The lines across the track: bars bright, beats softer, the grid's steps faint. */
+  /** The strips across the track: bars bright and wide, beats softer, the grid's steps faint. */
   private buildLines(cursor: number) {
     const editor = this.editor;
     const step = editor.snap > 0 ? editor.snap : 0.25;
-    const from = Math.floor(cursor) - BEHIND - 1;
+    const from = Math.floor(cursor - BEHIND) - 1;
     const to = Math.ceil(cursor) + AHEAD + 1;
     const key = `${String(from)}|${String(step)}`;
     if (key === this.linesKey) return;
     this.linesKey = key;
     for (const child of [...this.beatLines.children]) {
       this.beatLines.remove(child);
-      (child as LineSegments).geometry.dispose();
+      (child as Mesh).geometry.dispose();
+      ((child as Mesh).material as Material).dispose();
     }
-    const bars: number[] = [];
-    const beats: number[] = [];
-    const steps: number[] = [];
     const half = WIDTH / 2;
+    const bars: number[][] = [];
+    const beats: number[][] = [];
+    const steps: number[][] = [];
     for (let beat = Math.max(0, from); beat <= to; beat += step) {
       const rounded = Math.round(beat * 1000) / 1000;
       const zz = -rounded * METRES_PER_BEAT;
       const target = Math.abs(rounded % 4) < 1e-6 ? bars : Math.abs(rounded - Math.round(rounded)) < 1e-6 ? beats : steps;
-      target.push(-half, 0.001, zz, half, 0.001, zz);
-      if (steps.length > 6000) break;
+      target.push([-half, zz, half, zz]);
+      if (steps.length > 4000) break;
     }
-    this.beatLines.add(this.lines(bars, 0xffffff, 0.75), this.lines(beats, 0xc0c4d0, 0.45), this.lines(steps, 0x8a90a0, 0.18));
+    // (the beat numbers' callouts: from the track's edge out to the number)
+    const callouts = [...bars, ...beats].map(([, zz]) => [-half - 0.02, zz!, -half - 0.42, zz!]);
+    this.beatLines.add(
+      this.floorStrips(bars, [0.06], 0xffffff, 0.95),
+      this.floorStrips(beats, [0.035], 0xd6dae4, 0.75),
+      this.floorStrips(steps, [0.018], 0xaab0c0, 0.4),
+      this.floorStrips(callouts, [0.025], 0xd6dae4, 0.7),
+    );
   }
 
-  /** The beats' numbers beside the track (a pool of sprites moved along). */
+  /** The beats' numbers beside the track, at the end of their callouts (a pool of sprites moved along). */
   private placeNumbers(cursor: number) {
     const first = Math.max(0, Math.floor(cursor - BEHIND));
     const key = String(first);
@@ -358,15 +467,17 @@ export class NoteTrack {
     const wanted = Math.ceil(AHEAD + BEHIND) + 2;
     while (this.numbers.length < wanted) {
       const sprite = new Sprite(new SpriteMaterial({ transparent: true, depthWrite: false }));
-      sprite.scale.set(0.42, 0.21, 1);
+      sprite.center.set(1, 0.5);
       this.numbers.push(sprite);
       this.moving.add(sprite);
     }
     this.numbers.forEach((sprite, index) => {
       const beat = first + index;
-      sprite.position.set(-WIDTH / 2 - 0.35, 0.12, -beat * METRES_PER_BEAT);
+      const bar = beat % 4 === 0;
+      sprite.position.set(-WIDTH / 2 - 0.46, 0.14, -beat * METRES_PER_BEAT);
+      sprite.scale.set(bar ? 0.56 : 0.4, bar ? 0.28 : 0.2, 1);
       (sprite.material as SpriteMaterial).map = this.numberTexture(beat);
-      (sprite.material as SpriteMaterial).opacity = beat % 4 === 0 ? 1 : 0.6;
+      (sprite.material as SpriteMaterial).opacity = bar ? 1 : 0.7;
       (sprite.material as SpriteMaterial).needsUpdate = true;
     });
   }
@@ -378,11 +489,14 @@ export class NoteTrack {
     canvas.width = 128;
     canvas.height = 64;
     const ctx = canvas.getContext('2d')!;
-    ctx.font = 'italic 700 44px system-ui, sans-serif';
+    ctx.font = 'italic 800 46px system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeText(String(beat), 122, 34);
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(String(beat), 120, 34);
+    ctx.fillText(String(beat), 122, 34);
     texture = new CanvasTexture(canvas);
     this.numberTextures.set(beat, texture);
     return texture;
@@ -393,11 +507,10 @@ export class NoteTrack {
     if (!this.active) return;
     const editor = this.editor;
     const cursor = editor.isPlaying() ? editor.playhead() : editor.snapBeat(editor.playhead());
-    this.build();
+    this.build(cursor);
     this.buildLines(cursor);
     this.placeNumbers(cursor);
     this.moving.position.z = cursor * METRES_PER_BEAT;
-    // (the clipping planes are in the world: the track's ends stay where they are)
     const info = editor.row?.infoDifficulty;
     const njs = info !== undefined && info.noteJumpSpeed > 0 ? info.noteJumpSpeed : 16;
     const half = jumpOf(editor.songBpm, njs, info?.noteStartBeatOffset ?? 0).half;
@@ -408,22 +521,29 @@ export class NoteTrack {
 
   // ----- the mouse ---------------------------------------------------------------------------------------
 
-  private ray(event: MouseEvent) {
+  private ndc(clientX: number, clientY: number) {
     const rect = this.canvas.getBoundingClientRect();
-    const ndc = new Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    return new Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  }
+
+  private ray(clientX: number, clientY: number) {
     const camera = this.editor.preview.view.viewCamera;
     camera.updateMatrixWorld();
-    this.raycaster.setFromCamera(ndc, camera);
+    this.raycaster.setFromCamera(this.ndc(clientX, clientY), camera);
     return this.raycaster.ray;
   }
 
+  /** Where a ray meets a plane (null: it doesn't, ahead). */
+  private meet(clientX: number, clientY: number, plane: Plane) {
+    const ray = this.ray(clientX, clientY);
+    const point = new Vector3();
+    return ray.intersectPlane(plane, point);
+  }
+
   /** The wall's cell under the mouse. */
-  private cellAt(event: MouseEvent): { col: number; row: number } | null {
-    const ray = this.ray(event);
-    if (Math.abs(ray.direction.z) < 1e-6) return null;
-    const t = -ray.origin.z / ray.direction.z;
-    if (t <= 0) return null;
-    const point = ray.origin.clone().add(ray.direction.clone().multiplyScalar(t));
+  private cellAt(clientX: number, clientY: number): { col: number; row: number } | null {
+    const point = this.meet(clientX, clientY, new Plane(new Vector3(0, 0, 1), 0));
+    if (point === null) return null;
     const col = Math.floor((point.x + WIDTH / 2) / LANE);
     const row = Math.floor(point.y / LANE);
     if (col < 0 || col > 3 || row < 0 || row > 2) return null;
@@ -431,22 +551,31 @@ export class NoteTrack {
   }
 
   /** The object on the track under the mouse (null: none). */
-  private objectAt(event: MouseEvent): Hit | null {
-    this.ray(event);
+  private objectAt(clientX: number, clientY: number): Hit | null {
+    this.ray(clientX, clientY);
     this.root.updateMatrixWorld(true);
-    const targets = [this.notes, this.bombs, this.links, ...this.extras.children.filter((child) => child.userData.id !== undefined)];
-    const hits = this.raycaster.intersectObjects(targets, false).filter((hit) => {
-      // (only what's on the shown stretch of the track)
-      return hit.point.z <= BEHIND * METRES_PER_BEAT && hit.point.z >= -AHEAD * METRES_PER_BEAT;
-    });
+    const targets = [this.notes.solid, this.bombs.solid, this.links.solid, ...this.extras.children.filter((child) => child.userData.id !== undefined)];
+    const hits = this.raycaster.intersectObjects(targets, false).filter((hit) => hit.point.z <= BEHIND * METRES_PER_BEAT && hit.point.z >= -AHEAD * METRES_PER_BEAT);
     for (const hit of hits) {
-      if (hit.object === this.notes && hit.instanceId !== undefined) return this.noteIds[hit.instanceId] ?? null;
-      if (hit.object === this.bombs && hit.instanceId !== undefined) return { kind: 'bombs', id: this.bombIds[hit.instanceId]! };
-      if (hit.object === this.links && hit.instanceId !== undefined) return { kind: 'chains', id: this.linkIds[hit.instanceId]! };
+      if (hit.object === this.notes.solid && hit.instanceId !== undefined) return this.noteIds[hit.instanceId] ?? null;
+      if (hit.object === this.bombs.solid && hit.instanceId !== undefined) return { kind: 'bombs', id: this.bombIds[hit.instanceId]! };
+      if (hit.object === this.links.solid && hit.instanceId !== undefined) return { kind: 'chains', id: this.linkIds[hit.instanceId]! };
       const data = hit.object.userData as { kind?: ObjectKind; id?: string };
       if (data.id !== undefined && data.kind !== undefined) return { kind: data.kind, id: data.id };
     }
     return null;
+  }
+
+  /** The note or bomb at the cursor in a cell of the wall. */
+  private cellObject(cell: { col: number; row: number } | null): Hit | null {
+    if (cell === null) return null;
+    const editor = this.editor;
+    const beat = editor.snapBeat(editor.playhead());
+    const same = (item: { b: number; x: number; y: number }) => Math.abs(item.b - beat) < 1e-3 && item.x === cell.col && item.y === cell.row;
+    const note = editor.objects.notes.find(same);
+    if (note !== undefined) return { kind: 'notes', id: note.id };
+    const bomb = editor.objects.bombs.find(same);
+    return bomb === undefined ? null : { kind: 'bombs', id: bomb.id };
   }
 
   private dragDirection(dx: number, dy: number): number | null {
@@ -455,8 +584,6 @@ export class NoteTrack {
     return [3, 5, 0, 4, 2, 6, 1, 7][Math.round(angle / 45) % 8]!;
   }
 
-  private lastMouse: { x: number; y: number } | null = null;
-
   /** The note the wall would get where the mouse is (or the drag points). */
   private updateGhost() {
     for (const child of [...this.ghost.children]) {
@@ -464,35 +591,147 @@ export class NoteTrack {
       (child as Mesh).geometry.dispose();
       ((child as Mesh).material as Material).dispose();
     }
-    const cell = this.press ?? this.hoverCell;
+    const drag = this.drag;
+    const cell = drag?.kind === 'place' ? drag : drag === null ? this.hoverCell : null;
     const editor = this.editor;
     if (cell === null || editor.isPlaying()) return;
     const tool = editor.noteTool;
-    const beat = editor.snapBeat(editor.playhead());
-    const taken = [...editor.objects.notes, ...editor.objects.bombs].some((item) => Math.abs(item.b - beat) < 1e-3 && item.x === cell.col && item.y === cell.row);
-    // (the cell itself lit)
-    const glow = new Mesh(new PlaneGeometry(LANE - 0.04, LANE - 0.04), new MeshBasicMaterial({ color: taken ? 0xffe27a : 0x6aa6ff, transparent: true, opacity: 0.18, depthWrite: false, side: DoubleSide }));
+    const taken = this.cellObject(cell) !== null;
+    const glow = new Mesh(new PlaneGeometry(LANE - 0.04, LANE - 0.04), new MeshBasicMaterial({ color: taken ? 0xffe27a : 0x6aa6ff, transparent: true, opacity: 0.2, depthWrite: false, side: DoubleSide }));
     glow.position.set(colX(cell.col), rowY(cell.row), 0.001);
     this.ghost.add(glow);
     if (taken || tool.kind === 'wall') return;
     const colors = editor.preview.colors;
     if (tool.kind === 'bomb') {
-      const bomb = new Mesh(new IcosahedronGeometry(0.2, 0), new MeshLambertMaterial({ color: 0x5a5c66, transparent: true, opacity: 0.6 }));
+      const bomb = new Mesh(bombGeometry(), new MeshStandardMaterial({ color: 0x5a5c66, transparent: true, opacity: 0.6 }));
       bomb.position.set(colX(cell.col), rowY(cell.row), 0);
       this.ghost.add(bomb);
       return;
     }
-    const press = this.press;
-    const direction = press !== null && this.lastMouse !== null ? (this.dragDirection(this.lastMouse.x - press.x, this.lastMouse.y - press.y) ?? tool.direction) : tool.direction;
+    const direction = drag?.kind === 'place' && this.lastMouse !== null ? (this.dragDirection(this.lastMouse.x - drag.x, this.lastMouse.y - drag.y) ?? tool.direction) : tool.direction;
     const quaternion = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), ((ROLL[direction] ?? 0) * Math.PI) / 180);
-    const cube = new Mesh(new BoxGeometry(NOTE, NOTE, NOTE), new MeshLambertMaterial({ color: this.rgb(tool.kind === 'red' ? colors.leftNote : colors.rightNote), transparent: true, opacity: 0.55 }));
+    const cube = new Mesh(noteBodyGeometry(), new MeshStandardMaterial({ color: this.rgb(tool.kind === 'red' ? colors.leftNote : colors.rightNote), transparent: true, opacity: 0.55, roughness: 0.35 }));
     cube.position.set(colX(cell.col), rowY(cell.row), 0);
     cube.quaternion.copy(quaternion);
     this.ghost.add(cube);
-    const mark = new Mesh(direction === 8 ? new CircleGeometry(0.07, 16) : this.arrowGeometry(), new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
-    mark.position.copy(cube.position).add(new Vector3(0, 0, NOTE / 2 + 0.003).applyQuaternion(quaternion));
+    const mark = new Mesh(direction === 8 ? dotGeometry() : arrowGeometry(), new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    mark.position.copy(cube.position);
     mark.quaternion.copy(quaternion);
     this.ghost.add(mark);
+  }
+
+  /** A short right click (the camera didn't fly): the object there deleted. */
+  rightClick(clientX: number, clientY: number) {
+    if (!this.active) return;
+    const hit = this.objectAt(clientX, clientY) ?? this.cellObject(this.cellAt(clientX, clientY));
+    if (hit === null) return;
+    const editor = this.editor;
+    editor.noteCheckpoint();
+    editor.removeObjects(new Set([hit.id]));
+    editor.notesChanged();
+  }
+
+  /** The selected objects' places when a move started. */
+  private origins() {
+    const origin = new Map<string, AnyObject>();
+    for (const { item } of this.editor.selectedObjects()) origin.set(item.id, { ...(item as AnyObject) });
+    return origin;
+  }
+
+  /** The selection moved from where it was: across cells and in time (one undo step for the drag). */
+  private applyMove(drag: Extract<NoteTrack['drag'], { kind: 'pick' }>, cols: number, rows: number, beats: number) {
+    const editor = this.editor;
+    const picked = editor.selectedObjects();
+    // (nothing goes off the grid or before the song)
+    for (const { kind, item } of picked) {
+      const o = drag.origin.get(item.id);
+      if (o === undefined) continue;
+      const width = kind === 'walls' ? (item as MapWall).w : 1;
+      cols = Math.max(cols, -Math.min(o.x, o.tx ?? o.x));
+      cols = Math.min(cols, 3 - Math.max(o.x + width - 1, o.tx ?? o.x));
+      if (kind !== 'walls') {
+        rows = Math.max(rows, -Math.min(o.y, o.ty ?? o.y));
+        rows = Math.min(rows, 2 - Math.max(o.y, o.ty ?? o.y));
+      } else rows = 0;
+      beats = Math.max(beats, -o.b);
+    }
+    let changed = false;
+    for (const { kind, item } of picked) {
+      const o = drag.origin.get(item.id);
+      if (o === undefined) continue;
+      const next = { x: o.x + cols, y: kind === 'walls' ? o.y : o.y + rows, b: Math.round((o.b + beats) * 1e6) / 1e6 };
+      if (next.x !== item.x || next.y !== item.y || next.b !== item.b) changed = true;
+      item.x = next.x;
+      item.y = next.y;
+      item.b = next.b;
+      const tail = item as AnyObject;
+      if (o.tb !== undefined) tail.tb = Math.round((o.tb + beats) * 1e6) / 1e6;
+      if (o.tx !== undefined) tail.tx = o.tx + cols;
+      if (o.ty !== undefined) tail.ty = o.ty + rows;
+    }
+    if (changed) {
+      drag.moving = true;
+      editor.noteVersion++;
+      editor.rebuildPreview();
+      editor.emit('clips');
+    }
+  }
+
+  private moveTo(clientX: number, clientY: number, timeOnly: boolean) {
+    const drag = this.drag;
+    if (drag?.kind !== 'pick') return;
+    const editor = this.editor;
+    if (timeOnly) {
+      // (along the track: where the mouse meets the floor)
+      const floor = this.meet(clientX, clientY, new Plane(new Vector3(0, 1, 0), 0));
+      const start = this.meet(drag.x, drag.y, new Plane(new Vector3(0, 1, 0), 0));
+      if (floor === null || start === null) return;
+      const step = editor.snap || 0.25;
+      const beats = Math.round(-(floor.z - start.z) / METRES_PER_BEAT / step) * step;
+      this.applyMove(drag, 0, 0, beats + drag.time);
+      return;
+    }
+    const point = this.meet(clientX, clientY, drag.plane);
+    if (point === null) return;
+    const cols = Math.round((point.x - drag.grab.x) / LANE);
+    const rows = Math.round((point.y - drag.grab.y) / LANE);
+    this.applyMove(drag, cols, rows, drag.time);
+  }
+
+  private showBox(x0: number, y0: number, x1: number, y1: number) {
+    const rect = this.canvas.getBoundingClientRect();
+    const parent = this.canvas.parentElement!.getBoundingClientRect();
+    this.box.hidden = false;
+    this.box.style.left = `${String(Math.min(x0, x1) - parent.left)}px`;
+    this.box.style.top = `${String(Math.min(y0, y1) - parent.top)}px`;
+    this.box.style.width = `${String(Math.abs(x1 - x0))}px`;
+    this.box.style.height = `${String(Math.abs(y1 - y0))}px`;
+    void rect;
+  }
+
+  /** What's inside a box on the screen (its objects' middles). */
+  private inBox(x0: number, y0: number, x1: number, y1: number) {
+    const editor = this.editor;
+    const camera = editor.preview.view.viewCamera;
+    camera.updateMatrixWorld();
+    const a = this.ndc(Math.min(x0, x1), Math.max(y0, y1));
+    const b = this.ndc(Math.max(x0, x1), Math.min(y0, y1));
+    const offset = this.moving.position.z;
+    const inside = new Set<string>();
+    const test = (id: string, x: number, y: number, beat: number) => {
+      const zz = -beat * METRES_PER_BEAT + offset;
+      if (zz > BEHIND * METRES_PER_BEAT || zz < -AHEAD * METRES_PER_BEAT) return;
+      const point = new Vector3(x, y, zz).project(camera);
+      if (point.z > 1) return;
+      if (point.x >= a.x && point.x <= b.x && point.y >= a.y && point.y <= b.y) inside.add(id);
+    };
+    const objects = editor.objects;
+    for (const item of objects.notes) test(item.id, colX(item.x), rowY(item.y), item.b);
+    for (const item of objects.bombs) test(item.id, colX(item.x), rowY(item.y), item.b);
+    for (const item of objects.chains) test(item.id, colX(item.x), rowY(item.y), item.b);
+    for (const item of objects.arcs) test(item.id, colX(item.x), rowY(item.y), item.b);
+    for (const item of objects.walls) test(item.id, colX(item.x) + ((item.w - 1) * LANE) / 2, LANE, item.b + item.d / 2);
+    return inside;
   }
 
   private bind() {
@@ -504,58 +743,100 @@ export class NoteTrack {
         this.hoverCell = null;
         return;
       }
-      this.hoverCell = this.cellAt(event);
-      canvas.style.cursor = this.hoverCell !== null ? 'crosshair' : this.objectAt(event) !== null ? 'pointer' : 'default';
+      if (this.drag !== null) return;
+      this.hoverCell = this.cellAt(event.clientX, event.clientY);
+      const hit = this.hoverCell === null || event.shiftKey || event.ctrlKey ? this.objectAt(event.clientX, event.clientY) : this.cellObject(this.hoverCell);
+      this.hovered = hit?.id ?? null;
+      canvas.style.cursor = hit !== null ? 'pointer' : this.hoverCell !== null ? 'crosshair' : 'default';
     });
     canvas.addEventListener('mouseleave', () => {
-      this.hoverCell = null;
+      if (this.drag === null) {
+        this.hoverCell = null;
+        this.hovered = null;
+      }
     });
     canvas.addEventListener('mousedown', (event) => {
       if (!this.active || event.button === 2) return;
       const editor = this.editor;
-      const cell = this.cellAt(event);
+      const cell = this.cellAt(event.clientX, event.clientY);
       if (event.button === 1) {
         event.preventDefault();
-        const hit = this.objectAt(event) ?? this.cellObject(cell);
-        if (hit !== null) editor.updateObjects([hit.id], (_kind, item) => {
-          if ('c' in item) item.c = 1 - item.c;
-        });
+        const hit = this.objectAt(event.clientX, event.clientY) ?? this.cellObject(cell);
+        if (hit !== null)
+          editor.updateObjects([hit.id], (_kind, item) => {
+            if ('c' in item) item.c = 1 - item.c;
+          });
         return;
       }
       if (event.button !== 0) return;
-      // (Shift / Ctrl: what's under the mouse picked, even behind the wall — as in ChroMapper)
+      // (Shift / Ctrl: what's under the mouse, even behind the wall — as in ChroMapper)
       const adding = event.shiftKey || event.ctrlKey || event.metaKey;
-      const onTrack = cell === null || adding ? this.objectAt(event) : null;
-      if (cell !== null && !(adding && onTrack !== null)) {
-        this.press = { x: event.clientX, y: event.clientY, col: cell.col, row: cell.row };
+      const hit = cell !== null && !adding ? this.cellObject(cell) : this.objectAt(event.clientX, event.clientY);
+      if (hit === null && cell !== null && !adding) {
+        this.drag = { kind: 'place', x: event.clientX, y: event.clientY, col: cell.col, row: cell.row };
         return;
       }
-      if (onTrack !== null) editor.selectNotes([onTrack.id], adding ? 'toggle' : 'replace');
-      else if (!adding) editor.selectNotes([]);
+      if (hit === null) {
+        this.drag = { kind: 'box', x: event.clientX, y: event.clientY, adding };
+        return;
+      }
+      // a note: picked (with Shift / Ctrl: added or taken off), and dragged on
+      if (adding) editor.selectNotes([hit.id], 'toggle');
+      else if (!editor.noteSelection.has(hit.id)) editor.selectNotes([hit.id]);
+      const item = editor.objectById(hit.id)?.item as AnyObject | undefined;
+      if (item === undefined || !editor.noteSelection.has(hit.id)) return;
+      const z = -item.b * METRES_PER_BEAT + this.moving.position.z;
+      const plane = new Plane(new Vector3(0, 0, 1), -z);
+      const grab = this.meet(event.clientX, event.clientY, plane) ?? new Vector3(colX(item.x), rowY(item.y), z);
+      editor.noteCheckpoint();
+      this.drag = { kind: 'pick', x: event.clientX, y: event.clientY, hit, adding, moving: false, plane, grab, origin: this.origins(), time: 0, timeOnly: false };
+    });
+    window.addEventListener('mousemove', (event) => {
+      const drag = this.drag;
+      if (drag === null) return;
+      this.lastMouse = { x: event.clientX, y: event.clientY };
+      if (drag.kind === 'box') {
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 4) this.showBox(drag.x, drag.y, event.clientX, event.clientY);
+      } else if (drag.kind === 'pick') {
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5 && !drag.moving) return;
+        this.moveTo(event.clientX, event.clientY, event.ctrlKey || event.metaKey);
+      }
     });
     window.addEventListener('mouseup', (event) => {
-      const press = this.press;
-      this.press = null;
-      if (press === null || event.button !== 0) return;
+      const drag = this.drag;
+      if (drag === null || event.button !== 0) return;
+      this.drag = null;
+      this.box.hidden = true;
       const editor = this.editor;
-      const beat = editor.snapBeat(editor.playhead());
-      const there = this.cellObject(press);
-      const dir = this.dragDirection(event.clientX - press.x, event.clientY - press.y);
-      if (there !== null) {
-        // (a note there: a click picks it, a drag turns its arrow)
-        if (dir !== null && there.kind === 'notes') editor.updateObjects([there.id], (_kind, item) => ((item as MapNote).d = dir));
-        else editor.selectNotes([there.id], event.shiftKey || event.ctrlKey ? 'toggle' : 'replace');
+      if (drag.kind === 'box') {
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) <= 4) {
+          if (!drag.adding) editor.selectNotes([]);
+          return;
+        }
+        editor.selectNotes(this.inBox(drag.x, drag.y, event.clientX, event.clientY), drag.adding ? 'add' : 'replace');
         return;
       }
+      if (drag.kind === 'pick') {
+        if (drag.moving) editor.notesChanged(true);
+        else {
+          editor.noteUndoDiscard();
+          // (a click on one of several picked: only it)
+          if (!drag.adding && editor.noteSelection.size > 1) editor.selectNotes([drag.hit.id]);
+        }
+        return;
+      }
+      // a cell of the wall: what the tool is put in
+      const beat = editor.snapBeat(editor.playhead());
+      const dir = this.dragDirection(event.clientX - drag.x, event.clientY - drag.y);
       const tool = editor.noteTool;
-      editor.noteRow = press.row;
+      editor.noteRow = drag.row;
       if (tool.kind === 'wall') {
         const crouch = editor.wallKind === 'crouch';
-        editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: press.col, y: crouch ? 2 : 0, d: editor.snap || 1, w: 1, h: crouch ? 3 : 5 } }], false);
-      } else if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: press.col, y: press.row } }], false);
+        editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: drag.col, y: crouch ? 2 : 0, d: editor.snap || 1, w: 1, h: crouch ? 3 : 5 } }], false);
+      } else if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: drag.col, y: drag.row } }], false);
       else {
         if (dir !== null) editor.noteTool = { ...tool, direction: dir };
-        editor.addObjects([{ kind: 'notes', item: { id: newId('n'), b: beat, x: press.col, y: press.row, c: tool.kind === 'red' ? 0 : 1, d: dir ?? tool.direction, a: 0 } }], false);
+        editor.addObjects([{ kind: 'notes', item: { id: newId('n'), b: beat, x: drag.col, y: drag.row, c: tool.kind === 'red' ? 0 : 1, d: dir ?? tool.direction, a: 0 } }], false);
       }
     });
     canvas.addEventListener(
@@ -564,15 +845,29 @@ export class NoteTrack {
         if (!this.active || event.defaultPrevented) return;
         event.preventDefault();
         const editor = this.editor;
+        const drag = this.drag;
+        if (drag?.kind === 'pick') {
+          // the wheel while dragging: the picked ones a grid step on or back in time
+          this.wheelSum += event.deltaY;
+          if (Math.abs(this.wheelSum) < 40) return;
+          drag.time += (this.wheelSum < 0 ? 1 : -1) * (editor.snap || 0.25);
+          this.wheelSum = 0;
+          this.moveTo(event.clientX, event.clientY, event.ctrlKey || event.metaKey);
+          return;
+        }
         if (event.altKey) {
           // Alt+wheel over a note: its arrow turned an eighth
-          const hit = this.objectAt(event) ?? this.cellObject(this.cellAt(event));
+          const hit = this.objectAt(event.clientX, event.clientY) ?? this.cellObject(this.cellAt(event.clientX, event.clientY));
           if (hit === null || hit.kind !== 'notes') return;
           const order = [0, 5, 3, 7, 1, 6, 2, 4];
-          editor.updateObjects([hit.id], (_kind, item) => {
-            const note = item as MapNote;
-            if (note.d !== 8) note.d = order[(order.indexOf(note.d) + (event.deltaY > 0 ? 1 : -1) + 8) % 8]!;
-          });
+          editor.updateObjects(
+            [hit.id],
+            (_kind, item) => {
+              const note = item as MapNote;
+              if (note.d !== 8) note.d = order[(order.indexOf(note.d) + (event.deltaY > 0 ? 1 : -1) + 8) % 8]!;
+            },
+            `turn:${hit.id}`,
+          );
           return;
         }
         this.wheelSum += event.deltaY;
@@ -590,18 +885,11 @@ export class NoteTrack {
       { passive: false },
     );
   }
+}
 
-  /** The note or bomb at the cursor in a cell of the wall. */
-  private cellObject(cell: { col: number; row: number } | null): Hit | null {
-    if (cell === null) return null;
-    const editor = this.editor;
-    const beat = editor.snapBeat(editor.playhead());
-    const same = (item: { b: number; x: number; y: number }) => Math.abs(item.b - beat) < 1e-3 && item.x === cell.col && item.y === cell.row;
-    const note = editor.objects.notes.find(same);
-    if (note !== undefined) return { kind: 'notes', id: note.id };
-    const bomb = editor.objects.bombs.find(same);
-    return bomb === undefined ? null : { kind: 'bombs', id: bomb.id };
-  }
+/** A list of `count` values from `make`. */
+function k(count: number, make: (index: number) => number) {
+  return Array.from({ length: count }, (_, index) => make(index));
 }
 
 export type { MapArc, MapChain, MapWall };

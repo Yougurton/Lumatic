@@ -185,6 +185,16 @@
       #view-tools button:not(.active):not(#view-reset) {
         opacity: 0.6;
       }
+      .track-box {
+        position: absolute;
+        border: 1px solid rgba(140, 180, 255, 0.9);
+        background: rgba(120, 170, 255, 0.14);
+        pointer-events: none;
+        z-index: 1;
+      }
+      .track-box[hidden] {
+        display: none;
+      }
       #fly-hint {
         position: absolute;
         right: 8px;

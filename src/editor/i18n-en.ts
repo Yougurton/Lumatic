@@ -1304,4 +1304,5 @@ export const EN: Record<string, string> = {
   "🛤 Дорожка": "🛤 Track",
   "Показать ноты как в игре: они летят к игроку": "Show the notes as in the game: flying at the player",
   "Вернуть дорожку редактора: ноты стоят вдоль неё, ставятся на стену у курсора": "Back to the editor's track: notes stand along it and are placed on the wall at the cursor",
+  "Тяните, чтобы поменять высоту таймлайна (у света и у нот она своя); двойной клик — как было": "Drag to change the timeline height (the lights and the notes each have their own); double click — back to default",
 };

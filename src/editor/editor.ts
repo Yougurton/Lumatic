@@ -2420,9 +2420,21 @@ export class Editor {
     return JSON.stringify(this.objects);
   }
 
-  /** Call before a change to the objects (one undo step of the notes side). */
-  noteCheckpoint() {
-    this.noteUndo.push(this.noteSnapshot());
+  /** The last undo step's merge key and when it was taken (steps of one kind in a row: one step). */
+  private noteMerge: { key: string; at: number } | null = null;
+
+  /** Call before a change to the objects (one undo step of the notes side). `merge`: changes of the
+   *  same kind coming one after another (an arrow turned notch by notch) make one step. */
+  noteCheckpoint(merge?: string) {
+    const now = performance.now();
+    if (merge !== undefined && this.noteMerge?.key === merge && now - this.noteMerge.at < 1200) {
+      this.noteMerge.at = now;
+      return;
+    }
+    this.noteMerge = merge === undefined ? null : { key: merge, at: now };
+    const state = this.noteSnapshot();
+    // (nothing changed since the last step: no step of its own)
+    if (this.noteUndo.at(-1) !== state) this.noteUndo.push(state);
     if (this.noteUndo.length > 300) this.noteUndo.shift();
     this.noteRedo = [];
   }
@@ -2430,6 +2442,7 @@ export class Editor {
   /** The last checkpoint wasn't needed. */
   noteUndoDiscard() {
     this.noteUndo.pop();
+    this.noteMerge = null;
   }
 
   /** After a change to the objects: drawn again, the 3D view too. */
@@ -2447,17 +2460,24 @@ export class Editor {
     this.notesChanged(true);
   }
 
+  /** One press: one change of the notes undone (steps that changed nothing passed over). */
   undoNotes() {
-    const state = this.noteUndo.pop();
+    const now = this.noteSnapshot();
+    let state = this.noteUndo.pop();
+    while (state !== undefined && state === now) state = this.noteUndo.pop();
     if (state === undefined) return;
-    this.noteRedo.push(this.noteSnapshot());
+    this.noteMerge = null;
+    this.noteRedo.push(now);
     this.restoreNotes(state);
   }
 
   redoNotes() {
-    const state = this.noteRedo.pop();
+    const now = this.noteSnapshot();
+    let state = this.noteRedo.pop();
+    while (state !== undefined && state === now) state = this.noteRedo.pop();
     if (state === undefined) return;
-    this.noteUndo.push(this.noteSnapshot());
+    this.noteMerge = null;
+    this.noteUndo.push(now);
     this.restoreNotes(state);
   }
 
@@ -2486,11 +2506,19 @@ export class Editor {
   }
 
   /** Changes the selected objects (one undo step). */
-  updateObjects(ids: Iterable<string>, patch: (kind: ObjectKind, item: MapObjects[ObjectKind][number]) => void) {
+  updateObjects(ids: Iterable<string>, patch: (kind: ObjectKind, item: MapObjects[ObjectKind][number]) => void, merge?: string) {
     const wanted = new Set(ids);
     const found = allObjects(this.objects).filter(({ item }) => wanted.has(item.id));
     if (found.length === 0) return;
-    this.noteCheckpoint();
+    const before = JSON.stringify(found.map(({ item }) => item));
+    // (worked out on copies first: a change that changes nothing makes no undo step)
+    const probe = found.map(({ kind, item }) => {
+      const copy = structuredClone(item);
+      patch(kind, copy);
+      return copy;
+    });
+    if (JSON.stringify(probe) === before) return;
+    this.noteCheckpoint(merge);
     for (const { kind, item } of found) patch(kind, item);
     this.notesChanged();
   }

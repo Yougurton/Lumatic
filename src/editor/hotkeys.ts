@@ -112,8 +112,9 @@ export function comboOf(event: KeyboardEvent): string | null {
 /** The action a key string does on a side of the editor (null: none). */
 export function actionFor(combo: string, tab?: 'lights' | 'notes'): string | null {
   const own = bindings();
-  for (const action of ACTIONS) {
-    if (tab !== undefined && action.tab !== undefined && action.tab !== tab) continue;
+  // (this side's own actions first: F on the notes side is a dot, not "the whole song")
+  const ordered = [...ACTIONS.filter((action) => tab !== undefined && action.tab === tab), ...ACTIONS.filter((action) => action.tab === undefined)];
+  for (const action of ordered) {
     if (own[action.id]?.includes(combo) === true) return action.id;
   }
   // (the number pad's keys do what the same keys above the letters do, unless given their own)

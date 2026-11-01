@@ -131,7 +131,8 @@ export class Timeline {
    *  per beat, rows scrolled by. */
   private start = -1;
   get viewStart() {
-    return Math.max(this.start, -LEAD_PX / this.pxPerBeat);
+    // (the notes side keeps its cursor a quarter of the way in, before the song's start too)
+    return this.notesMode ? this.start : Math.max(this.start, -LEAD_PX / this.pxPerBeat);
   }
   set viewStart(beat: number) {
     this.start = Math.max(beat, -LEAD_PX / this.pxPerBeat);
@@ -197,7 +198,16 @@ export class Timeline {
       // (the song cursor moved by something else — the notes grid's wheel, a jump to a beat: brought
       // into view)
       const playhead = this.editor.playhead();
-      if (!this.editor.isPlaying() && Math.abs(playhead - lastPlayhead) > 1e-6 && this.drag === null) {
+      if (this.notesMode) {
+        // (the notes side: the song cursor stays a quarter of the way in — the song goes by under it;
+        // the overview dragged: the song goes there)
+        const quarter = (this.trackWidth / this.pxPerBeat) * 0.25;
+        if (this.drag?.kind === 'nav') this.editor.seek(Math.max(0, this.viewStart + quarter));
+        else if (Math.abs(this.start - (playhead - quarter)) > 1e-6) {
+          this.start = playhead - quarter;
+          this.needsDraw = true;
+        }
+      } else if (!this.editor.isPlaying() && Math.abs(playhead - lastPlayhead) > 1e-6 && this.drag === null) {
         const width = this.trackWidth / this.pxPerBeat;
         if (playhead > this.viewStart + width * 0.95 || playhead < this.viewStart) {
           this.viewStart = playhead - width * 0.3;
@@ -207,7 +217,7 @@ export class Timeline {
       lastPlayhead = playhead;
       if (this.editor.isPlaying()) {
         this.needsDraw = true;
-        if (this.followPlayhead && settings().follow) {
+        if (this.followPlayhead && settings().follow && !this.notesMode) {
           const beat = this.editor.playhead();
           const width = this.trackWidth / this.pxPerBeat;
           if (beat > this.viewStart + width * 0.85 || beat < this.viewStart) this.viewStart = beat - width * 0.15;
@@ -1988,6 +1998,10 @@ export class Timeline {
       } else if (event.shiftKey || x < GUTTER) {
         // (Shift+wheel comes as a sideways wheel on some systems)
         this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
+      } else if (this.notesMode) {
+        // (the notes side: the wheel takes the song on or back — the cursor stays where it is)
+        const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
+        this.editor.seek(Math.max(0, this.editor.playhead() + (delta / this.pxPerBeat) * 0.9 * settings().wheelSpeed));
       } else if (settings().wheel === 'cursor' && event.deltaX === 0) {
         // (as in ChroMapper: the wheel moves the song cursor a grid step — up: later in the song)
         this.cursorWheel += event.deltaY * settings().wheelSpeed;
