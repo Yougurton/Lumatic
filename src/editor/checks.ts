@@ -73,13 +73,16 @@ export const CHECK_RULES: CheckRule[] = [
   { id: 'jump', name: 'NJS, JD и NPS', source: 'BSMG', group: 'timing', about: 'Note jump speed, jump distance, reaction time и notes per second по таблицам BSMG' },
 ];
 
-/** Whose criteria to check against (thresholds where they differ; `all`: every one of them). */
-export type CheckStandard = 'all' | 'BSMG' | 'BL' | 'SS';
 
 /** The rules a standard has. */
-export function rulesOf(standard: CheckStandard) {
-  return CHECK_RULES.filter((rule) => standard === 'all' || rule.source.split(' · ').includes(standard)).map((rule) => rule.id);
+export function rulesOf(standards: Iterable<CheckSource>) {
+  const wanted = new Set(standards);
+  return CHECK_RULES.filter((rule) => rule.source.split(' · ').some((source) => wanted.has(source as CheckSource))).map((rule) => rule.id);
 }
+
+/** The sites whose criteria can be checked against. */
+export type CheckSource = 'BSMG' | 'BL' | 'SS';
+export const CHECK_SOURCES: CheckSource[] = ['BSMG', 'BL', 'SS'];
 
 export interface CheckInput {
   objects: MapObjects;
@@ -91,7 +94,7 @@ export interface CheckInput {
   /** Rules switched off. */
   disabled?: Iterable<string>;
   /** Whose thresholds (default: all — the strictest of each). */
-  standard?: CheckStandard;
+  standards?: Iterable<CheckSource>;
   /** The difficulty's half jump (beats): BSMG's vision blocks last that long. */
   halfJump?: number;
 }
@@ -128,7 +131,10 @@ const ms = (seconds: number) => `${String(Math.round(seconds * 1000))} мс`;
 
 export function checkMap(input: CheckInput): MapIssue[] {
   const off = new Set(input.disabled ?? []);
-  const standard = input.standard ?? 'all';
+  const picked = new Set<CheckSource>(input.standards ?? CHECK_SOURCES);
+  const bl = picked.has('BL');
+  const ss = picked.has('SS');
+  const bsmgOn = picked.has('BSMG');
   const issues: MapIssue[] = [];
   const counts = new Map<string, number>();
   const add = (rule: string, level: IssueLevel, beat: number, ids: string[], text: string) => {
@@ -321,7 +327,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
       if (face.y !== 1 || (face.x !== 1 && face.x !== 2)) continue;
       const t = sec(face.b);
       // (BSMG: nothing in that half of the grid for the half jump; BL: 250/500 ms, outer columns free)
-      const bsmg = standard === 'BSMG';
+      const bsmg = bsmgOn && !bl;
       const window = bsmg ? sec(face.b + (input.halfJump ?? 1)) - t : 0.5;
       for (let j = i + 1; j < notes.length; j++) {
         const hidden = notes[j]!;
@@ -370,8 +376,8 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const before = last.get(cell);
       if (before !== undefined) {
         const dt = sec(bomb.b) - sec(before.b);
-        if (dt < 0.02 && standard !== 'BL') add('bombSpacing', 'error', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (SS: от 20 мс)`);
-        else if (dt < 0.03 && standard !== 'SS') add('bombSpacing', standard === 'BL' ? 'error' : 'warn', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (BL: от 30 мс)`);
+        if (dt < 0.02 && ss) add('bombSpacing', 'error', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (SS: от 20 мс)`);
+        else if (dt < 0.03 && bl) add('bombSpacing', 'error', bomb.b, [before.id, bomb.id], `Бомбы в одной клетке через ${ms(dt)} (BL: от 30 мс)`);
       }
       last.set(cell, { b: bomb.b, id: bomb.id });
     }
@@ -400,7 +406,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
     for (const wall of walls) {
       const length = sec(wall.b + wall.d) - sec(wall.b);
       if (wall.w <= 0) add('wallShape', 'error', wall.b, [wall.id], 'Fake wall: ширина 0 или меньше');
-      else if (length < (standard === 'BL' ? 0.0138 : 0.015) && (standard !== 'BL' || (wall.x < 3 && wall.x + wall.w > 1))) add('wallShape', 'error', wall.b, [wall.id], standard === 'BL' ? `Стена в средних дорожках короче 13,8 мс (${ms(length)})` : `Стена короче 15 мс (${ms(length)})`);
+      else if (length < (ss ? 0.015 : 0.0138) && (ss || (wall.x < 3 && wall.x + wall.w > 1))) add('wallShape', 'error', wall.b, [wall.id], ss ? `Стена короче 15 мс (${ms(length)})` : `Стена в средних дорожках короче 13,8 мс (${ms(length)})`);
       // (walls off the grid altogether are scenery)
       const inGrid = wall.x < 4 && wall.x + wall.w > 0;
       if (inGrid && wall.w > 0 && (wall.x < 0 || wall.x + wall.w > 4 || wall.y < 0 || wall.y + wall.h > 5)) add('wallShape', 'error', wall.b, [wall.id], 'Стена выходит за сетку 4×3');
@@ -445,7 +451,7 @@ export function checkMap(input: CheckInput): MapIssue[] {
       if (arc.mu < 0.1 || arc.mu > 1.5 || ((arc.tmu < 0.1 || arc.tmu > 1.5) && arc.tc !== 8)) add('arcs', 'warn', arc.b, [arc.id], 'Arc multiplier вне 0,1–1,5 (SS)');
     }
   }
-  if (on('chains') && standard !== 'BL' && standard !== 'BSMG' && objects.chains.length > 0) add('chains', 'info', objects.chains[0]!.b, objects.chains.map((chain) => chain.id), `Chains: ${String(objects.chains.length)} — ScoreSaber не ранкает карты с chains (BeatLeader — да)`);
+  if (on('chains') && ss && objects.chains.length > 0) add('chains', 'info', objects.chains[0]!.b, objects.chains.map((chain) => chain.id), `Chains: ${String(objects.chains.length)} — ScoreSaber не ранкает карты с chains (BeatLeader — да)`);
 
   // ----- BSMG's forbidden and situational patterns ---------------------------------------------
   const hand = (c: number) => (c === 0 ? 'красная' : 'синяя');
@@ -598,9 +604,9 @@ export function checkMap(input: CheckInput): MapIssue[] {
     const first = starts.reduce((a, b) => (b.b < a.b ? b : a));
     const last = starts.reduce((a, b) => (b.end > a.end ? b : a));
     const begin = sec(first.b);
-    const hard = standard === 'BL' ? 1.33 : standard === 'BSMG' ? 0 : 1.5;
-    if (begin < hard) add('hotStart', 'error', first.b, [first.id], `Hot start: первый объект на ${fmt(begin)} (${standard === 'BL' ? 'BL: от 1,33 с' : 'SS: от 1,5 с, BL: от 1,33 с'})`);
-    else if (begin < 2 && (standard === 'all' || standard === 'BSMG')) add('hotStart', 'warn', first.b, [first.id], `Hot start: первый объект на ${fmt(begin)} — BSMG советует от 2 с`);
+    const hard = ss ? 1.5 : bl ? 1.33 : 0;
+    if (begin < hard) add('hotStart', 'error', first.b, [first.id], `Hot start: первый объект на ${fmt(begin)} (${ss && bl ? 'SS: от 1,5 с, BL: от 1,33 с' : ss ? 'SS: от 1,5 с' : 'BL: от 1,33 с'})`);
+    else if (begin < 2 && bsmgOn) add('hotStart', 'warn', first.b, [first.id], `Hot start: первый объект на ${fmt(begin)} — BSMG советует от 2 с`);
     const tail = input.songSeconds - sec(last.end);
     if (tail < 2) add('coldEnd', 'error', last.end, [last.id], `Cold end: после последнего объекта ${fmt(Math.max(0, tail))} (нужно от 2 с)`);
     else if (tail > 15) add('longOutro', 'info', last.end, [last.id], `Долгий outro: ещё ${fmt(tail)} после последнего объекта — SS требует меньше 15 с без нот и света`);

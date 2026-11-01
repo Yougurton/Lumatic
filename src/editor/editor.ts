@@ -141,7 +141,7 @@ export class Editor {
   /** The row effects and ring forms from the library go onto (its key). */
   activeRow: string | null = null;
   /** Something tried out in the 3D view only (not in the show): played over and over. */
-  previewExtra: { clips: LightClip[]; raw: RawEvent[]; start: number; end: number } | null = null;
+  previewExtra: { clips: LightClip[]; raw: RawEvent[]; start: number; end: number; songLoop?: boolean } | null = null;
   private rowCache = new Map<string, { version: number; clips: ShownClip[] }>();
   snap = 0.25;
   brush: Brush = {
@@ -288,16 +288,28 @@ export class Editor {
 
   togglePlay() {
     if (this.clock === null) return;
-    if (this.clock.isPlaying()) this.clock.pause();
-    else {
+    if (this.clock.isPlaying()) {
+      this.clock.pause();
+      // (a stretch of the song played over and over: a pause ends it)
+      if (this.previewExtra?.songLoop === true) {
+        this.previewExtra = null;
+        this.rebuildPreview(true);
+      }
+    } else {
       void this.clock.unlockAudio();
       this.clock.play();
     }
     this.emit('time');
   }
 
-  seek(beat: number) {
+  /** Moves the song cursor; moved by hand away from a stretch played over and over, that stops. */
+  seek(beat: number, looping = false) {
     if (this.clock === null) return;
+    const extra = this.previewExtra;
+    if (!looping && extra !== null && (beat < extra.start - 1.5 || beat > extra.end + 1.5)) {
+      this.previewExtra = null;
+      this.rebuildPreview(true);
+    }
     this.clock.seek(Math.max(0, Math.min(this.duration, this.beatToSeconds(beat))));
     this.emit('time');
   }
@@ -2364,7 +2376,7 @@ export class Editor {
   // ----- trying things out ----------------------------------------------------------------------------
 
   /** Plays something in the 3D view only, over and over from `start` to `end`. */
-  startTrial(extra: { clips: LightClip[]; raw: RawEvent[]; start: number; end: number }) {
+  startTrial(extra: { clips: LightClip[]; raw: RawEvent[]; start: number; end: number; songLoop?: boolean }) {
     this.previewExtra = extra;
     this.rebuildPreview(true);
     this.seek(Math.max(0, extra.start - 0.5));
@@ -2384,7 +2396,7 @@ export class Editor {
   tickTrial() {
     const extra = this.previewExtra;
     if (extra === null || !this.isPlaying()) return;
-    if (this.playhead() > extra.end + 1) this.seek(Math.max(0, extra.start - 0.5));
+    if (this.playhead() > extra.end + 1) this.seek(Math.max(0, extra.start - 0.5), true);
   }
 
   // ----- the notes side ------------------------------------------------------------------------------
@@ -2411,13 +2423,13 @@ export class Editor {
   /** What the map checker finds in the difficulty's notes (worked out again only after a change). */
   mapIssues(): MapIssue[] {
     const disabled = settings().disabledChecks;
-    const standard = settings().checkPreset;
-    const key = `${String(this.noteVersion)}|${this.row?.key ?? ''}|${String(this.duration)}|${disabled.join(',')}|${standard}`;
+    const standards = settings().checkSources;
+    const key = `${String(this.noteVersion)}|${this.row?.key ?? ''}|${String(this.duration)}|${disabled.join(',')}|${standards.join(',')}`;
     if (key !== this.issuesKey) {
       this.issuesKey = key;
       const info = this.row?.infoDifficulty;
       const halfJump = info === undefined ? undefined : jumpOf(this.songBpm, info.noteJumpSpeed > 0 ? info.noteJumpSpeed : 16, info.noteStartBeatOffset).half;
-      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: info?.difficulty, disabled, standard, halfJump });
+      this.issues = checkMap({ objects: this.objects, seconds: (beat) => this.beatToSeconds(beat), songSeconds: this.duration, difficulty: info?.difficulty, disabled, standards, halfJump });
     }
     return this.issues;
   }

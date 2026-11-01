@@ -1,4 +1,5 @@
 import type { Editor } from './editor';
+import { objectRightClick } from './object-menu';
 import { ROW_WALL, WALL_SHAPES, type MapNote } from './notes';
 import { drawGameNote } from './note-draw';
 import { newId } from './model';
@@ -422,10 +423,7 @@ export class NotePanel {
       const editor = this.editor;
       const there = this.objectAt(press.col, press.row);
       if (press.button === 2) {
-        if (there !== null) {
-          editor.selectNotes([there.item.id]);
-          editor.deleteNoteSelection();
-        }
+        if (there !== null) objectRightClick(editor, event.clientX, event.clientY, there);
         return;
       }
       if (press.button === 1) {
@@ -475,71 +473,145 @@ export class NotePanel {
 /** A tool's picture, as the game's thing: a note (a rounded cube, lit from above, with its arrow), a
  *  bomb, a wall. */
 function toolIcon(kind: 'red' | 'blue' | 'bomb' | 'wall', color: readonly number[], css: (rgb: readonly number[]) => string) {
-  const size = 64;
+  const size = 96;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   canvas.className = 'np-icon';
   const ctx = canvas.getContext('2d')!;
-  const shade = (k: number) => css(color.slice(0, 3).map((v) => Math.max(0, Math.min(1, v * k))));
-  if (kind === 'red' || kind === 'blue') {
-    const s = 44;
-    const x = (size - s) / 2;
-    const y = (size - s) / 2;
-    const fill = ctx.createLinearGradient(x, y, x + s, y + s);
-    fill.addColorStop(0, shade(1.35));
-    fill.addColorStop(0.5, shade(1));
-    fill.addColorStop(1, shade(0.6));
-    ctx.fillStyle = fill;
+  const shade = (k: number, alpha = 1) => {
+    const rgb = color.slice(0, 3).map((v) => Math.round(Math.max(0, Math.min(1, v * k)) * 255));
+    return `rgba(${rgb.join(',')},${String(alpha)})`;
+  };
+  void css;
+  /** A face of the block, its corners rounded. */
+  const face = (points: [number, number][], radius: number) => {
     ctx.beginPath();
-    ctx.roundRect(x, y, s, s, 9);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    // (the game's arrow: a wide chevron near the edge the cut goes out of — down)
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(x + s * 0.2, y + s * 0.6);
-    ctx.lineTo(x + s * 0.8, y + s * 0.6);
-    ctx.lineTo(x + s * 0.5, y + s * 0.84);
-    ctx.closePath();
-    ctx.fill();
-  } else if (kind === 'bomb') {
-    const r = 20;
-    ctx.fillStyle = '#2a2c33';
-    ctx.strokeStyle = '#b4b8c4';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let k = 0; k < 20; k++) {
-      const angle = (k / 20) * Math.PI * 2;
-      const radius = k % 2 === 0 ? r : r * 0.74;
-      const px = size / 2 + Math.cos(angle) * radius;
-      const py = size / 2 + Math.sin(angle) * radius;
-      if (k === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
+    for (let i = 0; i < points.length; i++) {
+      const [x0, y0] = points[(i + points.length - 1) % points.length]!;
+      const [x1, y1] = points[i]!;
+      const [x2, y2] = points[(i + 1) % points.length]!;
+      const a = Math.hypot(x1 - x0, y1 - y0);
+      const b = Math.hypot(x2 - x1, y2 - y1);
+      const r = Math.min(radius, a / 2, b / 2);
+      const p0: [number, number] = [x1 + ((x0 - x1) / a) * r, y1 + ((y0 - y1) / a) * r];
+      const p1: [number, number] = [x1 + ((x2 - x1) / b) * r, y1 + ((y2 - y1) / b) * r];
+      if (i === 0) ctx.moveTo(...p0);
+      else ctx.lineTo(...p0);
+      ctx.quadraticCurveTo(x1, y1, ...p1);
     }
     ctx.closePath();
+  };
+  if (kind === 'red' || kind === 'blue') {
+    // the game's block, seen a little from above and the right: a glossy cube, its sides darker, the
+    // white arrow (a wide, flat triangle) low on its front
+    const s = 58;
+    const x = 12;
+    const y = 30;
+    const depth = 13;
+    ctx.shadowColor = shade(1, 0.55);
+    ctx.shadowBlur = 10;
+    face([[x, y], [x + depth, y - depth], [x + s + depth, y - depth], [x + s + depth, y + s - depth], [x + s, y + s], [x, y + s]], 7);
+    ctx.fillStyle = shade(0.45);
     ctx.fill();
+    ctx.shadowBlur = 0;
+    // top
+    face([[x, y], [x + depth, y - depth], [x + s + depth, y - depth], [x + s, y]], 5);
+    const top = ctx.createLinearGradient(0, y - depth, 0, y);
+    top.addColorStop(0, shade(1.5));
+    top.addColorStop(1, shade(1.1));
+    ctx.fillStyle = top;
+    ctx.fill();
+    // right side
+    face([[x + s, y], [x + s + depth, y - depth], [x + s + depth, y + s - depth], [x + s, y + s]], 5);
+    ctx.fillStyle = shade(0.55);
+    ctx.fill();
+    // front
+    face([[x, y], [x + s, y], [x + s, y + s], [x, y + s]], 8);
+    const front = ctx.createLinearGradient(x, y, x + s * 0.6, y + s);
+    front.addColorStop(0, shade(1.25));
+    front.addColorStop(0.55, shade(0.95));
+    front.addColorStop(1, shade(0.7));
+    ctx.fillStyle = front;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    const glow = ctx.createRadialGradient(size / 2 - 5, size / 2 - 5, 1, size / 2, size / 2, 14);
-    glow.addColorStop(0, 'rgba(255,255,255,0.35)');
-    glow.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, 14, 0, Math.PI * 2);
+    // a soft shine across the front's upper part
+    const shine = ctx.createLinearGradient(0, y, 0, y + s * 0.5);
+    shine.addColorStop(0, 'rgba(255,255,255,0.28)');
+    shine.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = shine;
+    face([[x + 3, y + 3], [x + s - 3, y + 3], [x + s - 3, y + s * 0.5], [x + 3, y + s * 0.5]], 6);
     ctx.fill();
+    // the arrow
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'rgba(255,255,255,0.8)';
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    ctx.moveTo(x + s * 0.17, y + s * 0.6);
+    ctx.lineTo(x + s * 0.83, y + s * 0.6);
+    ctx.lineTo(x + s * 0.5, y + s * 0.85);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  } else if (kind === 'bomb') {
+    // the game's bomb: a dark metal ball covered in short spikes
+    const cx = size / 2;
+    const cy = size / 2 + 2;
+    const r = 25;
+    for (let k = 0; k < 14; k++) {
+      const angle = (k / 14) * Math.PI * 2 + 0.2;
+      const along = (len: number, side: number): [number, number] => [cx + Math.cos(angle) * len - Math.sin(angle) * side, cy + Math.sin(angle) * len + Math.cos(angle) * side];
+      ctx.beginPath();
+      ctx.moveTo(...along(r - 4, -6));
+      ctx.lineTo(...along(r + 11, 0));
+      ctx.lineTo(...along(r - 4, 6));
+      ctx.closePath();
+      const spike = ctx.createLinearGradient(...along(r, -6), ...along(r, 6));
+      spike.addColorStop(0, '#8d929e');
+      spike.addColorStop(1, '#2b2e36');
+      ctx.fillStyle = spike;
+      ctx.fill();
+    }
+    const ball = ctx.createRadialGradient(cx - 9, cy - 10, 2, cx, cy, r + 2);
+    ball.addColorStop(0, '#8a8f9c');
+    ball.addColorStop(0.35, '#3b3f4a');
+    ball.addColorStop(1, '#101116');
+    ctx.fillStyle = ball;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(200,205,220,0.35)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
   } else {
-    // a wall: a see-through pane in its colour with a bright frame, a little turned
-    ctx.save();
-    ctx.translate(size / 2, size / 2);
-    ctx.transform(1, -0.12, 0, 1, 0, 0);
-    ctx.fillStyle = css(color.slice(0, 3).map((v) => Math.min(1, v)).concat()).replace('rgb(', 'rgba(').replace(')', ',0.35)');
-    ctx.fillRect(-15, -22, 30, 44);
-    ctx.strokeStyle = shade(1.4);
-    ctx.lineWidth = 3;
-    ctx.strokeRect(-15, -22, 30, 44);
-    ctx.restore();
+    // a wall: a see-through block in its colour, its edges glowing
+    const x = 24;
+    const y = 18;
+    const w = 36;
+    const h = 62;
+    const depth = 12;
+    ctx.fillStyle = shade(1, 0.16);
+    ctx.fillRect(x + depth, y - depth + 6, w, h);
+    ctx.fillStyle = shade(1, 0.3);
+    ctx.fillRect(x, y + 6, w, h);
+    ctx.strokeStyle = shade(1.6);
+    ctx.shadowColor = shade(1.3, 0.9);
+    ctx.shadowBlur = 8;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.rect(x, y + 6, w, h);
+    ctx.moveTo(x, y + 6);
+    ctx.lineTo(x + depth, y - depth + 6);
+    ctx.lineTo(x + w + depth, y - depth + 6);
+    ctx.lineTo(x + w + depth, y - depth + 6 + h);
+    ctx.lineTo(x + w, y + 6 + h);
+    ctx.moveTo(x + w, y + 6);
+    ctx.lineTo(x + w + depth, y - depth + 6);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
   }
   return canvas;
 }

@@ -55,8 +55,8 @@ export interface Settings {
   noteHitVolume: number;
   /** The map checker's rules switched off (their ids). */
   disabledChecks: string[];
-  /** Whose criteria the checker's thresholds follow ('all': the strictest of each). */
-  checkPreset: 'all' | 'BSMG' | 'BL' | 'SS';
+  /** Whose criteria the checker follows (one or more: their rules, the strictest of their thresholds). */
+  checkSources: ('BSMG' | 'BL' | 'SS')[];
   clickVolume: number;
 
   /** Saved by itself every so many minutes while there are changes (0: never). */
@@ -94,7 +94,7 @@ export const DEFAULT_SETTINGS: Settings = {
   noteHits: true,
   noteHitVolume: 0.6,
   disabledChecks: [],
-  checkPreset: 'all',
+  checkSources: ['BSMG', 'BL', 'SS'],
   clickVolume: 0.6,
   autosave: 0,
   backups: 5,

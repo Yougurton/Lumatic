@@ -505,7 +505,8 @@ window.addEventListener('keydown', (event) => {
   if (target.tagName === 'SELECT' && !ctrl) return;
   if (event.code === 'Escape' && !ctrl) {
     if (editor.tab === 'notes') {
-      if (editor.songRange !== null) editor.setSongRange(null);
+      if (editor.previewExtra !== null) editor.stopTrial();
+      else if (editor.songRange !== null) editor.setSongRange(null);
       else editor.selectNotes([]);
       event.preventDefault();
       return;

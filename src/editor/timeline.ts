@@ -1377,7 +1377,7 @@ export class Timeline {
     showMenu(x, y, [
       { label: `Выделено: ${seconds.toFixed(2)} с`, heading: true },
       { label: 'Сделать превью песни', hint: 'Info.dat — сразу', action: () => void editor.previewFromRange() },
-      { label: 'Проиграть по кругу', hint: 'Esc — стоп', action: () => editor.startTrial({ clips: [], raw: [], start: start + 0.5, end: end - 1 }) },
+      { label: 'Проиграть по кругу', hint: 'Esc — стоп', action: () => editor.startTrial({ clips: [], raw: [], start: start + 0.5, end: end - 1, songLoop: true }) },
       { label: 'Снять выделение', hint: 'Esc', action: () => editor.setSongRange(null) },
       { label: 'Выделить события в нём…', hint: 'по строкам, цвету', action: () => selectByDialog(editor) },
       { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor) },

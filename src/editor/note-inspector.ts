@@ -36,7 +36,7 @@ export class NoteInspector {
   ) {
     editor.onChange(() => this.render());
     onSettings((now, before) => {
-      if (now.disabledChecks === before.disabledChecks && now.checkPreset === before.checkPreset) return;
+      if (now.disabledChecks === before.disabledChecks && now.checkSources === before.checkSources) return;
       this.shownKey = '';
       this.render();
     });

@@ -3,6 +3,7 @@ import type { MapIssue } from './checks';
 import { DIR_ANGLE, MIRROR_DIR, objectSpan, strobeWalls, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { drawGameNote } from './note-draw';
+import { objectRightClick } from './object-menu';
 
 /**
  * The notes side's timeline (as in ChroViewer): the grid's four columns as four lanes, time going right.
@@ -284,6 +285,7 @@ export class NotesLanes {
       }
       ctx.setLineDash([]);
     }
+    ctx.setLineDash([]);
     let lastMark = -Infinity;
     for (const issue of shown) {
       if (issue.beat < from) continue;
@@ -374,7 +376,7 @@ export class NotesLanes {
   }
 
   /** A box of lines by the mouse (long lines wrapped). */
-  private tipBox(ctx: CanvasRenderingContext2D, at: { x: number; y: number }, lines: { text: string; colour: string; bold?: boolean }[]) {
+  private tipBox(ctx: CanvasRenderingContext2D, at: { x: number; y: number }, lines: { text: string; colour: string; bold?: boolean }[], gridBeat?: number) {
     const most = Math.max(220, Math.min(420, this.host.width * 0.45));
     const wrapped: typeof lines = [];
     for (const line of lines) {
@@ -390,13 +392,20 @@ export class NotesLanes {
       wrapped.push({ ...line, text: current });
     }
     ctx.font = '600 12px system-ui, sans-serif';
-    const w = Math.max(...wrapped.map((line) => ctx.measureText(line.text).width)) + 18;
-    const hgt = 16 * wrapped.length + 10;
+    // (with a little wall: the grid as it is on this beat, beside the text)
+    const cell = 17;
+    const gridW = gridBeat === undefined ? 0 : cell * 4 + 12;
+    const textW = Math.max(...wrapped.map((line) => ctx.measureText(line.text).width)) + 18;
+    const w = textW + gridW;
+    const hgt = Math.max(16 * wrapped.length + 10, gridBeat === undefined ? 0 : cell * 3 + 16);
     let x = at.x + 14;
     let y = at.y - hgt - 8;
     if (x + w > this.host.width) x = Math.max(2, at.x - w - 14);
-    if (y < 2) y = at.y + 16;
-    ctx.fillStyle = 'rgba(20,22,28,0.95)';
+    // (kept on the lanes: above the mouse, or below it when there's no room)
+    if (y < this.host.lanesTop + 2) y = Math.min(at.y + 16, this.host.lanesBottom - hgt - 2);
+    y = Math.max(this.host.lanesTop + 2, y);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(20,22,28,0.97)';
     roundRect(ctx, x, y, w, hgt, 8);
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
@@ -405,8 +414,43 @@ export class NotesLanes {
     wrapped.forEach((line, index) => {
       ctx.font = line.bold === true ? '600 12px system-ui, sans-serif' : '12px system-ui, sans-serif';
       ctx.fillStyle = line.colour;
-      ctx.fillText(line.text, x + 9, y + 18 + index * 16);
+      ctx.fillText(line.text, x + 9 + gridW, y + 18 + index * 16);
     });
+    if (gridBeat !== undefined) this.miniWall(ctx, x + 8, y + 8, cell, gridBeat);
+  }
+
+  /** The 4×3 wall as it is on a beat: its notes, bombs and walls (what's at the mouse among them). */
+  private miniWall(ctx: CanvasRenderingContext2D, left: number, top: number, cell: number, beat: number) {
+    const editor = this.editor;
+    const colors = editor.preview.colors;
+    const at = (row: number) => top + (2 - row) * cell;
+    ctx.fillStyle = '#0e0f13';
+    ctx.fillRect(left, top, cell * 4, cell * 3);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    for (let k = 0; k <= 4; k++) ctx.strokeRect(left + k * cell + 0.5, top + 0.5, 0, cell * 3);
+    for (let k = 0; k <= 3; k++) ctx.strokeRect(left + 0.5, top + k * cell + 0.5, cell * 4, 0);
+    for (const wall of editor.objects.walls) {
+      if (wall.b > beat + 1e-3 || wall.b + wall.d < beat - 1e-3) continue;
+      ctx.fillStyle = this.rgb(colors.obstacle, 0.35);
+      for (let row = 0; row < 3; row++) {
+        if (row < wall.y || row >= wall.y + wall.h) continue;
+        const x0 = Math.max(0, wall.x);
+        const x1 = Math.min(4, wall.x + wall.w);
+        if (x1 > x0) ctx.fillRect(left + x0 * cell, at(row), (x1 - x0) * cell, cell);
+      }
+    }
+    for (const bomb of editor.objects.bombs) {
+      if (Math.abs(bomb.b - beat) > 1e-3) continue;
+      ctx.fillStyle = '#9a9eaa';
+      ctx.beginPath();
+      ctx.arc(left + (bomb.x + 0.5) * cell, at(bomb.y) + cell / 2, cell * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const note of editor.objects.notes) {
+      if (Math.abs(note.b - beat) > 1e-3 || note.x < 0 || note.x > 3 || note.y < 0 || note.y > 2) continue;
+      drawGameNote(ctx, note, left + (note.x + 0.5) * cell, at(note.y) + cell / 2, cell * 0.82, this.rgb(note.c === 0 ? colors.leftNote : colors.rightNote), editor.noteSelection.has(note.id));
+    }
   }
 
   private issueLines(issues: MapIssue[]) {
@@ -444,7 +488,7 @@ export class NotesLanes {
       where = `${where} → доля ${span[1].toFixed(3)}`;
     }
     const issues = editor.activeIssues().filter((issue) => issue.level !== 'info' && issue.ids.includes(item.id));
-    this.tipBox(ctx, hover, [{ text: title, colour: '#fff', bold: true }, { text: time, colour: '#9aa0ad' }, { text: where, colour: '#9aa0ad' }, ...this.issueLines(issues.slice(0, 6))]);
+    this.tipBox(ctx, hover, [{ text: title, colour: '#fff', bold: true }, { text: time, colour: '#9aa0ad' }, { text: where, colour: '#9aa0ad' }, ...this.issueLines(issues.slice(0, 6))], found.kind === 'walls' ? Math.max(item.b, Math.min(item.b + (item as MapWall).d, this.host.xToBeat(hover.x))) : item.b);
   }
 
   // ----- the mouse -------------------------------------------------------------------------------------
@@ -480,10 +524,7 @@ export class NotesLanes {
       return;
     }
     if (event.button === 2) {
-      if (found !== null) {
-        if (!editor.noteSelection.has(found.item.id)) editor.selectNotes([found.item.id]);
-        editor.deleteNoteSelection();
-      }
+      if (found !== null) objectRightClick(editor, event.clientX, event.clientY, found);
       return;
     }
     if (event.button !== 0) return;

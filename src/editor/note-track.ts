@@ -29,6 +29,7 @@ import {
   Vector3,
   type Material,
 } from 'three';
+import { objectRightClick } from './object-menu';
 import type { Editor } from './editor';
 import { DIR_VECTOR, ROW_WALL, WALL_SHAPES, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
@@ -653,10 +654,8 @@ export class NoteTrack {
     if (!this.active) return;
     const hit = this.objectAt(clientX, clientY) ?? this.cellObject(this.cellAt(clientX, clientY));
     if (hit === null) return;
-    const editor = this.editor;
-    editor.noteCheckpoint();
-    editor.removeObjects(new Set([hit.id]));
-    editor.notesChanged();
+    const found = this.editor.objectById(hit.id);
+    if (found !== null) objectRightClick(this.editor, clientX, clientY, found);
   }
 
   /** The selected objects' places when a move started. */

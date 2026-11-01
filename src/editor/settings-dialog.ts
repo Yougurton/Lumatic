@@ -1,6 +1,6 @@
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
-import { CHECK_RULES, rulesOf, type CheckRule, type CheckStandard } from './checks';
+import { CHECK_RULES, CHECK_SOURCES, rulesOf, type CheckRule, type CheckSource } from './checks';
 
 /**
  * "Settings": the language, pasting, the 3D view, the timeline, the sound, saving — and the hotkeys'
@@ -251,22 +251,26 @@ export function settingsDialog(restart: () => void) {
         }),
       ];
       // presets: whose criteria — their rules ticked, their thresholds used
-      const presets: [CheckStandard, string, string][] = [
-        ['all', 'Все правила', 'Все правила, у каждого — самый строгий порог'],
-        ['BSMG', 'BSMG', 'Только советы руководства BSMG (bsmg.wiki)'],
-        ['BL', 'BeatLeader', 'Только критерии рейтинга BeatLeader, с их порогами'],
-        ['SS', 'ScoreSaber', 'Только критерии рейтинга ScoreSaber, с их порогами'],
+      const presets: [CheckSource, string, string][] = [
+        ['BSMG', 'BSMG', 'Советы руководства BSMG (bsmg.wiki)'],
+        ['BL', 'BeatLeader', 'Критерии рейтинга BeatLeader'],
+        ['SS', 'ScoreSaber', 'Критерии рейтинга ScoreSaber'],
       ];
       const presetRow = document.createElement('span');
       presetRow.className = 'steps-buttons';
       const drawPresets = () =>
         presetRow.replaceChildren(
           ...presets.map(([id, label, hint]) => {
-            const button = Object.assign(document.createElement('button'), { type: 'button', textContent: label, title: hint });
-            const wanted = new Set(rulesOf(id));
-            button.classList.toggle('active', settings().checkPreset === id && CHECK_RULES.every((rule) => wanted.has(rule.id) !== settings().disabledChecks.includes(rule.id)));
+            const button = Object.assign(document.createElement('button'), { type: 'button', textContent: `${settings().checkSources.includes(id) ? '☑' : '☐'} ${label}`, title: `${hint}. Можно выбрать несколько.` });
+            button.classList.toggle('active', settings().checkSources.includes(id));
             button.addEventListener('click', () => {
-              change({ checkPreset: id, disabledChecks: CHECK_RULES.filter((rule) => !wanted.has(rule.id)).map((rule) => rule.id) });
+              const now = new Set(settings().checkSources);
+              if (now.has(id)) now.delete(id);
+              else now.add(id);
+              if (now.size === 0) return;
+              const sources = CHECK_SOURCES.filter((source) => now.has(source));
+              const wanted = new Set(rulesOf(sources));
+              change({ checkSources: sources, disabledChecks: CHECK_RULES.filter((rule) => !wanted.has(rule.id)).map((rule) => rule.id) });
               for (const box of boxes) box.checked = wanted.has(box.dataset.rule ?? '');
               drawPresets();
             });
@@ -274,7 +278,7 @@ export function settingsDialog(restart: () => void) {
           }),
         );
       drawPresets();
-      out.push(row('Критерии', presetRow, 'Пресет отмечает правила этого сайта и берёт его пороги (hot start, бомбы, длина стен). Отдельные правила можно снять ниже.'));
+      out.push(row('Критерии', presetRow, 'Отметьте один или несколько сайтов: включатся их правила, а где пороги разные (hot start, бомбы, длина стен) — берётся самый строгий из выбранных. Отдельные правила можно снять ниже.'));
       const buttons = document.createElement('div');
       buttons.className = 'steps-buttons';
       const on = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Включить все' });
