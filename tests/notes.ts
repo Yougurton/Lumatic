@@ -1,4 +1,4 @@
-import { readObjects, writeObjects, type MapObjects } from '../src/editor/notes';
+import { noteRolls, readFakeWalls, readObjects, wallFootprint, writeObjects, type MapObjects } from '../src/editor/notes';
 import { writeDifficulty } from '../src/editor/map-io';
 
 /**
@@ -90,5 +90,14 @@ const v4 = {
 const read4 = readObjects(JSON.stringify(v4));
 check('v4 read', read4.notes[0]?.d === 3 && read4.bombs[0]?.x === 2 && read4.walls[0]?.w === 2 && read4.chains[0]?.sc === 4, read4);
 
+// the game's window turn: a dot beside a down-right arrow, both turned to the line between them
+const rolls = noteRolls([{ id: 'w1', b: 10, x: 2, y: 2, c: 1, d: 8, a: 0 }, { id: 'w2', b: 10, x: 3, y: 0, c: 1, d: 7, a: 0 }]);
+check('window turn', Math.abs((rolls.get('w1') ?? 0) - 26.565) < 0.01 && Math.abs((rolls.get('w2') ?? 0) - 26.565) < 0.01, [...rolls]);
+const stack = noteRolls([{ id: 'a', b: 1, x: 1, y: 0, c: 0, d: 1, a: 0 }, { id: 'b', b: 1, x: 1, y: 1, c: 0, d: 1, a: 0 }]);
+check('stack stays', stack.get('a') === 0 && stack.get('b') === 0);
+// Noodle walls: coordinates and size, a negative width
+const noodle = wallFootprint({ id: 'n', b: 0, x: 0, y: 0, d: 1, w: 1, h: 5, customData: { coordinates: [-1, 1], size: [-2, 0.5, 3], localRotation: [0, 0, 45], color: [1, 0, 0] } });
+check('noodle wall', noodle.x === -1 && noodle.w === 2 && noodle.y === 1 && noodle.h === 0.5 && noodle.length === 3 && noodle.local?.[2] === 45 && noodle.color?.[0] === 1, noodle);
+check('fake walls', readFakeWalls(JSON.stringify({ version: '3.3.0', customData: { fakeObstacles: [{ b: 2, x: 1, y: 0, d: 1, w: 1, h: 5 }] } })).length === 1);
 console.log('checks', checks, 'failures', failures);
 if (failures > 0) process.exit(1);

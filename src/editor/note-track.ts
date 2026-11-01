@@ -31,7 +31,7 @@ import {
 } from 'three';
 import { objectRightClick } from './object-menu';
 import type { Editor } from './editor';
-import { DIR_VECTOR, ROW_WALL, WALL_SHAPES, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
+import { DIR_VECTOR, ROW_WALL, WALL_SHAPES, wallFootprint, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { jumpOf } from './note-inspector';
 import { settings } from './settings';
@@ -310,6 +310,7 @@ export class NoteTrack {
       chains: all.chains.filter(nearSpan),
       arcs: all.arcs.filter(nearSpan),
       walls: all.walls.filter((wall) => wall.b + wall.d >= from && wall.b <= to),
+      fakes: editor.fakeWalls.filter((wall) => wall.b + Math.max(0, wall.d) >= from && wall.b <= to),
     };
     const picked = editor.noteSelection;
     const z = (beat: number) => -beat * METRES_PER_BEAT;
@@ -340,7 +341,9 @@ export class NoteTrack {
     let arrows = 0;
     let dots = 0;
     heads.forEach(({ kind, note }, index) => {
-      quaternion.setFromAxisAngle(axis, (((ROLL[note.d] ?? 0) + note.a) * Math.PI) / 180);
+      // (two notes of a colour at one time: lined up with each other, as the game turns them)
+      const roll = kind === 'notes' ? (editor.noteRoll(note.id) ?? (ROLL[note.d] ?? 0) + note.a) : (ROLL[note.d] ?? 0) + note.a;
+      quaternion.setFromAxisAngle(axis, (roll * Math.PI) / 180);
       position.set(colX(note.x), rowY(note.y), z(note.b));
       matrix.compose(position, quaternion, one);
       this.notes.solid.setMatrixAt(index, matrix);
@@ -381,26 +384,49 @@ export class NoteTrack {
     // walls, arcs, the picked objects' outlines
     for (const child of [...this.extras.children]) {
       this.extras.remove(child);
-      const mesh = child as Mesh;
-      mesh.geometry.dispose();
-      (mesh.material as Material).dispose();
+      child.traverse((part) => {
+        const mesh = part as Mesh;
+        mesh.geometry?.dispose();
+        (mesh.material as Material | undefined)?.dispose();
+      });
     }
     const obstacle = this.rgb(colors.obstacle);
-    for (const wall of objects.walls) {
-      // (as ChroMapper draws them: lined up with the grid's rows — a crouch wall from the top row up)
-      const bottom = Math.max(0, wall.y * LANE);
-      const top = Math.max(bottom + 0.1, Math.min(wall.y + wall.h, 5.5) * LANE);
-      const length = Math.max(0.02, wall.d * METRES_PER_BEAT);
-      const geometry = new BoxGeometry(wall.w * LANE - 0.04, top - bottom, length);
+    const deg = Math.PI / 180;
+    const drawWall = (wall: MapWall, fake: boolean) => {
+      // (as ChroMapper draws them: lined up with the grid's rows — a crouch wall from the top row up;
+      // Noodle's walls where their coordinates, size and turns put them, in their own colour)
+      const shape = wallFootprint(wall);
+      const bottom = shape.noodle ? shape.y * LANE : Math.max(0, shape.y * LANE);
+      const top = shape.noodle ? bottom + Math.max(0.02, shape.h * LANE) : Math.max(bottom + 0.1, Math.min(shape.y + shape.h, 5.5) * LANE);
+      const length = Math.max(0.02, shape.length !== undefined ? Math.abs(shape.length) * LANE : wall.d * METRES_PER_BEAT);
+      const width = Math.max(0.02, shape.w * LANE - (shape.noodle ? 0 : 0.04));
+      const geometry = new BoxGeometry(width, top - bottom, length);
+      // (the wall hangs from its front face's bottom middle: turned about that point)
+      geometry.translate(0, (top - bottom) / 2, -length / 2);
       const on = picked.has(wall.id) || this.hovered === wall.id;
-      const mesh = new Mesh(geometry, new MeshBasicMaterial({ color: obstacle, transparent: true, opacity: on ? 0.4 : 0.2, depthWrite: false, clippingPlanes: this.trackClip }));
-      mesh.position.set(colX(wall.x) + ((wall.w - 1) * LANE) / 2, (top + bottom) / 2, z(wall.b) - length / 2);
-      mesh.userData = { kind: 'walls', id: wall.id };
-      this.extras.add(mesh);
-      const edges = new LineSegments(new EdgesGeometry(geometry), new LineBasicMaterial({ color: picked.has(wall.id) ? 0xffe27a : obstacle, clippingPlanes: this.trackClip }));
-      edges.position.copy(mesh.position);
-      this.extras.add(edges);
-    }
+      const tint = shape.color === undefined ? obstacle : new Color(Math.min(1, shape.color[0]), Math.min(1, shape.color[1]), Math.min(1, shape.color[2]));
+      const holder = new Group();
+      holder.position.set((shape.x - 2) * LANE + width / 2, bottom, z(wall.b));
+      if (shape.local !== undefined) holder.rotation.set(shape.local[0] * deg, shape.local[1] * deg, shape.local[2] * deg, 'YXZ');
+      const mesh = new Mesh(geometry, new MeshBasicMaterial({ color: tint, transparent: true, opacity: fake ? 0.12 : on ? 0.4 : 0.2, depthWrite: false, clippingPlanes: this.trackClip }));
+      if (!fake) mesh.userData = { kind: 'walls', id: wall.id };
+      const edges = new LineSegments(new EdgesGeometry(geometry), new LineBasicMaterial({ color: picked.has(wall.id) ? 0xffe27a : tint, transparent: fake, opacity: fake ? 0.5 : 1, clippingPlanes: this.trackClip }));
+      holder.add(mesh, edges);
+      let placed: Group = holder;
+      if (shape.world !== undefined && (shape.world[0] !== 0 || shape.world[1] !== 0 || shape.world[2] !== 0)) {
+        // (turned about the player: here, the track's middle where the wall arrives)
+        const pivot = new Group();
+        pivot.position.set(0, 0, z(wall.b));
+        holder.position.z -= z(wall.b);
+        pivot.rotation.set(shape.world[0] * deg, shape.world[1] * deg, shape.world[2] * deg, 'YXZ');
+        pivot.add(holder);
+        placed = pivot;
+      }
+      this.extras.add(placed);
+      placed.updateMatrixWorld(true);
+    };
+    for (const wall of objects.walls) drawWall(wall, false);
+    for (const wall of objects.fakes) drawWall(wall, true);
     for (const arc of objects.arcs) {
       const head = new Vector3(colX(arc.x), rowY(arc.y), z(arc.b));
       const tail = new Vector3(colX(arc.tx), rowY(arc.ty), z(arc.tb));
@@ -565,11 +591,20 @@ export class NoteTrack {
     return { col, row };
   }
 
+  /** What on the track can be picked besides the instanced notes (walls and arcs, nested or not). */
+  private pickable() {
+    const out: import('three').Object3D[] = [];
+    this.extras.traverse((part) => {
+      if (part.userData.id !== undefined) out.push(part);
+    });
+    return out;
+  }
+
   /** The object on the track under the mouse (null: none). */
   private objectAt(clientX: number, clientY: number): Hit | null {
     this.ray(clientX, clientY);
     this.root.updateMatrixWorld(true);
-    const targets = [this.notes.solid, this.bombs.solid, this.links.solid, ...this.extras.children.filter((child) => child.userData.id !== undefined)];
+    const targets = [this.notes.solid, this.bombs.solid, this.links.solid, ...this.pickable()];
     const hits = this.raycaster.intersectObjects(targets, false).filter((hit) => hit.point.z <= BEHIND * METRES_PER_BEAT && hit.point.z >= -AHEAD * METRES_PER_BEAT);
     for (const hit of hits) {
       if (hit.object === this.notes.solid && hit.instanceId !== undefined) return this.noteIds[hit.instanceId] ?? null;
@@ -757,7 +792,10 @@ export class NoteTrack {
     for (const item of objects.bombs) test(item.id, colX(item.x), rowY(item.y), item.b);
     for (const item of objects.chains) test(item.id, colX(item.x), rowY(item.y), item.b);
     for (const item of objects.arcs) test(item.id, colX(item.x), rowY(item.y), item.b);
-    for (const item of objects.walls) test(item.id, colX(item.x) + ((item.w - 1) * LANE) / 2, LANE, item.b + item.d / 2);
+    for (const item of objects.walls) {
+      const shape = wallFootprint(item);
+      test(item.id, (shape.x - 2 + shape.w / 2) * LANE, (shape.y + Math.min(shape.h, 2) / 2) * LANE, item.b + item.d / 2);
+    }
     return inside;
   }
 

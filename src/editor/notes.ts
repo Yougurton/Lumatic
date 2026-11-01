@@ -359,3 +359,96 @@ export function strobeWalls(shape: { x: number; y: number; w: number; h: number 
   for (let k = 0; from + k * step < to - 1e-6 && k < 4096; k++) out.push({ b: round(from + k * step), d: round(length), ...shape });
   return out;
 }
+
+/** A v3 difficulty's fake walls (Noodle's `customData.fakeObstacles`): shown, not edited. */
+export function readFakeWalls(text: string): MapWall[] {
+  if (text === '') return [];
+  const root = JSON.parse(text) as Json;
+  const custom = root.customData;
+  if (typeof custom !== 'object' || custom === null) return [];
+  return list((custom as Json).fakeObstacles).map((w) => ({ id: newId('f'), b: num(w.b), x: num(w.x), y: num(w.y), d: num(w.d), w: num(w.w, 1), h: num(w.h, 5), ...(typeof w.customData === 'object' && w.customData !== null ? { customData: w.customData as Json } : {}) }));
+}
+
+const numbers = (value: unknown): (number | undefined)[] | undefined => (Array.isArray(value) ? value.map((item) => (typeof item === 'number' && Number.isFinite(item) ? item : undefined)) : undefined);
+
+/**
+ * Where a wall stands, Noodle Extensions' data taken in (`coordinates` / `_position`, `size` /
+ * `_scale`): its left edge in lanes from the grid's left (0–4 the grid), its bottom in rows, its width
+ * and height in lanes, its length in lanes (undefined: as long as it lasts), its own turn and its turn
+ * about the player (degrees x, y, z) and its own colour.
+ */
+export function wallFootprint(wall: MapWall) {
+  const data = wall.customData ?? {};
+  const position = numbers(data.coordinates ?? data._position);
+  const size = numbers(data.size ?? data._scale);
+  let x = position?.[0] !== undefined ? position[0] + 2 : wall.x;
+  let y = position?.[1] ?? wall.y;
+  let w = size?.[0] ?? wall.w;
+  let h = size?.[1] ?? (position !== undefined || size !== undefined ? wall.h : Math.min(wall.h, 5 - Math.max(0, wall.y)));
+  // (a negative size grows the other way)
+  if (w < 0) {
+    x += w;
+    w = -w;
+  }
+  if (h < 0) {
+    y += h;
+    h = -h;
+  }
+  const turn = (value: unknown): [number, number, number] | undefined => {
+    if (typeof value === 'number') return [0, value, 0];
+    const parts = numbers(value);
+    return parts === undefined ? undefined : [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+  };
+  const colour = numbers(data.color ?? data._color);
+  return {
+    x,
+    y,
+    w,
+    h,
+    length: size?.[2],
+    local: turn(data.localRotation ?? data._localRotation),
+    world: turn(data.worldRotation ?? data._rotation),
+    color: colour === undefined ? undefined : ([colour[0] ?? 1, colour[1] ?? 1, colour[2] ?? 1, colour[3] ?? 1] as [number, number, number, number]),
+    noodle: position !== undefined || size !== undefined,
+  };
+}
+
+/** The game's turn of a note's arrow (degrees; 0 points down). */
+export const NOTE_ROLL: Record<number, number> = { 0: 180, 1: 0, 2: -90, 3: 90, 4: -135, 5: 135, 6: -45, 7: 45, 8: 0 };
+
+/**
+ * How the game turns each note (degrees, 0 = down): its arrow and angle offset — and, for two notes of
+ * one colour at one time (a window, a stack), both turned to line up with each other as the game does
+ * (a dot after the arrow beside it; two dots along the line between them).
+ */
+export function noteRolls(notes: readonly MapNote[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const note of notes) out.set(note.id, (NOTE_ROLL[note.d] ?? 0) + (note.d === 8 ? 0 : note.a));
+  for (const colour of [0, 1]) {
+    const own = notes.filter((note) => note.c === colour).sort((a, b) => a.b - b.b);
+    for (let i = 0; i < own.length; ) {
+      let j = i + 1;
+      while (j < own.length && own[j]!.b <= own[i]!.b + 0.001) j++;
+      if (j - i === 2) {
+        const first = own[i]!;
+        const second = own[i + 1]!;
+        if (first.d === second.d || first.d === 8 || second.d === 8) {
+          const [guide, companion] = first.d === 8 ? [second, first] : [first, second];
+          const lineAngle = (Math.atan2(guide.y - companion.y, guide.x - companion.x) * 180) / Math.PI;
+          const cutAxis = guide.d === 8 ? 90 : (NOTE_ROLL[guide.d] ?? 0) - 90;
+          const windowAngle = ((((lineAngle - cutAxis + 90) % 180) + 180) % 180) - 90;
+          if (guide.d === 8 && companion.d === 8) {
+            out.set(guide.id, windowAngle);
+            out.set(companion.id, windowAngle);
+          } else if (Math.abs(windowAngle) <= 40) {
+            out.set(guide.id, (NOTE_ROLL[guide.d] ?? 0) + windowAngle);
+            const diagonalDot = companion.d === 8 && (guide.d < 0 || guide.d > 3);
+            out.set(companion.id, (NOTE_ROLL[companion.d] ?? 0) + windowAngle + (diagonalDot ? 45 : 0));
+          }
+        }
+      }
+      i = j;
+    }
+  }
+  return out;
+}

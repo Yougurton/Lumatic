@@ -1,6 +1,6 @@
 import type { Editor } from './editor';
 import type { MapIssue } from './checks';
-import { DIR_ANGLE, MIRROR_DIR, objectSpan, strobeWalls, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
+import { DIR_ANGLE, MIRROR_DIR, objectSpan, strobeWalls, wallFootprint, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { drawGameNote } from './note-draw';
 import { objectRightClick } from './object-menu';
@@ -94,8 +94,10 @@ export class NotesLanes {
   private wallRect(wall: MapWall) {
     const x0 = this.host.beatToX(wall.b);
     const x1 = this.host.beatToX(wall.b + Math.max(0, wall.d));
-    const first = Math.max(0, Math.min(3, Math.round(wall.x)));
-    const last = Math.max(first, Math.min(3, Math.round(wall.x + wall.w - 1)));
+    // (Noodle's walls where their coordinates put them, kept on the lanes)
+    const shape = wall.customData === undefined ? wall : wallFootprint(wall);
+    const first = Math.max(0, Math.min(3, Math.floor(shape.x + 1e-6)));
+    const last = Math.max(first, Math.min(3, Math.ceil(shape.x + shape.w - 1e-6) - 1));
     const top = this.laneTop(first) + 3;
     const bottom = this.laneTop(last) + this.laneHeight() - 3;
     return { x: x0, y: top, w: Math.max(3, x1 - x0), h: bottom - top };
@@ -449,7 +451,7 @@ export class NotesLanes {
     }
     for (const note of editor.objects.notes) {
       if (Math.abs(note.b - beat) > 1e-3 || note.x < 0 || note.x > 3 || note.y < 0 || note.y > 2) continue;
-      drawGameNote(ctx, note, left + (note.x + 0.5) * cell, at(note.y) + cell / 2, cell * 0.82, this.rgb(note.c === 0 ? colors.leftNote : colors.rightNote), editor.noteSelection.has(note.id));
+      drawGameNote(ctx, note, left + (note.x + 0.5) * cell, at(note.y) + cell / 2, cell * 0.82, this.rgb(note.c === 0 ? colors.leftNote : colors.rightNote), editor.noteSelection.has(note.id), editor.noteRoll(note.id));
     }
   }
 

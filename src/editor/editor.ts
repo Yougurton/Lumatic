@@ -50,7 +50,7 @@ import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
 import { checkMap, type MapIssue } from './checks';
 import { jumpOf } from './jump';
-import { allObjects, strobeWalls, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
+import { allObjects, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
@@ -450,6 +450,7 @@ export class Editor {
     const fileBookmarks = readBookmarks(fileText);
     try {
       this.objects = fileText === '' ? emptyObjects() : readObjects(fileText);
+      this.fakeWalls = readFakeWalls(fileText);
       this.fileVersion = fileText === '' ? '3' : difficultyVersion(fileText);
     } catch (error) {
       console.error('[lumatic] reading the notes failed', error);
@@ -2433,6 +2434,20 @@ export class Editor {
     }
     return this.issues;
   }
+
+  private rollsKey = -1;
+  private rolls = new Map<string, number>();
+  /** How the game turns a note (degrees, 0 = down), windows and stacks lined up as it does. */
+  noteRoll(id: string) {
+    if (this.rollsKey !== this.noteVersion) {
+      this.rollsKey = this.noteVersion;
+      this.rolls = noteRolls(this.objects.notes);
+    }
+    return this.rolls.get(id);
+  }
+
+  /** The difficulty's fake walls (Noodle), shown on the track. */
+  fakeWalls: MapWall[] = [];
 
   /** Whether the user chose to ignore this find. */
   isIgnored(issue: MapIssue) {

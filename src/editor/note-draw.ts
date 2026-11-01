@@ -8,12 +8,12 @@ const ROLL: Record<number, number> = { 0: 180, 1: 0, 2: -90, 3: 90, 4: -135, 5: 
  * diagonal one stands on its corner), its arrow a wide chevron on the side the cut starts from,
  * pointing where it goes; a dot in the middle for a dot note.
  */
-export function drawGameNote(ctx: CanvasRenderingContext2D, note: Pick<MapNote, 'd' | 'a'>, x: number, y: number, size: number, color: string, picked: boolean) {
+export function drawGameNote(ctx: CanvasRenderingContext2D, note: Pick<MapNote, 'd' | 'a'>, x: number, y: number, size: number, color: string, picked: boolean, roll?: number) {
   const half = size / 2;
   ctx.save();
   ctx.translate(x, y);
   // (the game turns the block counter-clockwise by its angle; the canvas turns clockwise)
-  ctx.rotate((-((ROLL[note.d] ?? 0) + (note.d === 8 ? 0 : note.a)) * Math.PI) / 180);
+  ctx.rotate((-(roll ?? (ROLL[note.d] ?? 0) + (note.d === 8 ? 0 : note.a)) * Math.PI) / 180);
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.roundRect(-half, -half, size, size, size * 0.18);
