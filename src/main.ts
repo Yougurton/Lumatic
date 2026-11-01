@@ -8,6 +8,7 @@ import { mapSettingsDialog } from './editor/map-settings';
 import { colorsDialog } from './editor/colors-dialog';
 import { environmentDialog } from './editor/environment-dialog';
 import { newMapDialog } from './editor/new-map';
+import { canSendToQuest, questDialog } from './editor/quest-dialog';
 import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
 import { MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
@@ -122,6 +123,7 @@ function refreshToolbar() {
   status.textContent = `${editor.dirty ? '● ' : ''}${editor.status}`;
   saveButton.disabled = editor.project === null;
   byId<HTMLButtonElement>('settings').disabled = editor.project === null;
+  byId<HTMLButtonElement>('quest').disabled = editor.project === null;
   byId<HTMLButtonElement>('environment').disabled = editor.project === null;
   byId<HTMLButtonElement>('map-colors').disabled = editor.project === null;
   const rows = editor.difficulties();
@@ -248,6 +250,8 @@ byId('zoom-in').addEventListener('click', () => timeline.zoom(1.5));
 byId('bookmark').addEventListener('click', () => void timeline.addBookmarkHere());
 byId('zoom-out').addEventListener('click', () => timeline.zoom(1 / 1.5));
 byId('zoom-fit').addEventListener('click', () => timeline.fit());
+byId('quest').hidden = !canSendToQuest();
+byId('quest').addEventListener('click', () => questDialog(editor, save));
 
 async function save() {
   try {

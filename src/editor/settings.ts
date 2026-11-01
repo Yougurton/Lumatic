@@ -55,6 +55,13 @@ export interface Settings {
   noteHitVolume: number;
   /** The map checker's rules switched off (their ids). */
   disabledChecks: string[];
+  /** Sending to a Quest: adb's path, the headset last picked, its Wi-Fi address, SongCore's folder,
+   *  and how the game is made to see the new version. */
+  adbPath: string;
+  questSerial: string;
+  questAddress: string;
+  questTarget: 'wip' | 'custom';
+  questMode: 'restart' | 'fresh';
   /** Whose criteria the checker follows (one or more: their rules, the strictest of their thresholds). */
   checkSources: ('BSMG' | 'BL' | 'SS')[];
   clickVolume: number;
@@ -95,6 +102,11 @@ export const DEFAULT_SETTINGS: Settings = {
   noteHitVolume: 0.6,
   disabledChecks: [],
   checkSources: ['BSMG', 'BL', 'SS'],
+  adbPath: '',
+  questSerial: '',
+  questAddress: '',
+  questTarget: 'wip',
+  questMode: 'restart',
   clickVolume: 0.6,
   autosave: 0,
   backups: 5,

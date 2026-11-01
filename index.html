@@ -532,6 +532,78 @@
       .ni-strobe-pick {
         margin-top: 8px;
       }
+      .quest-dialog {
+        width: min(620px, 94vw);
+        display: grid;
+        gap: 10px;
+      }
+      .qd-section {
+        display: grid;
+        gap: 6px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel2);
+      }
+      .qd-head {
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .qd-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .qd-row[hidden] {
+        display: none;
+      }
+      .qd-row input[type='text'] {
+        flex: 1;
+        min-width: 160px;
+      }
+      .qd-devices {
+        display: grid;
+        gap: 4px;
+      }
+      .qd-device {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .qd-device button {
+        margin-left: auto;
+        padding: 0 6px;
+      }
+      .qd-line {
+        display: grid;
+        grid-template-columns: 210px 1fr;
+        gap: 8px;
+        align-items: center;
+      }
+      .qd-hint {
+        font-size: 11.5px;
+        line-height: 1.35;
+      }
+      .qd-log {
+        max-height: 140px;
+        overflow-y: auto;
+        font: 11.5px ui-monospace, monospace;
+        color: var(--dim);
+        display: grid;
+        gap: 2px;
+      }
+      .qd-log:empty {
+        display: none;
+      }
+      .qd-ok {
+        color: #7fd99a;
+      }
+      .qd-bad {
+        color: #ff8a8a;
+      }
       .ni-strobe {
         margin-top: 12px;
         display: grid;
@@ -2563,6 +2635,7 @@
         <span class="side-tabs"><button id="tab-lights" class="active" title="Свет: события, эффекты, кольца, лазеры (Tab — переключить)">💡 Свет</button><button id="tab-notes" title="Ноты, бомбы, стены, дуги и цепи (Tab — переключить)">◆ Ноты</button></span>
         <button id="save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
         <button id="settings" title="Свойства карты: названия, BPM, начало песни" disabled>Свойства</button>
+        <button id="quest" title="Сохранить и отправить карту на Quest по adb (кабель или Wi‑Fi)" hidden disabled>📤 Quest</button>
         <button id="environment" title="Окружение карты: готовые окружения, лишние детали, размер колец и их света" disabled>Окружение</button>
         <button id="map-colors" title="Цвета карты: левый, правый, белый и буст для всей карты (Info.dat), можно взять из обложки" disabled>Цвета</button>
         <span class="sep"></span>

@@ -14,4 +14,18 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   deleteFile: (file: string) => ipcRenderer.invoke('delete-file', file),
   setLanguage: (language: string) => ipcRenderer.send('set-language', language),
   setZoom: (factor: number) => webFrame.setZoomFactor(factor),
+  quest: {
+    findAdb: (picked?: string) => ipcRenderer.invoke('quest-find-adb', picked),
+    downloadAdb: () => ipcRenderer.invoke('quest-download-adb'),
+    pickAdb: () => ipcRenderer.invoke('quest-pick-adb'),
+    devices: () => ipcRenderer.invoke('quest-devices'),
+    connect: (address: string) => ipcRenderer.invoke('quest-connect', address),
+    disconnect: (address: string) => ipcRenderer.invoke('quest-disconnect', address),
+    enableWifi: (serial: string) => ipcRenderer.invoke('quest-enable-wifi', serial),
+    upload: (options: unknown, progress: (text: string) => void) => {
+      const listener = (_event: unknown, text: string) => progress(text);
+      ipcRenderer.on('quest-progress', listener);
+      return ipcRenderer.invoke('quest-upload', options).finally(() => ipcRenderer.removeListener('quest-progress', listener));
+    },
+  },
 });

@@ -3,6 +3,7 @@ import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { backupFile } from './backup';
+import { connect, devices, disconnect, downloadAdb, enableWifi, findAdb, upload, type UploadOptions } from './quest';
 
 /**
  * Lumatic's window (the editor was called ChroEditor before). The page (dist/) is served from app://local so it can fetch its environment
@@ -193,6 +194,22 @@ void app.whenReady().then(() => {
     // (a copy kept first: a deleted difficulty can be brought back from "Lumatic backups")
     await backupFile(file, 50);
     await fs.unlink(file);
+  });
+  // the Quest: adb, the headsets, Wi-Fi, sending the map
+  ipcMain.handle('quest-find-adb', (_event, picked?: string) => findAdb(picked));
+  ipcMain.handle('quest-download-adb', () => downloadAdb());
+  ipcMain.handle('quest-pick-adb', async () => {
+    const result = await dialog.showOpenDialog({ title: say('Где adb', 'Where adb is'), properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: 'adb', extensions: ['exe'] }] : [] });
+    if (result.canceled || result.filePaths[0] === undefined) return null;
+    return findAdb(result.filePaths[0]);
+  });
+  ipcMain.handle('quest-devices', () => devices());
+  ipcMain.handle('quest-connect', (_event, address: string) => connect(address));
+  ipcMain.handle('quest-disconnect', (_event, address: string) => disconnect(address));
+  ipcMain.handle('quest-enable-wifi', (_event, serial: string) => enableWifi(serial));
+  ipcMain.handle('quest-upload', async (event, options: UploadOptions) => {
+    if (!allowed(options.folder)) throw new Error('not an opened folder');
+    return upload(options, (text) => event.sender.send('quest-progress', text));
   });
   ipcMain.on('set-language', (_event, language: string) => {
     english = language === 'en';
