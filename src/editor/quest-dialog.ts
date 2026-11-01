@@ -23,7 +23,8 @@ export interface QuestApi {
   connect(address: string): Promise<{ ok: boolean; text: string; address: string }>;
   disconnect(address: string): Promise<void>;
   enableWifi(serial: string): Promise<{ ok: boolean; text: string; address: string }>;
-  discover(remembered: string[]): Promise<{ connected: string[]; tried: string[] }>;
+  discover(remembered: string[]): Promise<{ connected: string[]; tried: string[]; pairing: string[]; unpaired: string[]; failed: { address: string; text: string }[] }>;
+  mdns(): Promise<{ type: 'connect' | 'pairing' | 'tcp'; name: string; address: string; port: number }[]>;
   pair(address: string, code: string): Promise<{ ok: boolean; text: string }>;
   upload(options: { serial: string; folder: string; name: string; target: 'wip' | 'custom'; mode: 'restart' | 'fresh' }, progress: (text: string) => void): Promise<{ remote: string; name: string; files: number }>;
 }
@@ -56,12 +57,12 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
       <div data-id="devices" class="qd-devices"></div>
       <div class="qd-row">
         <button type="button" data-id="wifi" title="Шлем подключён кабелем: включить отладку по Wi‑Fi и подключиться без провода">📶 Включить Wi‑Fi</button>
-        <input type="text" data-id="address" placeholder="IP шлема, напр. 192.168.1.20">
+        <input type="text" data-id="address" placeholder="IP шлема или IP:порт">
         <button type="button" data-id="connect">Подключить</button>
       </div>
       <details class="qd-pair">
         <summary>Сопряжение по коду (беспроводная отладка, без кабеля)</summary>
-        <div class="nm-dim qd-hint">В шлеме: «Беспроводная отладка» → «Подключить по коду» — впишите адрес с портом и шестизначный код оттуда.</div>
+        <div class="nm-dim qd-hint">В шлеме, в настройках разработчика: «Беспроводная отладка» → «Подключить устройство по коду». Адрес подставится сам, когда это окно в шлеме открыто (или впишите адрес с портом оттуда) — введите шестизначный код.</div>
         <div class="qd-row">
           <input type="text" data-id="pair-address" placeholder="192.168.1.20:37123">
           <input type="text" data-id="pair-code" placeholder="код" class="qd-code">
@@ -176,7 +177,13 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
       if (result.connected.length > 0) {
         log(`Найдено и подключено: ${result.connected.join(', ')}`, 'ok');
         picked = result.connected[0]!;
-      } else if (!list.some((device) => device.state === 'device')) log('В сети шлем с adb по Wi‑Fi не найден. Подключите кабелем и нажмите «Включить Wi‑Fi», сопрягите по коду или впишите IP.');
+        setSettings({ questAddress: picked.split(':')[0] ?? '' });
+      } else if (result.unpaired.length > 0) {
+        // (wireless debugging seen, but this computer isn't paired with it: SideQuest's own pairing is its own)
+        log(`Шлем найден (${result.unpaired.join(', ')}), но ещё не сопряжён с Lumatic. В шлеме откройте «Беспроводная отладка» → «Подключить устройство по коду» и введите код ниже — это нужно один раз.`, 'bad');
+        openPairing();
+      } else if (!list.some((device) => device.state === 'device')) log('В сети шлем с adb по Wi‑Fi не найден. Включите в шлеме «Беспроводную отладку», или подключите кабелем и нажмите «Включить Wi‑Fi», или впишите IP.');
+      if (result.pairing.length > 0) fillPairing(result.pairing[0]!);
     } catch (error) {
       log(message(error), 'bad');
     } finally {
@@ -186,6 +193,30 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
     await refresh();
   };
   el('discover').addEventListener('click', () => void look());
+  // pairing: the headset's pairing address picked up while its pairing window is open
+  const pairBox = box.querySelector<HTMLDetailsElement>('.qd-pair')!;
+  const fillPairing = (address: string) => {
+    const input = el<HTMLInputElement>('pair-address');
+    if (input.value.trim() === address) return;
+    input.value = address;
+    log(`Окно сопряжения в шлеме: ${address} — введите код`);
+    el<HTMLInputElement>('pair-code').focus();
+  };
+  let watching = 0;
+  const openPairing = () => {
+    pairBox.open = true;
+  };
+  pairBox.addEventListener('toggle', () => {
+    window.clearInterval(watching);
+    if (!pairBox.open) return;
+    const poll = () =>
+      void api.mdns().then((services) => {
+        const service = services.find((item) => item.type === 'pairing');
+        if (service !== undefined) fillPairing(`${service.address}:${String(service.port)}`);
+      }, () => undefined);
+    poll();
+    watching = window.setInterval(poll, 3000);
+  });
   el('pair').addEventListener('click', () => {
     const address = el<HTMLInputElement>('pair-address').value.trim();
     const code = el<HTMLInputElement>('pair-code').value.trim();
@@ -274,6 +305,7 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
     })();
   });
   const close = () => {
+    window.clearInterval(watching);
     shade.remove();
     window.removeEventListener('keydown', keys, true);
   };

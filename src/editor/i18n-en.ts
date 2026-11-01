@@ -1693,4 +1693,9 @@ export const EN: Record<string, string> = {
   "Найдено и подключено: {0}": "Found and connected: {0}",
   "В сети шлем с adb по Wi‑Fi не найден. Подключите кабелем и нажмите «Включить Wi‑Fi», сопрягите по коду или впишите IP.": "No headset with adb over Wi‑Fi found on the network. Connect with the cable and press \"Turn on Wi‑Fi\", pair with a code, or enter its IP.",
   "Сопряжение с {0}…": "Pairing with {0}…",
+  "IP шлема или IP:порт": "Headset IP or IP:port",
+  "В шлеме, в настройках разработчика: «Беспроводная отладка» → «Подключить устройство по коду». Адрес подставится сам, когда это окно в шлеме открыто (или впишите адрес с портом оттуда) — введите шестизначный код.": "In the headset's developer settings: \"Wireless debugging\" → \"Pair device with pairing code\". The address fills in by itself while that window is open in the headset (or type the address with its port from there) — enter the six-digit code.",
+  "Шлем найден ({0}), но ещё не сопряжён с Lumatic. В шлеме откройте «Беспроводная отладка» → «Подключить устройство по коду» и введите код ниже — это нужно один раз.": "Headset found ({0}), but not paired with Lumatic yet. In the headset open \"Wireless debugging\" → \"Pair device with pairing code\" and enter the code below — needed once.",
+  "В сети шлем с adb по Wi‑Fi не найден. Включите в шлеме «Беспроводную отладку», или подключите кабелем и нажмите «Включить Wi‑Fi», или впишите IP.": "No headset with adb over Wi‑Fi found on the network. Turn on \"Wireless debugging\" in the headset, or connect with the cable and press \"Turn on Wi‑Fi\", or enter its IP.",
+  "Окно сопряжения в шлеме: {0} — введите код": "Pairing window in the headset: {0} — enter the code",
 };

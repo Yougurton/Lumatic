@@ -3,6 +3,7 @@ import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { backupFile } from './backup';
+import { findAdbServices } from './mdns';
 import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAdb, pair, upload, type UploadOptions } from './quest';
 
 /**
@@ -209,6 +210,7 @@ void app.whenReady().then(() => {
   ipcMain.handle('quest-enable-wifi', (_event, serial: string) => enableWifi(serial));
   ipcMain.handle('quest-discover', (_event, remembered: string[]) => discover(remembered));
   ipcMain.handle('quest-pair', (_event, address: string, code: string) => pair(address, code));
+  ipcMain.handle('quest-mdns', () => findAdbServices(1500));
   ipcMain.handle('quest-upload', async (event, options: UploadOptions) => {
     if (!allowed(options.folder)) throw new Error('not an opened folder');
     return upload(options, (text) => event.sender.send('quest-progress', text));

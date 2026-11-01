@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, promises as fs } from 'node:fs';
 import { Socket } from 'node:net';
 import { networkInterfaces } from 'node:os';
+import { findAdbServices } from './mdns';
 import path from 'node:path';
 
 /**
@@ -125,9 +126,13 @@ export async function devices(): Promise<QuestDevice[]> {
     });
 }
 
-/** `adb connect` to a headset's address (port 5555 when none given). */
+/** `adb connect` to a headset's address (no port given: the one its wireless debugging announces, or 5555). */
 export async function connect(address: string) {
-  const target = address.includes(':') ? address : `${address}:5555`;
+  let target = address.trim();
+  if (!target.includes(':')) {
+    const announced = (await findAdbServices(1500).catch(() => [])).find((service) => service.type === 'connect' && service.address === target);
+    target = announced === undefined ? `${target}:5555` : `${target}:${String(announced.port)}`;
+  }
   const result = await adb(['connect', target], 20_000);
   const text = `${result.out}${result.err}`.trim();
   return { ok: /connected to/iu.test(text) && !/cannot|failed|unable/iu.test(text), text, address: target };
@@ -163,6 +168,10 @@ function open(host: string, port: number, timeout: number) {
  */
 export async function discover(remembered: string[]) {
   const found = new Set<string>();
+  // (wireless debugging's own announcements, looked up here — adb's mDNS isn't always working)
+  const services = await findAdbServices().catch(() => []);
+  for (const service of services) if (service.type !== 'pairing') found.add(`${service.address}:${String(service.port)}`);
+  const pairing = services.filter((service) => service.type === 'pairing').map((service) => `${service.address}:${String(service.port)}`);
   const mdns = await adb(['mdns', 'services'], 10_000).catch(() => null);
   for (const line of (mdns?.out ?? '').split('\n')) {
     if (!/_adb(-tls-connect)?\._tcp/u.test(line)) continue;
@@ -194,15 +203,19 @@ export async function discover(remembered: string[]) {
   for (const address of listening) found.add(address);
   const known = new Set((await devices()).map((device) => device.serial));
   const connected: string[] = [];
+  const failed: { address: string; text: string }[] = [];
   await Promise.all(
     [...found]
       .filter((address) => !known.has(address))
       .map(async (address) => {
-        const result = await connect(address).catch(() => null);
-        if (result?.ok === true) connected.push(result.address);
+        const result = await connect(address).catch((error: unknown) => ({ ok: false, text: String(error), address }));
+        if (result.ok) connected.push(result.address);
+        else failed.push({ address, text: result.text });
       }),
   );
-  return { connected, tried: [...found] };
+  // a headset announcing wireless debugging that won't let us in: not paired with this computer yet
+  const unpaired = services.filter((service) => service.type === 'connect' && failed.some((item) => item.address === `${service.address}:${String(service.port)}`)).map((service) => `${service.address}:${String(service.port)}`);
+  return { connected, tried: [...found], pairing, unpaired, failed };
 }
 
 export async function disconnect(address: string) {
