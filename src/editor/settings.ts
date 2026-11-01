@@ -57,7 +57,8 @@ export interface Settings {
   disabledChecks: string[];
   /** Sending to a Quest: adb's path, the headset last picked, its Wi-Fi address, SongCore's folder,
    *  and how the game is made to see the new version. */
-  adbPath: string;
+  /** adb picked by hand (empty: found — SideQuest's first). */
+  adbPicked: string;
   questSerial: string;
   questAddress: string;
   questTarget: 'wip' | 'custom';
@@ -102,7 +103,7 @@ export const DEFAULT_SETTINGS: Settings = {
   noteHitVolume: 0.6,
   disabledChecks: [],
   checkSources: ['BSMG', 'BL', 'SS'],
-  adbPath: '',
+  adbPicked: '',
   questSerial: '',
   questAddress: '',
   questTarget: 'wip',

@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
     connect: (address: string) => ipcRenderer.invoke('quest-connect', address),
     disconnect: (address: string) => ipcRenderer.invoke('quest-disconnect', address),
     enableWifi: (serial: string) => ipcRenderer.invoke('quest-enable-wifi', serial),
+    discover: (remembered: string[]) => ipcRenderer.invoke('quest-discover', remembered),
+    pair: (address: string, code: string) => ipcRenderer.invoke('quest-pair', address, code),
     upload: (options: unknown, progress: (text: string) => void) => {
       const listener = (_event: unknown, text: string) => progress(text);
       ipcRenderer.on('quest-progress', listener);

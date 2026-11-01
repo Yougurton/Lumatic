@@ -23,6 +23,8 @@ export interface QuestApi {
   connect(address: string): Promise<{ ok: boolean; text: string; address: string }>;
   disconnect(address: string): Promise<void>;
   enableWifi(serial: string): Promise<{ ok: boolean; text: string; address: string }>;
+  discover(remembered: string[]): Promise<{ connected: string[]; tried: string[] }>;
+  pair(address: string, code: string): Promise<{ ok: boolean; text: string }>;
   upload(options: { serial: string; folder: string; name: string; target: 'wip' | 'custom'; mode: 'restart' | 'fresh' }, progress: (text: string) => void): Promise<{ remote: string; name: string; files: number }>;
 }
 
@@ -50,14 +52,23 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
       </div>
     </div>
     <div class="qd-section">
-      <div class="qd-head">Шлем <button type="button" data-id="refresh" title="Обновить список">⟳</button></div>
+      <div class="qd-head">Шлем <button type="button" data-id="refresh" title="Обновить список">⟳</button><button type="button" data-id="discover" title="Найти шлем в локальной сети (adb по Wi‑Fi уже включён — например, SideQuest'ом) и подключиться">🔍 Найти по Wi‑Fi</button><span class="nm-dim" data-id="discovering"></span></div>
       <div data-id="devices" class="qd-devices"></div>
       <div class="qd-row">
         <button type="button" data-id="wifi" title="Шлем подключён кабелем: включить отладку по Wi‑Fi и подключиться без провода">📶 Включить Wi‑Fi</button>
         <input type="text" data-id="address" placeholder="IP шлема, напр. 192.168.1.20">
         <button type="button" data-id="connect">Подключить</button>
       </div>
-      <div class="nm-dim qd-hint">Кабель: включите режим разработчика, подключите шлем и нажмите «Разрешить» в шлеме. Wi‑Fi: один раз подключите кабелем и нажмите «Включить Wi‑Fi» — дальше можно без провода (до перезагрузки шлема).</div>
+      <details class="qd-pair">
+        <summary>Сопряжение по коду (беспроводная отладка, без кабеля)</summary>
+        <div class="nm-dim qd-hint">В шлеме: «Беспроводная отладка» → «Подключить по коду» — впишите адрес с портом и шестизначный код оттуда.</div>
+        <div class="qd-row">
+          <input type="text" data-id="pair-address" placeholder="192.168.1.20:37123">
+          <input type="text" data-id="pair-code" placeholder="код" class="qd-code">
+          <button type="button" data-id="pair">Сопрячь</button>
+        </div>
+      </details>
+      <div class="nm-dim qd-hint">Wi‑Fi: если adb по Wi‑Fi уже включён (например, SideQuest'ом), шлем найдётся сам — «🔍 Найти по Wi‑Fi». Иначе один раз подключите кабелем и нажмите «Включить Wi‑Fi» (держится до перезагрузки шлема) или сопрягите по коду. Кабель: режим разработчика, «Разрешить» в шлеме.</div>
     </div>
     <div class="qd-section">
       <div class="qd-head">Куда и как</div>
@@ -150,11 +161,45 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
     el('adb').textContent = found === null ? 'adb не найден. Скачайте его (platform-tools от Google, ~7 МБ) или укажите свой — например, из SideQuest.' : `✓ ${found.version} — ${found.path}`;
     el('adb-buttons').hidden = found !== null;
     if (found !== null) {
-      if (found.path !== 'adb') setSettings({ adbPath: found.path });
-      void refresh();
+      void refresh().then(() => {
+        // (no headset seen: looked for on the network at once, as SideQuest does)
+        if (!list.some((device) => device.state === 'device')) void look();
+      });
     }
   };
-  void api.findAdb(settings().adbPath).then(showAdb, (error: unknown) => log(message(error), 'bad'));
+  /** The network searched for headsets with adb over Wi-Fi on, and connected to. */
+  const look = async () => {
+    el('discovering').textContent = 'ищу в сети…';
+    el<HTMLButtonElement>('discover').disabled = true;
+    try {
+      const result = await api.discover([settings().questAddress]);
+      if (result.connected.length > 0) {
+        log(`Найдено и подключено: ${result.connected.join(', ')}`, 'ok');
+        picked = result.connected[0]!;
+      } else if (!list.some((device) => device.state === 'device')) log('В сети шлем с adb по Wi‑Fi не найден. Подключите кабелем и нажмите «Включить Wi‑Fi», сопрягите по коду или впишите IP.');
+    } catch (error) {
+      log(message(error), 'bad');
+    } finally {
+      el('discovering').textContent = '';
+      el<HTMLButtonElement>('discover').disabled = false;
+    }
+    await refresh();
+  };
+  el('discover').addEventListener('click', () => void look());
+  el('pair').addEventListener('click', () => {
+    const address = el<HTMLInputElement>('pair-address').value.trim();
+    const code = el<HTMLInputElement>('pair-code').value.trim();
+    if (address === '' || code === '') return;
+    log(`Сопряжение с ${address}…`);
+    void api.pair(address, code).then(
+      async (result) => {
+        log(result.text, result.ok ? 'ok' : 'bad');
+        if (result.ok) await look();
+      },
+      (error: unknown) => log(message(error), 'bad'),
+    );
+  });
+  void api.findAdb(settings().adbPicked).then(showAdb, (error: unknown) => log(message(error), 'bad'));
   el('download').addEventListener('click', () => {
     el('adb').textContent = 'Скачиваю platform-tools…';
     void api.downloadAdb().then(showAdb, (error: unknown) => {
@@ -162,7 +207,14 @@ export function questDialog(editor: Editor, save: () => Promise<void>) {
       log(message(error), 'bad');
     });
   });
-  el('pick').addEventListener('click', () => void api.pickAdb().then((found) => found !== null && showAdb(found)));
+  el('pick').addEventListener('click', () =>
+    void api.pickAdb().then((found) => {
+      if (found === null) return;
+      // (only an adb picked by hand is kept: otherwise SideQuest's is preferred, sharing its connections)
+      setSettings({ adbPicked: found.path });
+      showAdb(found);
+    }),
+  );
   el('refresh').addEventListener('click', () => void refresh());
   el('connect').addEventListener('click', () => {
     const address = el<HTMLInputElement>('address').value.trim();

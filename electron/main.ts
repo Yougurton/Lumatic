@@ -3,7 +3,7 @@ import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { backupFile } from './backup';
-import { connect, devices, disconnect, downloadAdb, enableWifi, findAdb, upload, type UploadOptions } from './quest';
+import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAdb, pair, upload, type UploadOptions } from './quest';
 
 /**
  * Lumatic's window (the editor was called ChroEditor before). The page (dist/) is served from app://local so it can fetch its environment
@@ -207,6 +207,8 @@ void app.whenReady().then(() => {
   ipcMain.handle('quest-connect', (_event, address: string) => connect(address));
   ipcMain.handle('quest-disconnect', (_event, address: string) => disconnect(address));
   ipcMain.handle('quest-enable-wifi', (_event, serial: string) => enableWifi(serial));
+  ipcMain.handle('quest-discover', (_event, remembered: string[]) => discover(remembered));
+  ipcMain.handle('quest-pair', (_event, address: string, code: string) => pair(address, code));
   ipcMain.handle('quest-upload', async (event, options: UploadOptions) => {
     if (!allowed(options.folder)) throw new Error('not an opened folder');
     return upload(options, (text) => event.sender.send('quest-progress', text));

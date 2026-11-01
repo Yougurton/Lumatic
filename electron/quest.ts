@@ -1,6 +1,8 @@
 import { app, net } from 'electron';
 import { execFile } from 'node:child_process';
 import { existsSync, promises as fs } from 'node:fs';
+import { Socket } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 
 /**
@@ -36,14 +38,22 @@ const downloaded = () => path.join(app.getPath('userData'), 'platform-tools', ex
 
 /** Where adb may be: the one picked, the downloaded one, SideQuest's, the Android SDK's, the PATH. */
 function candidates(picked: string | undefined) {
+  // (SideQuest's first: one adb server for both — an adb of another version restarts the server, and
+  // the headsets connected over Wi-Fi drop off)
   const out: string[] = [];
   if (picked !== undefined && picked !== '') out.push(picked);
-  out.push(downloaded());
   const env = process.env;
   if (process.platform === 'win32') {
     if (env.APPDATA !== undefined) out.push(path.join(env.APPDATA, 'SideQuest', 'platform-tools', exe));
-    if (env.LOCALAPPDATA !== undefined) out.push(path.join(env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', exe));
+    if (env.LOCALAPPDATA !== undefined) out.push(path.join(env.LOCALAPPDATA, 'Programs', 'SideQuest', 'resources', 'app.asar.unpacked', 'build', 'platform-tools', exe));
     if (env.ProgramFiles !== undefined) out.push(path.join(env.ProgramFiles, 'SideQuest', 'resources', 'app.asar.unpacked', 'build', 'platform-tools', exe));
+  } else {
+    const home = app.getPath('home');
+    out.push(path.join(home, '.config', 'SideQuest', 'platform-tools', exe), path.join(home, 'Library', 'Application Support', 'SideQuest', 'platform-tools', exe));
+  }
+  out.push(downloaded());
+  if (process.platform === 'win32') {
+    if (env.LOCALAPPDATA !== undefined) out.push(path.join(env.LOCALAPPDATA, 'Android', 'Sdk', 'platform-tools', exe));
   } else {
     const home = app.getPath('home');
     out.push(path.join(home, 'Android', 'Sdk', 'platform-tools', exe), path.join(home, 'Library', 'Android', 'sdk', 'platform-tools', exe), '/usr/bin/adb', '/usr/local/bin/adb', '/opt/homebrew/bin/adb');
@@ -121,6 +131,78 @@ export async function connect(address: string) {
   const result = await adb(['connect', target], 20_000);
   const text = `${result.out}${result.err}`.trim();
   return { ok: /connected to/iu.test(text) && !/cannot|failed|unable/iu.test(text), text, address: target };
+}
+
+/** Pairing with a headset's "Wireless debugging" (Android 11+): its pairing address and code. */
+export async function pair(address: string, code: string) {
+  const result = await adb(['pair', address, code], 30_000);
+  const text = `${result.out}${result.err}`.trim();
+  return { ok: /successfully paired/iu.test(text), text };
+}
+
+/** Whether something listens on a port (a short try). */
+function open(host: string, port: number, timeout: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = new Socket();
+    const done = (ok: boolean) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeout);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+/**
+ * Headsets on the network found and connected (as SideQuest does, no cable needed): the ones adb's
+ * mDNS sees (wireless debugging), the addresses used before, and any machine of this computer's local
+ * networks with adb listening on 5555 (adb over Wi-Fi left on since it was switched on).
+ */
+export async function discover(remembered: string[]) {
+  const found = new Set<string>();
+  const mdns = await adb(['mdns', 'services'], 10_000).catch(() => null);
+  for (const line of (mdns?.out ?? '').split('\n')) {
+    if (!/_adb(-tls-connect)?\._tcp/u.test(line)) continue;
+    const address = /(\d+\.\d+\.\d+\.\d+:\d+)/u.exec(line)?.[1];
+    if (address !== undefined) found.add(address);
+  }
+  for (const address of remembered) if (address.trim() !== '') found.add(address.includes(':') ? address.trim() : `${address.trim()}:5555`);
+  // the local networks (/24 around each private IPv4 address of this computer)
+  const hosts: string[] = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const item of list ?? []) {
+      if (item.family !== 'IPv4' || item.internal) continue;
+      if (!/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/u.test(item.address)) continue;
+      const base = item.address.split('.').slice(0, 3).join('.');
+      for (let k = 1; k < 255; k++) {
+        const host = `${base}.${String(k)}`;
+        if (host !== item.address) hosts.push(host);
+      }
+    }
+  }
+  const listening: string[] = [];
+  for (let i = 0; i < hosts.length; i += 128) {
+    const batch = hosts.slice(i, i + 128);
+    const results = await Promise.all(batch.map((host) => open(host, 5555, 600)));
+    batch.forEach((host, index) => {
+      if (results[index]) listening.push(`${host}:5555`);
+    });
+  }
+  for (const address of listening) found.add(address);
+  const known = new Set((await devices()).map((device) => device.serial));
+  const connected: string[] = [];
+  await Promise.all(
+    [...found]
+      .filter((address) => !known.has(address))
+      .map(async (address) => {
+        const result = await connect(address).catch(() => null);
+        if (result?.ok === true) connected.push(result.address);
+      }),
+  );
+  return { connected, tried: [...found] };
 }
 
 export async function disconnect(address: string) {
