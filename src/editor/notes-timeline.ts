@@ -1,5 +1,5 @@
 import type { Editor } from './editor';
-import { DIR_ANGLE, MIRROR_DIR, objectSpan, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
+import { DIR_ANGLE, MIRROR_DIR, objectSpan, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 
 /**
@@ -33,7 +33,8 @@ type Drag =
   | { kind: 'move'; grabBeat: number; grabLane: number; anchor: number; origin: Map<string, { b: number; tb?: number; x: number; tx?: number }>; moved: boolean }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'wall'; from: number; to: number; lane: number; lane2: number }
-  | { kind: 'place'; x0: number; y0: number; beat: number; lane: number; additive: boolean };
+  | { kind: 'place'; x0: number; y0: number; beat: number; lane: number; additive: boolean }
+  | { kind: 'resize'; id: string; edge: 'start' | 'end'; b: number; d: number; moved: boolean };
 
 const ROW_NAMES = ['низ', 'середина', 'верх'];
 const DIR_NAMES: Record<number, string> = { 0: '↑', 1: '↓', 2: '←', 3: '→', 4: '↖', 5: '↗', 6: '↙', 7: '↘', 8: '•' };
@@ -167,7 +168,7 @@ export class NotesLanes {
       if (wall.b + wall.d < from || wall.b > to) continue;
       const r = this.wallRect(wall);
       const picked = editor.noteSelection.has(wall.id);
-      const crouch = wall.y >= 2;
+      const crouch = wall.y >= 1;
       ctx.fillStyle = this.rgb(colors.obstacle, picked ? 0.45 : 0.28);
       ctx.fillRect(r.x, r.y, r.w, r.h);
       if (crouch) {
@@ -192,7 +193,7 @@ export class NotesLanes {
       if (r.w > 40 && r.h > 14) {
         ctx.fillStyle = 'rgba(255,255,255,0.75)';
         ctx.font = '10px system-ui, sans-serif';
-        ctx.fillText(crouch ? 'присед' : wall.y === 0 && wall.h >= 5 ? 'стена' : `стена ${String(wall.y)}–${String(wall.y + wall.h)}`, r.x + 4, r.y + 11);
+        ctx.fillText(WALL_NAMES[wallKindOf(wall)], r.x + 4, r.y + 11);
       }
     }
     // arcs and chains
@@ -354,7 +355,7 @@ export class NotesLanes {
     } else if (found.kind === 'bombs') title = 'Бомба';
     else if (found.kind === 'walls') {
       const wall = item as MapWall;
-      title = wall.y >= 2 ? 'Стена-присед' : 'Стена';
+      title = WALL_NAMES[wallKindOf(wall)];
       where = `колонки ${String(wall.x + 1)}–${String(wall.x + wall.w)}, длина ${wall.d.toFixed(2)} доли`;
     } else {
       const span = objectSpan(found.kind, item);
@@ -384,8 +385,20 @@ export class NotesLanes {
 
   // ----- the mouse -------------------------------------------------------------------------------------
 
+  /** A wall's end under the mouse (its start or end, to stretch it as a light's clip is). */
+  private wallEdge(x: number, y: number): { wall: MapWall; edge: 'start' | 'end' } | null {
+    for (const wall of this.editor.objects.walls) {
+      const r = this.wallRect(wall);
+      if (y < r.y || y > r.y + r.h) continue;
+      if (Math.abs(x - (r.x + r.w)) <= 6) return { wall, edge: 'end' };
+      if (Math.abs(x - r.x) <= 6 && r.w > 12) return { wall, edge: 'start' };
+    }
+    return null;
+  }
+
   cursor(x: number, y: number) {
-    if (this.drag !== null) return this.drag.kind === 'move' ? 'grabbing' : 'default';
+    if (this.drag !== null) return this.drag.kind === 'move' ? 'grabbing' : this.drag.kind === 'resize' ? 'ew-resize' : 'default';
+    if (this.wallEdge(x, y) !== null) return 'ew-resize';
     return this.hit(x, y) !== null ? 'grab' : this.laneAt(y) !== null ? 'crosshair' : 'default';
   }
 
@@ -410,6 +423,14 @@ export class NotesLanes {
       return;
     }
     if (event.button !== 0) return;
+    const edge = (found === null || found.kind === 'walls') && !(event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) ? this.wallEdge(x, y) : null;
+    if (edge !== null) {
+      // a wall's end: stretched or shrunk, as a light's clip is (one undo step)
+      editor.selectNotes([edge.wall.id]);
+      editor.noteCheckpoint();
+      this.drag = { kind: 'resize', id: edge.wall.id, edge: edge.edge, b: edge.wall.b, d: edge.wall.d, moved: false };
+      return;
+    }
     if (found === null) {
       if (event.shiftKey || event.ctrlKey || event.metaKey) {
         this.drag = { kind: 'box', x0: x, y0: y, x1: x, y1: y, additive: true };
@@ -454,7 +475,23 @@ export class NotesLanes {
       this.host.redraw();
       return true;
     }
-    if (drag.kind === 'box') {
+    if (drag.kind === 'resize') {
+      const wall = editor.objects.walls.find((item) => item.id === drag.id);
+      if (wall === undefined) return true;
+      const at = editor.snapBeat(Math.max(0, beat));
+      const least = Math.max(1 / 64, editor.snap || 1 / 16);
+      const end = drag.b + drag.d;
+      if (drag.edge === 'end') {
+        wall.b = drag.b;
+        wall.d = round(Math.max(least, at - drag.b));
+      } else {
+        wall.b = round(Math.min(at, end - least));
+        wall.d = round(end - wall.b);
+      }
+      drag.moved = wall.b !== drag.b || wall.d !== drag.d;
+      editor.noteVersion++;
+      editor.rebuildPreview();
+    } else if (drag.kind === 'box') {
       drag.x1 = x;
       drag.y1 = y;
     } else if (drag.kind === 'wall') {
@@ -499,7 +536,10 @@ export class NotesLanes {
     this.drag = null;
     if (drag === null) return;
     const editor = this.editor;
-    if (drag.kind === 'place') {
+    if (drag.kind === 'resize') {
+      if (drag.moved) editor.notesChanged(true);
+      else editor.noteUndoDiscard();
+    } else if (drag.kind === 'place') {
       this.place(drag.beat, drag.lane);
     } else if (drag.kind === 'box') {
       const [x0, x1] = [Math.min(drag.x0, drag.x1), Math.max(drag.x0, drag.x1)];
@@ -523,7 +563,7 @@ export class NotesLanes {
       const lane = Math.min(drag.lane, drag.lane2);
       const wide = Math.abs(drag.lane2 - drag.lane) + 1;
       const length = Math.max(b - a, editor.snap || 0.25);
-      editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: a, x: lane, y: editor.wallKind === 'crouch' ? 2 : 0, d: round(length), w: wide, h: editor.wallKind === 'crouch' ? 3 : 5 } }], false);
+      editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: a, x: lane, ...WALL_SHAPES[editor.wallKind], d: round(length), w: wide } }], false);
     } else if (!drag.moved) {
       editor.noteUndoDiscard();
     } else {
@@ -543,7 +583,7 @@ export class NotesLanes {
       return;
     }
     if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: lane, y: row } }], false);
-    else if (tool.kind === 'wall') editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: lane, y: editor.wallKind === 'crouch' ? 2 : 0, d: editor.snap || 1, w: 1, h: editor.wallKind === 'crouch' ? 3 : 5 } }], false);
+    else if (tool.kind === 'wall') editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: lane, ...WALL_SHAPES[editor.wallKind], d: 1, w: 1 } }], false);
     else editor.addObjects([{ kind: 'notes', item: { id: newId('n'), b: beat, x: lane, y: row, c: tool.kind === 'red' ? 0 : 1, d: tool.direction, a: 0 } }], false);
   }
 

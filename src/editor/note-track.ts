@@ -30,7 +30,7 @@ import {
   type Material,
 } from 'three';
 import type { Editor } from './editor';
-import { DIR_VECTOR, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
+import { DIR_VECTOR, ROW_WALL, WALL_SHAPES, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { jumpOf } from './note-inspector';
 import { settings } from './settings';
@@ -50,14 +50,17 @@ import { arrowGeometry, bombGeometry, chainLinkGeometry, dotGeometry, noteBodyGe
  * line across the track: where the player's sight ends — the half jump.
  */
 
-/** Metres a beat along the track. */
-export const METRES_PER_BEAT = 1.6;
+/** Metres a beat along the track (the settings' "track scale"). */
+let METRES_PER_BEAT = 1.6;
+/** How far the track goes ahead of the cursor and behind it (metres). */
+const TRACK_M = 64;
+const BEHIND_M = 2.4;
 const LANE = 0.6;
 const WIDTH = LANE * 4;
 const NOTE = 0.5;
 /** The beats shown ahead of the cursor and behind it. */
-const AHEAD = 40;
-const BEHIND = 1.5;
+let AHEAD = TRACK_M / METRES_PER_BEAT;
+let BEHIND = BEHIND_M / METRES_PER_BEAT;
 /** Where things count as gone through the wall (just past the notes at the cursor). */
 const PASSED = NOTE / 2 + 0.02;
 const rowY = (row: number) => LANE / 2 + row * LANE;
@@ -383,8 +386,9 @@ export class NoteTrack {
     }
     const obstacle = this.rgb(colors.obstacle);
     for (const wall of objects.walls) {
-      const bottom = Math.max(0, wall.y * LANE - 0.45);
-      const top = Math.max(bottom + 0.1, (wall.y + wall.h) * LANE - 0.45);
+      // (as ChroMapper draws them: lined up with the grid's rows — a crouch wall from the top row up)
+      const bottom = Math.max(0, wall.y * LANE);
+      const top = Math.max(bottom + 0.1, Math.min(wall.y + wall.h, 5.5) * LANE);
       const length = Math.max(0.02, wall.d * METRES_PER_BEAT);
       const geometry = new BoxGeometry(wall.w * LANE - 0.04, top - bottom, length);
       const on = picked.has(wall.id) || this.hovered === wall.id;
@@ -507,6 +511,16 @@ export class NoteTrack {
     if (!this.active) return;
     const editor = this.editor;
     const cursor = editor.isPlaying() ? editor.playhead() : editor.snapBeat(editor.playhead());
+    const scale = Math.min(6, Math.max(0.3, settings().trackScale));
+    if (scale !== METRES_PER_BEAT) {
+      // (the track longer or shorter a beat: everything along it again)
+      METRES_PER_BEAT = scale;
+      AHEAD = TRACK_M / scale;
+      BEHIND = BEHIND_M / scale;
+      this.builtKey = '';
+      this.linesKey = '';
+      this.numbersKey = '';
+    }
     this.build(cursor);
     this.buildLines(cursor);
     this.placeNumbers(cursor);
@@ -600,7 +614,21 @@ export class NoteTrack {
     const glow = new Mesh(new PlaneGeometry(LANE - 0.04, LANE - 0.04), new MeshBasicMaterial({ color: taken ? 0xffe27a : 0x6aa6ff, transparent: true, opacity: 0.2, depthWrite: false, side: DoubleSide }));
     glow.position.set(colX(cell.col), rowY(cell.row), 0.001);
     this.ghost.add(glow);
-    if (taken || tool.kind === 'wall') return;
+    if (tool.kind === 'wall') {
+      // (the wall the drag makes: from the cell it started in across to the one under the mouse, as
+      // high as the row it started in says)
+      const from = drag?.kind === 'place' ? drag.col : cell.col;
+      const to = drag?.kind === 'place' && this.lastMouse !== null ? (this.cellAt(this.lastMouse.x, this.lastMouse.y)?.col ?? drag.col) : cell.col;
+      const shape = WALL_SHAPES[ROW_WALL[cell.row] ?? 'full'];
+      const left = Math.min(from, to);
+      const wide = Math.abs(to - from) + 1;
+      const length = Math.max(0.1, (this.editor.snap || 1) * METRES_PER_BEAT);
+      const box = new Mesh(new BoxGeometry(wide * LANE - 0.04, (Math.min(shape.y + shape.h, 5.5) - shape.y) * LANE, length), new MeshBasicMaterial({ color: this.rgb(editor.preview.colors.obstacle), transparent: true, opacity: 0.35, depthWrite: false }));
+      box.position.set(colX(left) + ((wide - 1) * LANE) / 2, ((shape.y + Math.min(shape.y + shape.h, 5.5)) / 2) * LANE, -length / 2);
+      this.ghost.add(box);
+      return;
+    }
+    if (taken) return;
     const colors = editor.preview.colors;
     if (tool.kind === 'bomb') {
       const bomb = new Mesh(bombGeometry(), new MeshStandardMaterial({ color: 0x5a5c66, transparent: true, opacity: 0.6 }));
@@ -831,8 +859,11 @@ export class NoteTrack {
       const tool = editor.noteTool;
       editor.noteRow = drag.row;
       if (tool.kind === 'wall') {
-        const crouch = editor.wallKind === 'crouch';
-        editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: drag.col, y: crouch ? 2 : 0, d: editor.snap || 1, w: 1, h: crouch ? 3 : 5 } }], false);
+        // (as wide as the drag went across the cells; as high as its row says; a grid step long — longer
+        // on the timeline, its ends dragged)
+        const to = this.cellAt(event.clientX, event.clientY)?.col ?? drag.col;
+        const left = Math.min(drag.col, to);
+        editor.addObjects([{ kind: 'walls', item: { id: newId('n'), b: beat, x: left, ...WALL_SHAPES[ROW_WALL[drag.row] ?? 'full'], d: editor.snap || 1, w: Math.abs(to - drag.col) + 1 } }], false);
       } else if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: drag.col, y: drag.row } }], false);
       else {
         if (dir !== null) editor.noteTool = { ...tool, direction: dir };

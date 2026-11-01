@@ -21,6 +21,8 @@ export interface Settings {
   distortion: boolean;
   /** Notes, bombs and walls in the 3D view too (on the lights side: the notes side always has them). */
   notes: boolean;
+  /** The notes side's track: metres a beat along it (longer: the notes farther apart). */
+  trackScale: number;
   /** The notes side's track: the red line where the player's sight ends (the half jump). */
   visionLine: boolean;
   /** The show's lights in the 3D view (off: every lamp a dim white, nothing moving). */
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notes: false,
   previewLights: true,
   visionLine: true,
+  trackScale: 1.6,
   ringTicks: 30.6,
   uiScale: 1,
   wheel: 'time',

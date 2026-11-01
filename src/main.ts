@@ -88,7 +88,8 @@ const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
 function applyNoteView(keep = false) {
   const track = editor.tab === 'notes' && editor.noteView === 'track';
   noteTrack.setActive(track);
-  preview.view.setHorizontalFov(track ? 80 : null);
+  // (the notes side: its track's field of view in the game's view too; the lights side its own)
+  preview.view.setHorizontalFov(editor.tab === 'notes' ? 80 : null);
   fly.setHome(track ? TRACK_POSE : null, keep);
   editor.rebuildPreview(true);
   syncViewTools();

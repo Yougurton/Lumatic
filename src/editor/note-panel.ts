@@ -1,6 +1,7 @@
 import type { Editor } from './editor';
 import { DIR_ANGLE, type MapNote } from './notes';
 import { newId } from './model';
+import { setSettings, settings } from './settings';
 
 /**
  * The notes side's corner (where the lights side has its effects): the grid 4×3 as the player sees it,
@@ -50,7 +51,7 @@ export class NotePanel {
     this.canvas.className = 'np-grid';
     this.label.className = 'np-label nm-dim';
     this.canvas.title = 'Сетка 4×3 на доле курсора, как её видит игрок; предыдущая нота каждой руки — бледная.\nКлик — поставить, потянуть из клетки — стрелка в ту сторону, ПКМ — удалить, средняя кнопка — другой цвет.\nКолёсико — шаг сетки по песне. 1/2/3/4 — красная, синяя, бомба, стена; W/A/S/D/F — направление (две сразу — диагональ).';
-    root.append(this.tools, this.label, this.canvas);
+    root.append(this.tools, this.label, this.canvas, this.scaleRow());
     this.renderTools();
     new ResizeObserver(() => this.resize()).observe(this.canvas);
     editor.onChange(() => {
@@ -73,6 +74,32 @@ export class NotePanel {
     requestAnimationFrame(loop);
   }
 
+  /** The 3D track's scale: metres a beat (longer: the notes farther apart along it). */
+  private scaleRow() {
+    const row = document.createElement('label');
+    row.className = 'np-scale';
+    row.title = 'Масштаб 3D-дорожки: насколько далеко друг от друга стоят доли (колёсико над ползунком тоже работает)';
+    const input = Object.assign(document.createElement('input'), { type: 'range', min: '0.4', max: '5', step: '0.1', value: String(settings().trackScale) });
+    const value = Object.assign(document.createElement('span'), { className: 'ins-value' });
+    const show = () => (value.textContent = `${Number(input.value).toFixed(1)} м/доля`);
+    show();
+    input.addEventListener('input', () => {
+      show();
+      setSettings({ trackScale: Number(input.value) });
+    });
+    input.addEventListener(
+      'wheel',
+      (event) => {
+        event.preventDefault();
+        input.value = String(Math.min(5, Math.max(0.4, Number(input.value) + (event.deltaY < 0 ? 0.1 : -0.1))));
+        input.dispatchEvent(new Event('input'));
+      },
+      { passive: false },
+    );
+    row.append(Object.assign(document.createElement('span'), { textContent: 'Масштаб дорожки' }), input, value);
+    return row;
+  }
+
   /** The tools and the direction pad (drawn again when the tool changes). */
   renderTools() {
     const editor = this.editor;
@@ -83,21 +110,41 @@ export class NotePanel {
     this.tools.dataset.key = key;
     const colors = editor.preview.colors;
     const css = (rgb: readonly number[]) => `rgb(${rgb.slice(0, 3).map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})`;
-    const kinds: { kind: typeof tool.kind; label: string; key: string; swatch: string }[] = [
-      { kind: 'red', label: 'Красная', key: '1', swatch: css(colors.leftNote) },
-      { kind: 'blue', label: 'Синяя', key: '2', swatch: css(colors.rightNote) },
-      { kind: 'bomb', label: 'Бомба', key: '3', swatch: '#3a3d46' },
-      { kind: 'wall', label: 'Стена', key: '4', swatch: css(colors.obstacle) },
-    ];
+    // the hands' notes: big, in their colours, the left one on the left
+    const hands = document.createElement('div');
+    hands.className = 'np-hands';
+    const textOn = (rgb: readonly number[]) => (0.299 * (rgb[0] ?? 0) + 0.587 * (rgb[1] ?? 0) + 0.114 * (rgb[2] ?? 0) > 0.6 ? '#101114' : '#ffffff');
+    for (const item of [
+      { kind: 'red' as const, side: 'Левая', color: colors.leftNote, key: '1', arrow: '◀' },
+      { kind: 'blue' as const, side: 'Правая', color: colors.rightNote, key: '2', arrow: '▶' },
+    ]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'np-hand';
+      button.classList.toggle('active', tool.kind === item.kind);
+      button.style.background = css(item.color);
+      button.style.color = textOn(item.color);
+      button.title = `${item.side} рука — нота ${item.kind === 'red' ? 'красная' : 'синяя'} (${item.key})`;
+      const label = item.kind === 'red' ? `${item.arrow} ${item.side}` : `${item.side} ${item.arrow}`;
+      button.innerHTML = `<b>${label}</b><small>${item.kind === 'red' ? 'красная' : 'синяя'} · ${item.key}</small>`;
+      button.addEventListener('click', () => {
+        editor.noteTool = { ...editor.noteTool, kind: item.kind };
+        editor.emit('selection');
+      });
+      hands.append(button);
+    }
     const row = document.createElement('div');
     row.className = 'np-kinds';
-    for (const item of kinds) {
+    for (const item of [
+      { kind: 'bomb' as const, label: 'Бомба', key: '3', swatch: '#3a3d46' },
+      { kind: 'wall' as const, label: 'Стена', key: '4', swatch: css(colors.obstacle) },
+    ]) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'np-kind';
       button.classList.toggle('active', tool.kind === item.kind);
       button.title = `${item.label} (${item.key})`;
-      button.innerHTML = `<i style="background:${item.swatch}"></i><span>${item.label}</span>`;
+      button.innerHTML = `<i style="background:${item.swatch}"></i><span>${item.label}</span><kbd>${item.key}</kbd>`;
       button.addEventListener('click', () => {
         editor.noteTool = { ...editor.noteTool, kind: item.kind };
         editor.emit('selection');
@@ -120,8 +167,9 @@ export class NotePanel {
     side.className = 'np-side';
     if (tool.kind === 'wall') {
       for (const [kind, label, title] of [
-        ['full', 'Во весь рост', 'Стена, от которой уходят в сторону'],
-        ['crouch', 'Присед', 'Стена сверху: под ней приседают'],
+        ['full', 'Полная', 'Стена во весь рост: от неё уходят в сторону (на 3D-стене — нижний ряд)'],
+        ['deep', 'Глубокий присед', 'Стена от среднего ряда вверх (на 3D-стене — средний ряд)'],
+        ['crouch', 'Присед', 'Обычная стена-присед из игры (на 3D-стене — верхний ряд)'],
       ] as const) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -134,11 +182,11 @@ export class NotePanel {
         });
         side.append(button);
       }
-      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На таймлайне стена тянется мышью по времени и по колонкам.' }));
+      side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'На 3D-стене: ряд — вид стены, протянуть вбок — шире. На таймлайне концы стены тянутся.' }));
     } else {
       side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'W/A/S/D, F — точка; две сразу — диагональ. У выделенных нот меняется тоже.' }));
     }
-    this.tools.replaceChildren(row, Object.assign(document.createElement('div'), { className: 'np-row' }));
+    this.tools.replaceChildren(hands, row, Object.assign(document.createElement('div'), { className: 'np-row' }));
     this.tools.lastElementChild!.append(pad, side);
   }
 

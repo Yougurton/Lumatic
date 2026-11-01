@@ -215,9 +215,45 @@
         padding: 8px;
         gap: 6px;
       }
+      .np-hands {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-bottom: 5px;
+      }
+      .np-hand {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        padding: 6px 4px;
+        border: 2px solid transparent;
+        border-radius: 7px;
+        opacity: 0.55;
+      }
+      .np-hand b {
+        font-size: 14px;
+      }
+      .np-hand small {
+        font-size: 10.5px;
+        opacity: 0.85;
+      }
+      .np-hand.active {
+        opacity: 1;
+        border-color: #fff;
+        box-shadow: 0 0 10px rgba(255, 255, 255, 0.35);
+      }
+      .np-scale {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 6px;
+        align-items: center;
+        font-size: 11px;
+        color: var(--dim);
+      }
       .np-kinds {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 3px;
       }
       .np-kind {

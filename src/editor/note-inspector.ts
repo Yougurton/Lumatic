@@ -1,6 +1,6 @@
 import type { Editor } from './editor';
 import { mirrorObjects } from './notes-timeline';
-import type { MapArc, MapChain, MapNote, MapWall } from './notes';
+import { ROW_WALL, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapChain, type MapNote, type MapWall } from './notes';
 
 /**
  * The notes side's panel beside the timeline: what the difficulty has (notes, bombs, walls, arcs,
@@ -156,10 +156,7 @@ export class NoteInspector {
         field('Длина (доли)', number(wall.d, editor.snap || 0.25, (value) => (wall.d = Math.max(0, value))));
         field('Колонка', select([0, 1, 2, 3].map((x) => [x, String(x + 1)]), wall.x, (value) => (wall.x = Math.min(value, 4 - wall.w))));
         field('Ширина', select([1, 2, 3, 4].map((w) => [w, String(w)]), wall.w, (value) => (wall.w = Math.min(value, 4 - wall.x))));
-        field('Вид', select([[0, 'Во весь рост'], [2, 'Присед']], wall.y >= 2 ? 2 : 0, (value) => {
-          wall.y = value;
-          wall.h = value === 2 ? 3 : 5;
-        }));
+        field('Вид', select(ROW_WALL.map((kind, index) => [index, WALL_NAMES[kind]]), ROW_WALL.indexOf(wallKindOf(wall)), (value) => Object.assign(wall, WALL_SHAPES[ROW_WALL[value]!])));
       } else {
         field('Колонка', select([0, 1, 2, 3].map((x) => [x, String(x + 1)]), item.x, (value) => (item.x = value)));
         field('Ряд', select([0, 1, 2].map((y) => [y, ROWS[y]!]), (item as MapNote).y, (value) => ((item as MapNote).y = value)));

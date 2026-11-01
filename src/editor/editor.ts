@@ -48,7 +48,7 @@ import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
-import { allObjects, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind } from './notes';
+import { allObjects, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
@@ -202,7 +202,7 @@ export class Editor {
   /** The grid's row new notes and bombs go into from the timeline (0 bottom … 2 top). */
   noteRow = 0;
   /** What walls are drawn as: full height (dodged) or crouch ones. */
-  wallKind: 'full' | 'crouch' = 'full';
+  wallKind: WallKind = 'full';
   private noteUndo: string[] = [];
   private noteRedo: string[] = [];
   private noteClipboard: { kind: ObjectKind; item: MapObjects[ObjectKind][number] }[] | null = null;
