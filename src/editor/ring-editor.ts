@@ -168,13 +168,18 @@ export class RingEditor {
   }
 
   /** One change to the block: an undo step, the view updated. */
-  private change(patch: (block: RingBlock) => void) {
-    this.editor.updateRingBlock(this.blockId, (block) => {
-      patch(block);
-      // (changed by hand: no longer the steps or the glitch it was made from)
-      delete block.steps;
-      delete block.glitch;
-    });
+  /** `fit`: made longer if its poses then run past its end (not when its length is what's set). */
+  private change(patch: (block: RingBlock) => void, fit = true) {
+    this.editor.updateRingBlock(
+      this.blockId,
+      (block) => {
+        patch(block);
+        // (changed by hand: no longer the steps or the glitch it was made from)
+        delete block.steps;
+        delete block.glitch;
+      },
+      fit,
+    );
     this.showPose();
   }
 
@@ -230,7 +235,7 @@ export class RingEditor {
     title.textContent = isZoom(block) ? 'Зум колец' : 'Позы колец';
     const name = textInput(block.name, (value) => this.change((item) => (item.name = value || item.name)));
     name.className = 'gls-name';
-    const length = labeled('Длина, долей', numberInput(block.end - block.start, 0.25, (value) => this.change((item) => (item.end = item.start + Math.max(0.25, value)))));
+    const length = labeled('Длина, долей', numberInput(block.end - block.start, 0.25, (value) => this.change((item) => (item.end = item.start + Math.max(0.25, value)), false)));
     const play = button(this.editor.previewExtra !== null ? '■ Стоп' : '▶ Проиграть', 'Проиграть блок по кругу в окне просмотра (Пробел)', () => this.play());
     const done = button('Готово', 'Закрыть (Esc)', () => this.close());
     done.classList.add('primary');

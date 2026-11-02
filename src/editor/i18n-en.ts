@@ -1826,4 +1826,8 @@ export const EN: Record<string, string> = {
   "В игре: сжато — {0}, в начале — {1}, растянуто — {2}.": "In the game: squeezed — {0}, at the start — {1}, stretched — {2}.",
   "сильная доля встанет на долю {0}": "the downbeat lands on beat {0}",
   "первая доля встанет на долю {0}": "the first beat lands on beat {0}",
+  "Вход и выход волной": "Come on and go off as a wave",
+  "Вход волной, долей (0 — сразу)": "Wave in, beats (0 — at once)",
+  "Выход волной, долей (0 — разом)": "Wave out, beats (0 — all together)",
+  "Направление волны": "Wave direction",
 };

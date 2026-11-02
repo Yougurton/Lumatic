@@ -324,6 +324,15 @@ export function poseAngles(pose: RingPose, count: number, mode: RingBlock['mode'
 }
 
 /** When the turn reaches ring `i` (beats after the pose's own time). */
+/** A ring block too short for its poses — a turn (and its wave over the rings) or a zoom running past
+ *  its end — made as long as they need (never shortened). */
+export function fitRingBlock(block: RingBlock) {
+  if (isLasers(block)) return;
+  const zoom = isZoom(block);
+  const needed = Math.max(0, ...block.poses.map((pose) => pose.beat + Math.max(0, pose.duration) + (zoom ? 0 : Math.max(0, pose.delay))));
+  if (needed > block.end - block.start + 1e-6) block.end = Math.round((block.start + needed) * 1e6) / 1e6;
+}
+
 export function ringDelay(pose: RingPose, i: number, count: number) {
   if (pose.delay <= 0 || count <= 1) return 0;
   return (pose.delay * (pose.reverse ? count - 1 - i : i)) / (count - 1);

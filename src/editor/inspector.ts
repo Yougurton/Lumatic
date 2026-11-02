@@ -3,7 +3,7 @@ import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
 import { holdWhileTyping } from './gls-editor';
-import { gridSelect, numberDrum, wheelSlider } from './grids';
+import { beatDrumStep, gridSelect, numberDrum, wheelSlider } from './grids';
 import { resolveRgb, shiftHue } from './bake';
 import { KIND_NAMES, mixColor, waveLength, waveSteps, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
 import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
@@ -358,12 +358,42 @@ export class Inspector {
         ['vibrato', 'Вибрато', 'Качается ровно, как вибрато в музыке: тише и обратно, раз за разом'],
       ];
       const vibrato = p.wobble === 'vibrato';
-      root.append(this.section('Как дрожит', this.buttons(wobbles, vibrato ? 'vibrato' : 'flame', (value) => change((params) => (params.wobble = value === 'vibrato' ? 'vibrato' : 'flame')))));
+      root.append(
+        this.section(
+          'Как дрожит',
+          this.buttons(wobbles, vibrato ? 'vibrato' : 'flame', (value) =>
+            change((params) => {
+              params.wobble = value === 'vibrato' ? 'vibrato' : 'flame';
+              // (a vibrato comes on and goes off as waves, unless that's been turned off)
+              if (params.wobble === 'vibrato' && params.vibratoIn === undefined && params.vibratoOut === undefined) {
+                params.vibratoIn = 1;
+                params.vibratoOut = 1;
+              }
+            }),
+          ),
+        ),
+      );
       root.append(this.slider(vibrato ? 'Глубина вибрато' : 'Дрожание', p.tremor ?? 0.3, 0, 1, 0.05, (value) => change((params) => (params.tremor = value))));
       root.append(this.section(vibrato ? 'Одно качание, долей' : 'Дрожит каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)), vibrato ? [2, 4] : [], null, vibrato ? 'vibrato' : 'flame')));
       if (vibrato) {
         root.append(this.slider('Отставание следующей лампы', p.vibratoLag ?? 0, 0, 1, 0.05, (value) => change((params) => (params.vibratoLag = value))));
         root.append(this.drumField('Оттенок качается на, °', p.vibratoHue ?? 0, 5, (value) => change((params) => (params.vibratoHue = value))));
+        // coming on and going off as waves (the effect made longer if they don't fit)
+        const waves = (p.vibratoIn ?? 0) > 0 || (p.vibratoOut ?? 0) > 0;
+        root.append(
+          this.check(' Вход и выход волной', waves, (on) =>
+            change((params) => {
+              params.vibratoIn = on ? 1 : 0;
+              params.vibratoOut = on ? 1 : 0;
+            }),
+          ),
+        );
+        if (waves) {
+          const step = beatDrumStep(editor.snap);
+          root.append(this.drumField('Вход волной, долей (0 — сразу)', p.vibratoIn ?? 0, step, (value) => change((params) => (params.vibratoIn = Math.max(0, value)))));
+          root.append(this.drumField('Выход волной, долей (0 — разом)', p.vibratoOut ?? 0, step, (value) => change((params) => (params.vibratoOut = Math.max(0, value)))));
+          root.append(this.section('Направление волны', this.buttons(directions.filter(([key]) => key !== 'pingpong'), p.direction === 'pingpong' ? 'forward' : p.direction, (value) => change((params) => (params.direction = value)))));
+        }
       }
       const together: [string, string, string][] = [
         ['each', 'Каждая сама', 'У каждой лампы (элемента) своё дрожание'],

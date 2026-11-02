@@ -34,7 +34,7 @@ import {
   type StartMode,
 } from './model';
 import { clipRank, resolveRgb } from './bake';
-import { buildEffect, childrenSignature, defaultParams, effectItems, KIND_NAMES, type Effect, type EffectExtras, type EffectKind, type EffectParams } from './effects';
+import { buildEffect, childrenSignature, defaultParams, effectItems, effectNeededLength, KIND_NAMES, type Effect, type EffectExtras, type EffectKind, type EffectParams } from './effects';
 import { defaultGls } from './gls';
 import { adjustClips, type Adjustment } from './adjust';
 import { laserEvents } from './lasers';
@@ -54,7 +54,7 @@ import { allObjects, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyO
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
-import { chromaCustomData, cloneRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
+import { chromaCustomData, cloneRingBlock, fitRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -2087,6 +2087,7 @@ export class Editor {
     if (this.project === null) return;
     this.checkpoint();
     this.effects.push(effect);
+    this.fitEffect(effect);
     this.regenerate(effect);
     this.selection = new Set([effect.id]);
     this.changed();
@@ -2136,9 +2137,17 @@ export class Editor {
     this.checkpoint();
     for (const effect of effects) {
       patch(effect);
+      this.fitEffect(effect);
       this.regenerate(effect);
     }
     this.changed();
+  }
+
+  /** An effect too short for what its settings ask: made as long as it needs (never shortened —
+   *  that's left to the hand). */
+  private fitEffect(effect: Effect) {
+    const needed = effectNeededLength(effect, this.effectItemsOf(effect).length);
+    if (needed > effect.end - effect.start + 1e-6) effect.end = effect.start + needed;
   }
 
   /** Dragging an effect: from where it was (`origin`) by `delta` beats, its events with it. */
@@ -2363,16 +2372,18 @@ export class Editor {
     if (this.project === null) return;
     this.checkpoint();
     this.ringBlocks.push(block);
+    fitRingBlock(block);
     this.selection = new Set([block.id]);
     this.changed();
   }
 
   /** Changes one ring pose block (one undo step). */
-  updateRingBlock(id: string, patch: (block: RingBlock) => void) {
+  updateRingBlock(id: string, patch: (block: RingBlock) => void, fit = true) {
     const block = this.ringBlockById(id);
     if (block === undefined) return;
     this.checkpoint();
     patch(block);
+    if (fit) fitRingBlock(block);
     this.changed();
   }
 
