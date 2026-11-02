@@ -101,6 +101,31 @@ export function wheelSlider(range: HTMLInputElement, key: string, input: (value:
 
 // ----- drums --------------------------------------------------------------------------------------------
 
+/** A drum's typed-in number: its keys are its own — taken before any window's (the ring and GLS
+ *  editors', the hotkeys) can, Enter and Escape finishing it. (Set up first, as the module loads:
+ *  window listeners run in the order they were added.) */
+if (typeof window !== 'undefined') {
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains('drum-input')) return;
+      event.stopImmediatePropagation();
+      if (event.key !== 'Enter' && event.key !== 'Escape') return;
+      event.preventDefault();
+      target.dispatchEvent(new CustomEvent('drum-finish', { detail: event.key === 'Enter' }));
+    },
+    true,
+  );
+}
+
+/** The step of a drum of beats: quarters — sixths when the grid is in triplets (other values typed in). */
+export function beatDrumStep(grid: number) {
+  if (grid <= 0) return 1 / 4;
+  const per = Math.round(1 / grid);
+  return Math.abs(1 / grid - per) < 1e-6 && per % 3 === 0 ? 1 / 6 : 1 / 4;
+}
+
 /**
  * A grid step to pick (beats): a horizontal drum with the steps on its rim, largest to smallest
  * (triplets among them) — `longer`: steps of several beats too; `none`: a first choice that is no step
@@ -307,11 +332,7 @@ export function drum(spec: DrumSpec): HTMLElement {
       input.remove();
       if (keep && text.trim() !== '') spec.typed!(text);
     };
-    input.addEventListener('keydown', (event) => {
-      event.stopPropagation();
-      if (event.key === 'Enter') finish(true);
-      else if (event.key === 'Escape') finish(false);
-    });
+    input.addEventListener('drum-finish', (event) => finish((event as CustomEvent<boolean>).detail));
     input.addEventListener('blur', () => finish(true));
     input.addEventListener('pointerdown', (event) => event.stopPropagation());
   };

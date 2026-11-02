@@ -1,7 +1,7 @@
 import type { Editor } from './editor';
 import { button, check, holdWhileTyping, scrubStrip, type StripLane, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { easingPicker } from './easing-picker';
-import { numberDrum } from './grids';
+import { beatDrumStep, numberDrum } from './grids';
 import { fillRingShape, ringSystemName } from './library';
 import { newId } from './model';
 import { absolutePose, dataFirstRing, poseBefore, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
@@ -346,9 +346,9 @@ export class RingEditor {
     return box;
   }
 
-  /** Where a pose is in its block: a drum a grid step a notch. */
+  /** Where a pose is in its block: a drum of quarters (sixths on a triplet grid). */
   private beatDrum(block: RingBlock, pose: RingPose) {
-    const step = this.editor.snap > 0 ? this.editor.snap : 1 / 16;
+    const step = beatDrumStep(this.editor.snap);
     return numberDrum(`ring-beat:${pose.id}:${String(step)}`, pose.beat, (value) => this.changePose((item) => (item.beat = Math.min(block.end - block.start, Math.max(0, value)))), { step, min: 0, max: block.end - block.start, beats: true });
   }
 
@@ -427,7 +427,7 @@ export class RingEditor {
     col.append(heading('Поворот к позе'));
     col.append(wayIcons(pose.way, (value) => this.changePose((item) => (item.way = value))));
     col.append(labeled('Целых оборотов сверху', numberDrum(`ring-loops:${pose.id}`, pose.loops, (value) => this.changePose((item) => (item.loops = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: 32 })));
-    col.append(labeled('Время поворота, долей (0 — сразу)', numberDrum(`ring-duration:${pose.id}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: 1 / 8, min: 0, max: 64, beats: true })));
+    col.append(labeled('Время поворота, долей (0 — сразу)', numberDrum(`ring-duration:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 64, beats: true })));
     if (!events) col.append(labeled('Сглаживание', easingPicker(EASINGS, pose.easing, (value) => this.changePose((item) => (item.easing = value)))));
     else {
       // (the game's own closing in, or an easing made of short ring events)
@@ -451,7 +451,7 @@ export class RingEditor {
         ),
       );
     }
-    col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberDrum(`ring-delay:${pose.id}`, pose.delay, (value) => this.changePose((item) => (item.delay = Math.max(0, value))), { step: 1 / 16, min: 0, max: 8, beats: true })));
+    col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberDrum(`ring-delay:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.delay, (value) => this.changePose((item) => (item.delay = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 8, beats: true })));
     if (pose.delay > 0) col.append(check('От дальних к ближним', pose.reverse, (on) => this.changePose((item) => (item.reverse = on))));
     if (events && pose.reverse && pose.delay > 0) col.append(note('События колец ведут волну только от ближних колец к дальним.'));
     col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
@@ -509,7 +509,7 @@ export class RingEditor {
     col.append(labeled('Расстояние между кольцами', numberDrum(`zoom-step:${pose.id}`, pose.step, (value) => this.changePose((item) => (item.step = round(value))), { step: 0.1, min: -20, max: 40, digits: 2 })));
     if (system !== undefined) col.append(note(`В игре: сжато — ${String(round(system.position.minPositionStep))}, в начале — ${String(round(system.initialStep))}, растянуто — ${String(round(system.position.maxPositionStep))}.`));
     col.append(heading('Переход'));
-    col.append(labeled('Время перехода, долей (0 — сразу)', numberDrum(`zoom-duration:${pose.id}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: 1 / 8, min: 0, max: 64, beats: true })));
+    col.append(labeled('Время перехода, долей (0 — сразу)', numberDrum(`zoom-duration:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 64, beats: true })));
     col.append(note('Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная. Кольца доезжают плавно, с торможением; время перехода задаёт скорость.'));
     col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
     return col;

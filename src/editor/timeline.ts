@@ -460,10 +460,14 @@ export class Timeline {
     if (item === null) return null;
     const { row, top, height } = item;
     if (row.kind === 'poses') {
+      const lanes = this.blockLanes(row);
       for (const block of [...this.blocksOf(row)].reverse()) {
         const x0 = this.beatToX(block.start);
         const x1 = this.beatToX(block.end);
-        if (x < x0 - 2 || x > x1 + 2 || y < top + 2 || y > top + height - 2) continue;
+        // (blocks over each other: each in its own strip of the row)
+        const lane = lanes.get(block.id) ?? { index: 0, of: 1 };
+        const laneTop = top + (height * lane.index) / lane.of;
+        if (x < x0 - 2 || x > x1 + 2 || y < laneTop + 2 || y > laneTop + height / lane.of - 2) continue;
         const edge = x1 - x0 > EDGE_PX * 3 ? (x - x0 < EDGE_PX ? 'start' : x1 - x < EDGE_PX ? 'end' : null) : x > x1 - EDGE_PX ? 'end' : null;
         return { block, edge, row };
       }
@@ -590,7 +594,13 @@ export class Timeline {
       for (const { row, top, height: h } of this.layout()) {
         if (top + h < this.rowsTop || top > this.rowsBottom) continue;
         if (row.kind === 'raw') this.drawRaw(row, top, h);
-        else if (row.kind === 'poses') for (const block of this.blocksOf(row)) this.drawRingBlock(block, top, h);
+        else if (row.kind === 'poses') {
+          const lanes = this.blockLanes(row);
+          for (const block of this.blocksOf(row)) {
+            const lane = lanes.get(block.id) ?? { index: 0, of: 1 };
+            this.drawRingBlock(block, top + (h * lane.index) / lane.of, h / lane.of, lane.of > 1);
+          }
+        }
         for (const shown of this.clipsOf(row)) this.drawClip(shown, top, h);
       }
       // the clip being drawn
@@ -1029,6 +1039,36 @@ export class Timeline {
     return this.editor.ringBlocks.filter((block) => (row.ring === 'zoom' ? isZoom(block) : row.ring === 'lasers' ? isLasers(block) : isTurn(block)));
   }
 
+  /**
+   * Blocks of a ring row that overlap (the same rings: both play at once — the game takes the one
+   * whose wave is faster, say): each a strip of the row, so neither hides under the other.
+   */
+  private blockLanes(row: Extract<Row, { kind: 'poses' }>) {
+    const lanes = new Map<string, { index: number; of: number }>();
+    const blocks = [...this.blocksOf(row)].sort((a, b) => a.start - b.start);
+    // (clusters of blocks overlapping one another, each block in the first strip free at its start)
+    let cluster: { block: RingBlock; index: number }[] = [];
+    let clusterEnd = -Infinity;
+    const close = () => {
+      const of = Math.max(1, ...cluster.map((item) => item.index + 1));
+      for (const item of cluster) lanes.set(item.block.id, { index: item.index, of });
+      cluster = [];
+    };
+    for (const block of blocks) {
+      if (block.start >= clusterEnd - 1e-6) {
+        close();
+        clusterEnd = -Infinity;
+      }
+      const busy = new Set(cluster.filter((item) => item.block.end > block.start + 1e-6 && (item.block.system === block.system || item.block.system === '' || block.system === '')).map((item) => item.index));
+      let index = 0;
+      while (busy.has(index)) index++;
+      cluster.push({ block, index });
+      clusterEnd = Math.max(clusterEnd, block.end);
+    }
+    close();
+    return lanes;
+  }
+
   /** A new block for a ring poses row. */
   private newBlockFor(row: Extract<Row, { kind: 'poses' }>, start: number, end: number) {
     const editor = this.editor;
@@ -1041,7 +1081,7 @@ export class Timeline {
 
   /** A ring pose block: its poses as small rings at their times (a line out to where the turn ends);
    *  a zoom block: each pose's spacing as bars that close in or spread out. */
-  private drawRingBlock(block: RingBlock, top: number, height: number) {
+  private drawRingBlock(block: RingBlock, top: number, height: number, overlapped = false) {
     const ctx = this.context;
     const x = this.beatToX(block.start);
     const w = (block.end - block.start) * this.pxPerBeat;
@@ -1135,9 +1175,12 @@ export class Timeline {
       ctx.fillText(label, lx + 3, y + h - 3);
     }
     ctx.restore();
-    ctx.strokeStyle = selected ? '#ffffff' : `hsl(${String(hue)} 60% 60%)`;
-    ctx.lineWidth = selected ? 2 : 1.2;
+    // (over another block of the same rings: a warning outline)
+    ctx.strokeStyle = selected ? '#ffffff' : overlapped ? '#ff6b6b' : `hsl(${String(hue)} 60% 60%)`;
+    ctx.lineWidth = selected ? 2 : overlapped ? 1.6 : 1.2;
+    if (overlapped && !selected) ctx.setLineDash([4, 3]);
     ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), h - 1);
+    ctx.setLineDash([]);
   }
 
   /** The events of the effect being drawn (for its ghost). */

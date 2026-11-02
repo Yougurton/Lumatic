@@ -258,6 +258,22 @@ if (points.length !== 5 || points.at(-1)![2] !== 360) {
     failures++;
     console.log('eased overshoot', peak, back.at(6)[0], back.count);
   }
+  // the turn glides along the easing: close to it all the way, not stepping on and standing
+  const eased = sample(posed('easeInOutQuad'));
+  const curve = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+  let worst = 0;
+  let still = 0;
+  const samples = 400;
+  for (let k = 1; k < samples; k++) {
+    const beat = 3 + (k * 2) / samples;
+    worst = Math.max(worst, off(90 * curve((beat - 3) / 2), eased.at(beat)[0]!));
+    if (k > 20 && k < samples - 20 && Math.abs(eased.at(beat)[0]! - eased.at(beat - 2 / samples)[0]!) < 0.02) still++;
+  }
+  checks++;
+  if (worst > 6 || still > samples * 0.05) {
+    failures++;
+    console.log('eased glide', worst, still, eased.count);
+  }
   const bounce = sample(posed('easeOutBounce'));
   checks++;
   if (off(90, bounce.at(6)[0]!) > 0.5) {

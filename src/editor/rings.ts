@@ -522,20 +522,42 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     }
     const ease = easingFromName(easing);
     const pieces = Math.max(2, Math.min(96, Math.floor(turnSeconds / gap)));
-    // (the rings close in on each in about the time to the next)
-    const closing = ringSpeedFor(turnSeconds / pieces);
+    // The rings glide on, not step by step: each event's ring closes in only part of the way by the
+    // next (KEEP of the distance left), and its angle is set beyond the easing's next point by just
+    // enough that the ring is there when the next event comes — the easing's points met, the motion
+    // between them smooth (closing all the way each time, the rings would jerk on and stand).
+    const interval = turnSeconds / pieces;
+    const keep = EASED_KEEP;
+    const closing = ringSpeedKeeping(interval, keep);
+    const ahead = (from: number, to: number) => (to - keep * from) / (1 - keep);
     const fromStep = ringStepBase(known, system, songBeat);
+    let was = 0;
     for (let k = 1; k <= pieces; k++) {
       const reached = ease(k / pieces);
+      const aim = ahead(was, reached);
+      was = reached;
       const at = Math.round((beat + (pose.duration * (k - 1)) / pieces) * 100000) / 100000;
       const now = k === 1 ? base : firstAt.at(toSong(at));
-      add(at, round(base + rotation * reached - now), fromStep + (step - fromStep) * reached, k === pieces ? 50 : closing);
+      add(at, round(base + rotation * aim - now), fromStep + (step - fromStep) * aim, closing);
     }
+    // (at the end: held where the easing ends)
+    const end = Math.round((beat + pose.duration) * 100000) / 100000;
+    add(end, round(base + rotation - firstAt.at(toSong(end))), step, 50);
   }
   return out;
 }
 
 const round = (value: number) => Math.round(value * 1000) / 1000;
+
+/** How much of the way a ring has still to go when the next event of an eased turn comes. */
+const EASED_KEEP = 0.4;
+
+/** The `speed` that leaves a ring `keep` of the way to its angle after `seconds`. */
+function ringSpeedKeeping(seconds: number, keep: number) {
+  const tick = ringTickSeconds();
+  if (seconds <= tick) return 50;
+  return Math.min(50, Math.max(0.05, (1 - keep ** (tick / seconds)) / tick));
+}
 
 // ----- 'tracks': every ring on a Chroma track -----------------------------------------------------------
 

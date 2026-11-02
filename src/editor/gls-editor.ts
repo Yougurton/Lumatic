@@ -2,7 +2,7 @@ import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import type { Effect } from './effects';
 import { easingPicker } from './easing-picker';
-import { beatsLabel, drum, GRIDS, nextGrid, numberDrum } from './grids';
+import { beatDrumStep, beatsLabel, drum, GRIDS, nextGrid, numberDrum } from './grids';
 import { showMenu } from './menu';
 import { addPreset, presetFromSelection } from './presets';
 import { defaultFilter, ease, filterFor, filterUnits, glsNeededLength, pointsToBlocks, spreadOf, type GlsBlock, type GlsLane, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
@@ -769,7 +769,7 @@ export class GlsEditor {
   private spreadTab(col: HTMLElement, box: GlsBox) {
     col.append(heading('По времени'));
     col.append(toggle(spreads(), box.beatSpread, (value) => this.changeBox((item) => (item.beatSpread = value))));
-    col.append(labeled(box.beatSpread === 'wave' ? 'Волна на всех, долей' : 'Шаг на элемент, долей', numberDrum(`gls-beat:${box.id}`, box.beatValue, (value) => this.changeBox((item) => (item.beatValue = Math.max(0, value))), { step: 1 / 16, min: 0, max: 64, beats: true })));
+    col.append(labeled(box.beatSpread === 'wave' ? 'Волна на всех, долей' : 'Шаг на элемент, долей', numberDrum(`gls-beat:${box.id}:${String(beatDrumStep(this.editor.snap))}`, box.beatValue, (value) => this.changeBox((item) => (item.beatValue = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 64, beats: true })));
     col.append(heading(box.kind === 'color' ? 'По яркости и оттенку' : 'По углу'));
     col.append(toggle(spreads(), box.valueSpread, (value) => this.changeBox((item) => (item.valueSpread = value))));
     const wave = box.valueSpread === 'wave';
