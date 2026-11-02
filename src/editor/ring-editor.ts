@@ -354,7 +354,7 @@ export class RingEditor {
   /** Where a pose is in its block: a drum of quarters (sixths on a triplet grid). */
   private beatDrum(block: RingBlock, pose: RingPose) {
     const step = beatDrumStep(this.editor.snap);
-    return numberDrum(`ring-beat:${pose.id}:${String(step)}`, pose.beat, (value) => this.changePose((item) => (item.beat = Math.min(block.end - block.start, Math.max(0, value)))), { step, min: 0, max: block.end - block.start, beats: true });
+    return numberDrum(`ring-beat:${pose.id}:${String(step)}`, pose.beat, (value) => this.changePose((item) => (item.beat = Math.max(0, value))), { step, min: 0, max: block.end - block.start + 16, beats: true });
   }
 
   private poseColumn(block: RingBlock) {
@@ -634,7 +634,8 @@ export class RingEditor {
               if (!moved && Math.abs(x - at) < 4) return;
               moved = true;
               const pose = this.block()?.poses.find((item) => item.id === id);
-              if (pose !== undefined) pose.beat = Math.min(block.end - block.start, snap(next - block.start));
+              // (past the block's end too: it grows to take it)
+              if (pose !== undefined) pose.beat = snap(next - block.start);
             },
             up: () => {
               if (!moved) {
@@ -650,10 +651,11 @@ export class RingEditor {
             },
           };
         }
-        // outside the block: the song's cursor goes there, as on the strip above
-        if (beat < block.start - 1e-6 || beat > block.end + 1e-6) return null;
+        // before the block: the song's cursor goes there, as on the strip above (past its end: a pose
+        // there, the block made long enough for it)
+        if (beat < block.start - 1e-6) return null;
         // a new pose here: like the one before it
-        const local = Math.min(block.end - block.start, snap(beat - block.start));
+        const local = snap(beat - block.start);
         const before = [...block.poses].filter((pose) => pose.beat <= local).sort((a, b) => b.beat - a.beat)[0];
         const pose = before === undefined ? newPose(local, isZoom(block) ? { step: round(this.zoomSystem(block)?.initialStep ?? 2) } : {}) : { ...structuredClone(before), id: newId('p'), beat: local };
         this.poseId = pose.id;

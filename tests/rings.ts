@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
 import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, MEASURED_RING_TICKS, ringTickSeconds, setRingTickRate, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
-import { dataFirstRing, firstRingFromLog, newPose, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
+import { dataFirstRing, firstRingFromLog, fitRingBlock, newPose, newRingBlock, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
 /**
@@ -323,6 +323,26 @@ for (const rate of [MEASURED_RING_TICKS, 50]) {
 }
 setRingTickRate(MEASURED_RING_TICKS);
 
+const check1 = (ok: boolean, ...what: unknown[]) => {
+  checks++;
+  if (!ok) {
+    failures++;
+    console.log('fail', ...what);
+  }
+};
+
+// a ring block as long as its poses take: longer when they run past it, shorter when they're over before it
+{
+  const block = newRingBlock('X', 'event', 4, 8);
+  check1(block.poses.length === 1 && block.poses[0]!.duration === 4, 'a new turn block: one pose over its length', block.poses);
+  block.poses[0]!.duration = 1;
+  fitRingBlock(block);
+  check1(Math.abs(block.end - 5) < 1e-9, 'shortened to its pose', block.end);
+  block.poses.push(newPose(2, { duration: 1.5, delay: 2 }));
+  fitRingBlock(block);
+  check1(Math.abs(block.end - 9.5) < 1e-9, 'made long enough for a turn and its wave', block.end);
+}
+
 // zoom poses: the rings stand their pose's spacing apart once its time is over
 const zoomSystem: ZoomSystemInfo = {
   name: 'SmallTrackLaneRings',
@@ -331,7 +351,8 @@ const zoomSystem: ZoomSystemInfo = {
   initialStep: 3.5,
 };
 const zoom = newZoomBlock(zoomSystem, 2, 12);
-zoom.poses[1]!.step = 0.6;
+check1(zoom.poses.length === 1 && zoom.poses[0]!.duration === 10, 'a new zoom block: one pose over its length', zoom.poses);
+zoom.poses = [newPose(0, { step: 3.5, duration: 1 }), newPose(5, { step: 0.6, duration: 1 })];
 const zoomEvents = poseZoomEvents([zoom], [zoomSystem], 9, 60 / bpm).map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: 9, value: 0, floatValue: 1, customData: event.customData as BasicEvent['customData'] }));
 const positions = createRingPositionSampler(zoomEvents, bpm, zoomSystem.position);
 for (const pose of zoom.poses) {

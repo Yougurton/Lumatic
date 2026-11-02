@@ -150,7 +150,8 @@ export function newRingBlock(system: string, mode: RingBlock['mode'], start: num
     mode,
     start,
     end: start + length,
-    poses: [newPose(0, { shape: 'same', angle: 0, step: 0, duration: Math.min(1, length / 2) }), newPose(Math.min(length, Math.max(1, length / 2)), { shape: 'spiral', angle: 45, step: 15, duration: Math.min(1, length / 2) })],
+    // (one pose: the turn takes the length drawn)
+    poses: [newPose(0, { shape: 'spiral', angle: 45, step: 15, duration: length })],
   };
 }
 
@@ -278,7 +279,8 @@ export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, 
     mode: 'event',
     start,
     end: start + length,
-    poses: [newPose(0, { step: initial, duration: Math.min(1, length / 2) }), newPose(Math.min(length, Math.max(1, length / 2)), { step: tight, duration: Math.min(1, length / 2) })],
+    // (one pose: the rings close up over the length drawn)
+    poses: [newPose(0, { step: tight === initial ? round(initial / 2) : tight, duration: length })],
   };
 }
 
@@ -324,13 +326,13 @@ export function poseAngles(pose: RingPose, count: number, mode: RingBlock['mode'
 }
 
 /** When the turn reaches ring `i` (beats after the pose's own time). */
-/** A ring block too short for its poses — a turn (and its wave over the rings) or a zoom running past
- *  its end — made as long as they need (never shortened). */
+/** A ring block made as long as its poses take: longer when a turn (and its wave over the rings) or a
+ *  zoom runs past its end, shorter when the last of them is over before it. */
 export function fitRingBlock(block: RingBlock) {
-  if (isLasers(block)) return;
+  if (isLasers(block) || block.poses.length === 0) return;
   const zoom = isZoom(block);
-  const needed = Math.max(0, ...block.poses.map((pose) => pose.beat + Math.max(0, pose.duration) + (zoom ? 0 : Math.max(0, pose.delay))));
-  if (needed > block.end - block.start + 1e-6) block.end = Math.round((block.start + needed) * 1e6) / 1e6;
+  const needed = Math.max(1 / 4, ...block.poses.map((pose) => pose.beat + Math.max(0, pose.duration) + (zoom ? 0 : Math.max(0, pose.delay))));
+  if (Math.abs(needed - (block.end - block.start)) > 1e-6) block.end = Math.round((block.start + needed) * 1e6) / 1e6;
 }
 
 export function ringDelay(pose: RingPose, i: number, count: number) {
