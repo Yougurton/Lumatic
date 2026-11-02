@@ -116,6 +116,8 @@ export interface Project {
   bookmarks?: Bookmark[];
   /** The map checker's finds the user chose to ignore (their keys). */
   ignoredIssues?: string[];
+  /** Colours kept for this map (each difficulty's project has the map's, all the same). */
+  palette?: Rgb[];
   /** The order of the top rows of lights ("g<type>" — a light group of the environment, "u<id>" — a
    *  group of the user's); rows not in it keep their own order after these. */
   rowOrder?: string[];

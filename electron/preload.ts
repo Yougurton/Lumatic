@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   deleteFile: (file: string) => ipcRenderer.invoke('delete-file', file),
   setLanguage: (language: string) => ipcRenderer.send('set-language', language),
   setZoom: (factor: number) => webFrame.setZoomFactor(factor),
+  pickScreenColor: () => ipcRenderer.invoke('pick-screen-color'),
+  paletteFromMap: () => ipcRenderer.invoke('palette-from-map'),
   quest: {
     findAdb: (picked?: string) => ipcRenderer.invoke('quest-find-adb', picked),
     downloadAdb: () => ipcRenderer.invoke('quest-download-adb'),

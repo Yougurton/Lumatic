@@ -479,6 +479,16 @@ export class Editor {
       const { clips, raw } = importEvents(difficulty.events, this.lightsByType, lastBeat + 8, this.songBpm / 60);
       this.project = { format: 'lumatic', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [], bookmarks: fileBookmarks };
     }
+    // (the map's colours: kept in every difficulty's project — one made before them takes theirs)
+    if (this.project.palette === undefined) {
+      for (const other of this.difficulties()) {
+        const found = other === row ? null : await loadProject(map.folder, difficultyFile(other)).catch(() => null);
+        if (found?.palette !== undefined && found.palette.length > 0) {
+          this.project.palette = structuredClone(found.palette);
+          break;
+        }
+      }
+    }
     this.selection.clear();
     this.lightSelection.clear();
     this.focus = null;
@@ -1033,6 +1043,20 @@ export class Editor {
       const proxy = this.effectProxy(effect);
       proxies.set(proxy.id, effect);
       candidates.push(proxy);
+      // (a group of events: shown on every row its events are on — the same block)
+      if (effect.kind === 'group') {
+        const seen = new Set([`${String(proxy.type)}|${String(proxy.ids)}|${proxy.target ?? ''}`]);
+        for (const child of project.clips) {
+          if (child.group !== effect.id) continue;
+          const key = `${String(child.type)}|${String(child.ids)}|${child.target ?? ''}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const { target: _target, scope: _scope, ...rest } = proxy;
+          void _target;
+          void _scope;
+          candidates.push({ ...rest, type: child.type, ids: child.ids === null ? null : [...child.ids], ...(child.target === undefined ? {} : { target: child.target }), ...(child.scope === undefined ? {} : { scope: child.scope }) });
+        }
+      }
       // (a GLS block over several groups: shown on each of their rows — the same block)
       for (const lane of effect.gls?.lanes ?? []) {
         const { target: _target, scope: _scope, ...rest } = proxy;
@@ -1596,10 +1620,10 @@ export class Editor {
     return this.project?.clips.filter((clip) => this.selection.has(clip.id)) ?? [];
   }
 
-  select(ids: Iterable<string>, mode: 'replace' | 'add' | 'toggle' = 'replace') {
+  select(ids: Iterable<string>, mode: 'replace' | 'add' | 'toggle' | 'remove' = 'replace') {
     if (mode === 'replace') this.selection = new Set(ids);
     else for (const id of ids) {
-      if (mode === 'toggle' && this.selection.has(id)) this.selection.delete(id);
+      if (mode === 'remove' || (mode === 'toggle' && this.selection.has(id))) this.selection.delete(id);
       else this.selection.add(id);
     }
     this.emit('selection');
@@ -1769,6 +1793,143 @@ export class Editor {
     for (const { clip, row } of placed) this.retarget(clip, lanes[lanes.length - 1 - lanes.indexOf(row)]!);
     this.changed();
     return placed.length;
+  }
+
+  /**
+   * The selected events put on the other side and/or given the other side's colour: left lasers ↔
+   * right ones (and the other left / right pairs: extra lights, laser speeds), a group named "Left…"
+   * ↔ the one named "Right…", other lights mirrored within their row (the first ↔ the last); the
+   * colour: left ↔ right of the scheme. Returns how many changed.
+   */
+  mirrorSides(mode: 'both' | 'side' | 'color'): number {
+    const project = this.project;
+    if (project === null) return 0;
+    const clips = this.selectedClips();
+    const raw = this.selectedRaw();
+    if (clips.length + raw.length === 0) return 0;
+    this.checkpoint();
+    const pairs = new Map<number, number>([[2, 3], [3, 2], [6, 7], [7, 6], [10, 11], [11, 10], [12, 13], [13, 12]]);
+    const side = mode !== 'color';
+    const colour = mode !== 'side';
+    // (a group's mirror: the one whose name has the other side's word in place of this one's)
+    const words: [RegExp, string][] = [
+      [/лев/iu, 'прав'],
+      [/прав/iu, 'лев'],
+      [/left/iu, 'right'],
+      [/right/iu, 'left'],
+    ];
+    const allGroups: LightGroup[] = [];
+    const walk = (list: readonly LightGroup[]) => {
+      for (const group of list) {
+        allGroups.push(group);
+        walk(group.items.filter((item): item is LightGroup => item.kind === 'group'));
+      }
+    };
+    walk(this.groups);
+    const mirrorGroup = (id: string) => {
+      const group = allGroups.find((item) => item.id === id);
+      if (group === undefined) return null;
+      for (const [word, other] of words) {
+        if (!word.test(group.name)) continue;
+        const wanted = group.name.replace(word, (found) => (found[0] === found[0]!.toUpperCase() ? other[0]!.toUpperCase() + other.slice(1) : other)).toLowerCase();
+        const found = allGroups.find((item) => item.id !== id && item.name.toLowerCase() === wanted);
+        if (found !== undefined) return found.id;
+      }
+      return null;
+    };
+    const sideOf = (ref: ClipColor): ClipColor => (ref.ref === 'left' ? { ...ref, ref: 'right' } : ref.ref === 'right' ? { ...ref, ref: 'left' } : ref);
+    for (const clip of clips) {
+      if (side) {
+        if (clip.target !== undefined) {
+          const other = mirrorGroup(clip.target);
+          if (other !== null) clip.target = other;
+        } else {
+          const lights = this.lightsByType.get(clip.type) ?? [];
+          const to = pairs.get(clip.type);
+          if (to !== undefined && (this.lightsByType.get(to)?.length ?? 0) > 0) {
+            // (the same place on the other side: by its place in the row)
+            const others = this.lightsByType.get(to) ?? [];
+            clip.ids = clip.ids === null ? null : clip.ids.map((id) => others[Math.max(0, lights.indexOf(id))] ?? id);
+            clip.type = to;
+          } else if (clip.ids !== null && lights.length > 1) clip.ids = clip.ids.map((id) => (lights.includes(id) ? lights[lights.length - 1 - lights.indexOf(id)]! : id));
+        }
+      }
+      if (colour) {
+        clip.color = sideOf(clip.color);
+        if (clip.endColor !== null) clip.endColor = sideOf(clip.endColor);
+      }
+    }
+    if (side) for (const event of raw) event.type = pairs.get(event.type) ?? event.type;
+    this.changed();
+    return clips.length + raw.length;
+  }
+
+  /** The map's colours. */
+  palette(): Rgb[] {
+    return this.project?.palette ?? [];
+  }
+
+  /** The map's colours changed: in this project (saved with it) and in the other difficulties' ones
+   *  straight away. */
+  setPalette(colors: readonly Rgb[]) {
+    const project = this.project;
+    const map = this.map;
+    if (project === null || map === null) return;
+    const list = colors.map((rgb) => [...rgb] as Rgb);
+    project.palette = list;
+    this.dirty = true;
+    this.emit('selection');
+    const current = this.row === null ? '' : projectFileName(difficultyFile(this.row));
+    void (async () => {
+      for (const name of map.folder.files.filter((item) => /\.(lumatic|chroeditor)\.json$/iu.test(item) && item !== current)) {
+        try {
+          const other = JSON.parse(await map.folder.readText(name)) as Record<string, unknown>;
+          other.palette = list;
+          await map.folder.writeText(name, JSON.stringify(other));
+        } catch {
+          // (not readable: left as it is)
+        }
+      }
+    })();
+  }
+
+  /** A colour copied off an event (its gradient's end and blend with it). */
+  copiedColor: { color: ClipColor; endColor: ClipColor | null; hsv: boolean } | null = null;
+
+  copyColor(clip: LightClip) {
+    this.copiedColor = { color: structuredClone(clip.color), endColor: clip.endColor === null ? null : structuredClone(clip.endColor), hsv: clip.hsv === true };
+    this.setStatus('Цвет скопирован');
+  }
+
+  /** The copied colour put on the selected events. */
+  pasteColor() {
+    const copied = this.copiedColor;
+    const clips = this.selectedClips();
+    if (copied === null || clips.length === 0) return;
+    this.checkpoint();
+    for (const clip of clips) {
+      clip.color = structuredClone(copied.color);
+      clip.endColor = copied.endColor === null ? null : structuredClone(copied.endColor);
+      if (copied.hsv) clip.hsv = true;
+      else delete clip.hsv;
+    }
+    this.changed();
+  }
+
+  /** Every event on the row this one stands on (its own ones). */
+  selectRowOf(clip: LightClip) {
+    const row = this.ownRow(clip);
+    if (row === null) return;
+    this.select(this.rowClips(row).filter((shown) => shown.role === 'own').map((shown) => shown.clip.id));
+  }
+
+  /** Every event of this one's colour (the scheme's same colour, or nearly the same colour of its own). */
+  selectSameColor(clip: LightClip) {
+    const project = this.project;
+    if (project === null) return;
+    const same = (a: ClipColor) => a.ref === clip.color.ref && (a.ref !== 'custom' || (a.rgb ?? [1, 1, 1]).every((v, k) => Math.abs(v - (clip.color.rgb ?? [1, 1, 1])[k]!) < 0.04));
+    const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
+    this.select(project.clips.filter((item) => (item.group === undefined || !hidden.has(item.group)) && same(item.color)).map((item) => item.id));
   }
 
   /** The selected clips and other events mirrored in time over the stretch they cover: what came
@@ -2201,7 +2362,10 @@ export class Editor {
     const effect = id === null ? undefined : this.effectById(id);
     this.openEffect = effect?.id ?? null;
     if (effect !== undefined) {
-      if (effect.target !== undefined) {
+      // (a group's events lie on several rows: none gone into)
+      if (effect.kind === 'group') {
+        // (shown where they are)
+      } else if (effect.target !== undefined) {
         this.focus = effect.target;
         this.buildRows();
       } else if (this.project !== null && !this.project.expanded.includes(effect.type)) {
@@ -2236,6 +2400,48 @@ export class Editor {
       for (const event of this.effectRaw(effect.id)) project.raw.push({ ...structuredClone(event), id: newId('r'), group: copy.id });
       return copy.id;
     });
+  }
+
+  /**
+   * The selected events (plain ones — not an effect's) made one block that looks and moves like an
+   * effect: a group of events named `name`, its events kept as they are (gone into to change them,
+   * taken apart to have them loose again). Returns the group, or null when there was nothing to group.
+   */
+  groupSelection(name: string): Effect | null {
+    const project = this.project;
+    if (project === null) return null;
+    const clips = this.selectedClips().filter((clip) => clip.group === undefined);
+    const raw = this.selectedRaw().filter((event) => event.group === undefined);
+    if (clips.length + raw.length === 0) return null;
+    this.checkpoint();
+    const effect = this.groupOf(name, clips, raw);
+    this.selection = new Set([effect.id]);
+    this.changed();
+    return effect;
+  }
+
+  /** A group made of these events (no undo step of its own). */
+  groupOf(name: string, clips: readonly LightClip[], raw: readonly RawEvent[]): Effect {
+    const first = clips[0];
+    const start = Math.min(...clips.map((clip) => clip.start), ...raw.map((event) => event.beat));
+    const end = Math.max(...clips.map((clip) => clip.end), ...raw.map((event) => event.beat + 0.25));
+    const effect: Effect = {
+      id: newId('e'),
+      name,
+      kind: 'group',
+      type: first?.type ?? raw[0]?.type ?? 0,
+      ids: first?.ids === null || first === undefined ? null : [...first.ids],
+      ...(first?.target === undefined ? {} : { target: first.target }),
+      start,
+      end: Math.max(start + 1 / 16, end),
+      layer: Math.max(1, ...clips.map((clip) => clip.layer)),
+      params: defaultParams(first?.color ?? this.brush.color),
+      custom: true,
+    };
+    this.effects.push(effect);
+    for (const clip of clips) clip.group = effect.id;
+    for (const event of raw) event.group = effect.id;
+    return effect;
   }
 
   /** Takes an effect apart: its events stay as ordinary clips. */

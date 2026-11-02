@@ -14,7 +14,8 @@ import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, t
  * lines — or its lights); on an event type's row, that type's lights by ID.
  */
 
-export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'fire' | 'gls';
+/** 'group': events drawn by hand kept together as one block (a preset's) — always `custom`. */
+export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'fire' | 'gls' | 'group';
 /** fire: how its light goes over its time — coming up, dying down, or just burning. */
 export type FireShape = 'rise' | 'fall' | 'steady';
 export type Direction = 'forward' | 'backward' | 'outward' | 'inward' | 'pingpong';
@@ -113,6 +114,7 @@ export const KIND_NAMES: Record<EffectKind, string> = {
   twinkle: 'Мерцание',
   fire: 'Огонёк',
   gls: 'GLS-группа',
+  group: 'Группа событий',
 };
 
 export function defaultParams(color: ClipColor): EffectParams {
@@ -244,6 +246,8 @@ export function turnHue(color: ClipColor, degrees: number, scheme: SchemeColors)
 }
 
 function buildEffectEvents(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
+  // (a group has no settings to make events from: its own are kept as they are)
+  if (effect.kind === 'group') return { clips: [], raw: [] };
   if (effect.kind === 'gls') {
     const made = generateGls({ boxes: effect.gls?.boxes ?? [] }, effect.start, effect.end, {
       scheme,

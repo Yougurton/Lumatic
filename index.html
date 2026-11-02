@@ -989,6 +989,107 @@
         padding: 0;
         border-radius: 4px;
       }
+      .ins-custom,
+      .ins-dropper {
+        width: 30px;
+        height: 22px;
+        padding: 0;
+        border-radius: 4px;
+        line-height: 1;
+      }
+      .ins-custom.active,
+      .ins-chip.active {
+        outline: 2px solid #fff;
+        outline-offset: 1px;
+      }
+      .ins-palette {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin: 6px 0 2px;
+      }
+      .ins-chip {
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+      }
+      .ins-chip.ins-keep {
+        background: transparent;
+        color: #c9cdd8;
+        font-size: 12px;
+        line-height: 1;
+      }
+      .cp-box {
+        position: fixed;
+        z-index: 140;
+        width: 260px;
+        padding: 10px;
+        background: #1c1e25;
+        border: 1px solid #383b47;
+        border-radius: 10px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+        display: grid;
+        gap: 8px;
+      }
+      .cp-sv {
+        width: 240px;
+        height: 150px;
+        border-radius: 6px;
+        cursor: crosshair;
+        touch-action: none;
+      }
+      .cp-hue {
+        width: 240px;
+        height: 14px;
+        border-radius: 7px;
+        cursor: ew-resize;
+        touch-action: none;
+      }
+      .cp-row,
+      .cp-title,
+      .cp-foot {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .cp-title {
+        justify-content: space-between;
+        font-size: 12px;
+        color: #9aa0ae;
+      }
+      .cp-foot {
+        justify-content: space-between;
+      }
+      .cp-preview {
+        width: 28px;
+        height: 24px;
+        border-radius: 5px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        flex: none;
+      }
+      .cp-hex {
+        width: 80px;
+        font-family: ui-monospace, monospace;
+      }
+      .cp-palette {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-height: 22px;
+      }
+      .cp-chip {
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+      }
+      .cp-empty {
+        font-size: 11px;
+        color: #7d8392;
+      }
       .ins-swatch.active,
       .ins-color input.active {
         outline: 2px solid #fff;

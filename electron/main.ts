@@ -3,6 +3,7 @@ import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { backupFile } from './backup';
+import { pickScreenColor } from './eyedropper';
 import { findAdbServices } from './mdns';
 import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAdb, pair, upload, type UploadOptions } from './quest';
 
@@ -199,6 +200,26 @@ void app.whenReady().then(() => {
     await fs.unlink(file);
   });
   // the Quest: adb, the headsets, Wi-Fi, sending the map
+  // a colour anywhere on the screen (the page's colour pick)
+  ipcMain.handle('pick-screen-color', (event) => pickScreenColor(BrowserWindow.fromWebContents(event.sender)));
+  // another map's saved colours: its folder picked, the palettes in its projects read (only read)
+  ipcMain.handle('palette-from-map', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const picked = owner === null ? await dialog.showOpenDialog({ properties: ['openDirectory'] }) : await dialog.showOpenDialog(owner, { title: say('Карта, из которой взять палитру', 'The map to take the palette from'), properties: ['openDirectory'] });
+    if (picked.canceled || picked.filePaths[0] === undefined) return null;
+    const folder = picked.filePaths[0];
+    const colors: number[][] = [];
+    for (const name of await fs.readdir(folder)) {
+      if (!/\.(lumatic|chroeditor)\.json$/iu.test(name)) continue;
+      try {
+        const project = JSON.parse(await fs.readFile(path.join(folder, name), 'utf8')) as { palette?: unknown };
+        if (Array.isArray(project.palette)) for (const rgb of project.palette) if (Array.isArray(rgb) && rgb.length === 3 && rgb.every((v) => typeof v === 'number')) colors.push(rgb as number[]);
+      } catch {
+        // (not a project after all)
+      }
+    }
+    return { name: path.basename(folder), colors };
+  });
   ipcMain.handle('quest-find-adb', (_event, picked?: string) => findAdb(picked));
   ipcMain.handle('quest-download-adb', () => downloadAdb());
   ipcMain.handle('quest-pick-adb', async () => {

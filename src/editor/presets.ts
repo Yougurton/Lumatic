@@ -164,7 +164,14 @@ export function insertPreset(editor: Editor, preset: Preset, at: number) {
     project.raw.push(copy);
     added.push(copy.id);
   }
-  editor.selection = new Set(added);
+  // its loose events: one group, named as the preset (the effects stay effects)
+  const loose = project.clips.filter((clip) => added.includes(clip.id) && clip.group === undefined);
+  const looseRaw = project.raw.filter((event) => added.includes(event.id) && event.group === undefined);
+  if (loose.length + looseRaw.length > 0) {
+    const group = editor.groupOf(preset.name, loose, looseRaw);
+    const grouped = new Set([...loose.map((clip) => clip.id), ...looseRaw.map((event) => event.id)]);
+    editor.selection = new Set([...added.filter((id) => !grouped.has(id)), group.id]);
+  } else editor.selection = new Set(added);
   editor.changed();
 }
 
@@ -181,6 +188,8 @@ export class PresetPanel {
       this.presets = loadPresets();
       this.render();
     });
+    // (asked for from the timeline's menu)
+    window.addEventListener('lumatic-save-preset', () => void this.saveSelection());
     this.render();
   }
 
@@ -200,7 +209,9 @@ export class PresetPanel {
     this.presets = [preset, ...loadPresets()];
     storePresets(this.presets);
     this.render();
-    this.editor.setStatus(`Пресет «${name}» сохранён`);
+    // the events it was made of: one group now, named as the preset
+    const group = this.editor.groupSelection(name);
+    this.editor.setStatus(group === null ? `Пресет «${name}» сохранён` : `Пресет «${name}» сохранён, его события собраны в группу`);
   }
 
   render() {

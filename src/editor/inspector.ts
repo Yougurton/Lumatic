@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
 import { tr } from './i18n';
+import { openColorPick, pickFromScreen } from './color-pick';
 import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
@@ -71,10 +72,6 @@ function toHex(rgb: Rgb) {
   return `#${rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
 }
 
-function fromHex(hex: string): Rgb {
-  const n = Number.parseInt(hex.slice(1), 16);
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
 
 export class Inspector {
   constructor(private readonly editor: Editor, private readonly root: HTMLElement) {
@@ -262,7 +259,7 @@ export class Inspector {
       });
       root.append(name);
     }
-    if (effects.some((item) => item.custom === true)) {
+    if (effects.some((item) => item.custom === true && item.kind !== 'group')) {
       const note = document.createElement('div');
       note.className = 'ins-warn';
       note.textContent = 'События эффекта изменены вручную — настройки ниже к ним не применяются.';
@@ -288,6 +285,17 @@ export class Inspector {
     action('▶ Проиграть', 'Проиграть эффект по кругу в окне просмотра', () => editor.startTrial({ clips: [], raw: [], start: Math.min(...effects.map((item) => item.start)), end: Math.max(...effects.map((item) => item.end)) }));
     if (effects.length === 1) action('Разобрать', 'Превратить эффект в обычные события', () => editor.explodeEffect(effect.id));
     root.append(actions);
+
+    // a group of events: nothing to set — its events are what they are
+    if (effects.every((item) => item.kind === 'group')) {
+      const note = document.createElement('div');
+      note.className = 'ins-note';
+      const clips = effects.reduce((sum, item) => sum + editor.effectChildren(item.id).length, 0);
+      const raw = effects.reduce((sum, item) => sum + editor.effectRaw(item.id).length, 0);
+      note.textContent = tr('Группа событий: {0} событий света{1}. «Войти» — править их по одному, «Разобрать» — снова отдельные события; тянется и двигается целиком, как эффект.', clips, raw > 0 ? ' ' + tr('и {0} других', raw) : '');
+      root.append(note);
+      return;
+    }
 
     if (effects.every((item) => item.kind === 'gls')) {
       root.append(this.drumField('Слой', effect.layer, 1, (value) => editor.updateEffects((item) => (item.layer = Math.max(0, Math.round(value))))));
@@ -763,13 +771,56 @@ export class Inspector {
       mark.title = 'Здесь включён буст цветов: цвета схемы в игре — цвета буста (свой цвет Chroma буст не меняет)';
       wrap.append(mark);
     }
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.title = 'Свой цвет (Chroma)';
-    custom.className = color.ref === 'custom' ? 'active' : '';
-    custom.value = toHex(color.ref === 'custom' ? (color.rgb ?? [1, 1, 1]) : refs.find(([ref]) => ref === color.ref)?.[2] ?? [1, 1, 1]);
-    custom.addEventListener('change', () => change({ ...color, ref: 'custom', rgb: fromHex(custom.value) }));
+    // a colour of one's own: the editor's own pick (square, hues, pipette, the map's palette)
+    const shown: Rgb = color.ref === 'custom' ? (color.rgb ?? [1, 1, 1]) : (refs.find(([ref]) => ref === color.ref)?.[2] ?? [1, 1, 1]);
+    const custom = document.createElement('button');
+    custom.type = 'button';
+    custom.title = 'Свой цвет (Chroma): квадрат, оттенки, пипетка, палитра карты';
+    custom.className = `ins-custom${color.ref === 'custom' ? ' active' : ''}`;
+    custom.style.background = color.ref === 'custom' ? toHex(shown) : 'conic-gradient(#f44, #fd4, #4f6, #4df, #46f, #f4d, #f44)';
+    const pickOptions = {
+      palette: () => this.editor.palette(),
+      setPalette: (colors: Rgb[]) => this.editor.setPalette(colors),
+    };
+    custom.addEventListener('click', () => openColorPick(custom, shown, { ...pickOptions, apply: (rgb) => change({ ...color, ref: 'custom', rgb }) }));
     wrap.append(custom);
+    const dropper = document.createElement('button');
+    dropper.type = 'button';
+    dropper.className = 'ins-dropper';
+    dropper.textContent = '💧';
+    dropper.title = 'Пипетка: цвет с любого места экрана (Esc — отмена)';
+    dropper.addEventListener('click', () => {
+      void pickFromScreen().then((rgb) => {
+        if (rgb !== null) change({ ...color, ref: 'custom', rgb });
+      });
+    });
+    wrap.append(dropper);
+    // the map's palette: a click puts the colour on; ＋ keeps this one in it
+    const palette = document.createElement('div');
+    palette.className = 'ins-palette';
+    for (const rgb of this.editor.palette()) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = `ins-chip${color.ref === 'custom' && toHex(color.rgb ?? [1, 1, 1]) === toHex(rgb) ? ' active' : ''}`;
+      chip.style.background = toHex(rgb);
+      chip.title = `${toHex(rgb).toUpperCase()} — из палитры карты. ПКМ — убрать`;
+      chip.addEventListener('click', () => change({ ...color, ref: 'custom', rgb: [...rgb] }));
+      chip.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        this.editor.setPalette(this.editor.palette().filter((item) => item !== rgb));
+      });
+      palette.append(chip);
+    }
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.className = 'ins-chip ins-keep';
+    keep.textContent = '＋';
+    keep.title = 'Сохранить этот цвет в палитру карты';
+    keep.addEventListener('click', () => {
+      const list = this.editor.palette();
+      if (!list.some((item) => toHex(item) === toHex(shown))) this.editor.setPalette([...list, [...shown]]);
+    });
+    palette.append(keep);
     const brightness = document.createElement('input');
     brightness.type = 'range';
     brightness.min = '0';
@@ -786,7 +837,7 @@ export class Inspector {
     line.className = 'ins-bright';
     line.append(brightness, value);
     const box = document.createElement('div');
-    box.append(wrap, line);
+    box.append(wrap, palette, line);
     return box;
   }
 

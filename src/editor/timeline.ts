@@ -230,13 +230,25 @@ export class Timeline {
   }
 
   /** A group's row clicked: its lights picked (they flash) — and, when a stretch of the song is picked,
-   *  its own events in it selected; clicked again, with them still selected: nothing selected. */
-  private pickRow(row: Row, lights: string[], parent: string | null = null) {
+   *  its own events in it selected; clicked again, with them still selected: nothing selected.
+   *  `add` (Ctrl / Shift): its lights and events added to what's picked — or, picked already, taken
+   *  out of it. */
+  private pickRow(row: Row, lights: string[], parent: string | null = null, add = false) {
     const editor = this.editor;
     const range = editor.songRange;
     // (no stretch of the song picked: only its lights, as before)
     if (range === null) {
-      editor.selectLights(lights, 'replace', parent);
+      editor.selectLights(lights, add ? 'add' : 'replace', parent);
+      return;
+    }
+    if (add) {
+      const from = Math.min(range.start, range.end);
+      const to = Math.max(range.start, range.end);
+      const ids = [...new Set(editor.rowClips(row).filter((shown) => shown.role === 'own' && shown.clip.end > from + 1e-9 && shown.clip.start < to - 1e-9).map((shown) => shown.clip.id))];
+      const all = ids.length > 0 && ids.every((id) => editor.selection.has(id));
+      editor.select(ids, all ? 'remove' : 'add');
+      editor.selectLights(lights, 'add', parent);
+      editor.setStatus(all ? `Снято с выделения: ${String(ids.length)}` : `Выделено событий в куске: ${String(editor.selection.size)}`);
       return;
     }
     const from = range === null ? -Infinity : Math.min(range.start, range.end);
@@ -1359,21 +1371,40 @@ export class Timeline {
   }
 
   /** What can be done with what is picked: mirrored, copied, deleted. */
-  private selectionMenu(x: number, y: number) {
+  /** `clicked`: the event right-clicked (its colour copied, its row's events picked…). */
+  private selectionMenu(x: number, y: number, clicked: LightClip | null = null) {
     const editor = this.editor;
     const count = editor.selection.size;
     const clips = editor.selectedClips().length;
     const lanes = editor.selectionLanes();
+    const sides = clips + editor.selectedRaw().length === 0;
+    const mirrored = (mode: 'both' | 'side' | 'color') => () => editor.setStatus(`Отзеркалено: ${String(editor.mirrorSides(mode))}`);
+    const own = clicked !== null && editor.clipById(clicked.id) !== undefined ? clicked : null;
     showMenu(x, y, [
       { label: `Выделено: ${String(count)}`, heading: true },
+      { label: 'Копировать цвет', disabled: clicked === null, action: () => clicked !== null && editor.copyColor(clicked) },
+      { label: 'Вставить цвет', hint: clips > 0 ? `в ${String(clips)}` : '', disabled: editor.copiedColor === null || clips === 0, action: () => editor.pasteColor() },
+      null,
+      { label: 'На другую сторону и другим цветом', hint: 'лево ↔ право', disabled: sides, action: mirrored('both') },
+      { label: 'Только на другую сторону', hint: 'цвет тот же', disabled: sides, action: mirrored('side') },
+      { label: 'Только другим цветом', hint: 'левый ↔ правый', disabled: clips === 0, action: mirrored('color') },
       { label: 'Зеркально по строкам', hint: 'первая строка ↔ последняя', disabled: lanes < 2, action: () => {
         const moved = editor.mirrorAcrossRows();
         editor.setStatus(`Отзеркалено по строкам: ${String(moved)} событий`);
       } },
       { label: 'Зеркально во времени', hint: 'начало ↔ конец', disabled: clips + editor.selectedRaw().length === 0, action: () => editor.mirrorInTime() },
       null,
-      { label: 'Изменить свет…', hint: 'яркость, оттенок, градиент', disabled: clips === 0, action: () => adjustDialog(editor) },
+      { label: 'Выделить всю строку', hint: 'события этой строки', disabled: own === null, action: () => own !== null && editor.selectRowOf(own) },
+      { label: 'Выделить такого же цвета', disabled: own === null, action: () => own !== null && editor.selectSameColor(own) },
       { label: 'Выделить по условиям…', action: () => selectByDialog(editor) },
+      { label: 'Изменить свет…', hint: 'яркость, оттенок, градиент', disabled: clips === 0, action: () => adjustDialog(editor) },
+      null,
+      { label: 'Собрать в группу…', hint: 'один блок, как эффект', disabled: clips + editor.selectedRaw().length === 0, action: () => {
+        void ask('Название группы', 'Группа').then((name) => {
+          if (name !== null && editor.groupSelection(name) !== null) editor.setStatus(`Группа «${name}»`);
+        });
+      } },
+      { label: 'Сохранить в пресеты…', hint: 'и собрать в группу', action: () => window.dispatchEvent(new Event('lumatic-save-preset')) },
       null,
       { label: 'Копировать', hint: 'Ctrl+C', action: () => editor.copy() },
       { label: 'Дублировать', hint: 'Ctrl+D', action: () => editor.duplicateSelection() },
@@ -1783,8 +1814,8 @@ export class Timeline {
         text(row.lights.length > 0 ? String(row.lights.length) : '', 'th-count'),
       );
       item.title = 'Клик — выбрать его лампы; если выделен кусок песни — ещё и выделить его события в куске (ещё клик — снять). ПКМ — действия';
-      item.addEventListener('click', () => {
-        if (!this.headerDragged) this.pickRow(row, editor.rowLights(row).map((light) => lightKey(light.type, light.id)));
+      item.addEventListener('click', (event) => {
+        if (!this.headerDragged) this.pickRow(row, editor.rowLights(row).map((light) => lightKey(light.type, light.id)), null, event.ctrlKey || event.metaKey || event.shiftKey);
       });
       item.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -1823,8 +1854,8 @@ export class Timeline {
       );
       if (editor.focus !== group.id) item.append(enter);
       item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выбрать её лампы; если выделен кусок песни — ещё и выделить её события в куске (ещё клик — снять); двойной — войти, ПКМ — действия`;
-      item.addEventListener('click', () => {
-        if (!this.headerDragged) this.pickRow(row, lights.map((light) => lightKey(light.type, light.id)), row.parent);
+      item.addEventListener('click', (event) => {
+        if (!this.headerDragged) this.pickRow(row, lights.map((light) => lightKey(light.type, light.id)), row.parent, event.ctrlKey || event.metaKey || event.shiftKey);
       });
       item.addEventListener('dblclick', () => editor.enterGroup(group.id));
       item.addEventListener('contextmenu', (event) => {
@@ -2005,7 +2036,7 @@ export class Timeline {
       if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) {
         if (this.notesMode) return;
         const hit = this.hit(x, y);
-        if (hit !== null && this.editor.selection.has(hitId(hit))) this.selectionMenu(event.clientX, event.clientY);
+        if (hit !== null && this.editor.selection.has(hitId(hit))) this.selectionMenu(event.clientX, event.clientY, 'clip' in hit ? hit.clip : null);
         else if (hit === null) this.pasteMenu(event.clientX, event.clientY, x, y);
         return;
       }
@@ -2152,13 +2183,9 @@ export class Timeline {
       const under = this.rowAt(y);
       if (under !== null && isLightRow(under.row)) this.editor.setActiveRow(under.row.key);
       if (event.button === 2) {
-        // right click: on something picked — a menu (opened on contextmenu: a menu opened here would
-        // close at once); on anything else — deleted
-        if (hit !== null && this.editor.selection.has(hitId(hit))) return;
-        if (hit !== null) {
-          this.editor.select([hitId(hit)]);
-          this.editor.deleteSelection();
-        }
+        // right click: on an event — it picked (if it wasn't), and a menu of what can be done with
+        // the picked ones (opened on contextmenu: a menu opened here would close at once)
+        if (hit !== null && !this.editor.selection.has(hitId(hit))) this.editor.select([hitId(hit)]);
         return;
       }
       if (hit === null) {
