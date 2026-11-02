@@ -8,7 +8,8 @@ import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, ty
 import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
-import { groupHue, lightGroupName } from './names';
+import { classicGroupName, groupHue, lightGroupName } from './names';
+import { tr } from './i18n';
 import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
@@ -1813,7 +1814,7 @@ export class Timeline {
         text(row.label, 'th-name'),
         text(row.lights.length > 0 ? String(row.lights.length) : '', 'th-count'),
       );
-      item.title = 'Клик — выбрать его лампы; если выделен кусок песни — ещё и выделить его события в куске (ещё клик — снять). ПКМ — действия';
+      item.title = `${tr('Группа света (тип событий {0}; в других окружениях — «{1}»).', row.type, classicGroupName(row.type))} ${tr('Клик — выбрать его лампы; если выделен кусок песни — ещё и выделить его события в куске (ещё клик — снять). ПКМ — действия')}`;
       item.addEventListener('click', (event) => {
         if (!this.headerDragged) this.pickRow(row, editor.rowLights(row).map((light) => lightKey(light.type, light.id)), null, event.ctrlKey || event.metaKey || event.shiftKey);
       });

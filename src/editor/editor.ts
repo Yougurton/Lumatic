@@ -42,7 +42,7 @@ import { writeMapColors, type MapColors } from './map-colors';
 import { colorSchemeForDifficulty, parseInfo, type InfoColorScheme } from '../engine/core/beatmap/info';
 import { findBandFlux } from './audio-tools';
 import { BANDS } from './onsets';
-import { lightGroupName, otherEventName } from './names';
+import { lightGroupName, otherEventName, setEnvironmentTracks } from './names';
 import type { MapFolder } from './platform';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
@@ -439,6 +439,8 @@ export class Editor {
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);
+    // (the rows named as the environment names its light groups)
+    setEnvironmentTracks(this.preview.environmentData()?.eventTracks);
     this.lightInfo = this.preview.lights();
     this.zoomInfo = this.preview.ringSystems().flatMap((system) => {
       const position = system.position;

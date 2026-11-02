@@ -200,8 +200,10 @@ function bakeLight(clips: readonly BakeClip[], scheme: SchemeColors, secondsPerB
       const handOver = next !== undefined && next.start <= clip.end + 1e-9;
       const { frames, cut } = withBlend(clipKeyframes(clip, scheme, until, handOver, beatsPerSecond), clip);
       const end = cut ? until : clip.end;
-      // the layers below don't show while it lasts
-      kept = kept.filter((frame) => frame.beat < clip.start - 1e-9 || frame.beat >= end - 1e-9);
+      // the layers below don't show while it lasts — but a transition of theirs ending right where it
+      // starts stays: it is how they got there (a fade out finishing as this one comes on; without
+      // it the light would stay fully lit up to here)
+      kept = kept.filter((frame) => frame.beat < clip.start - 1e-9 || (frame.kind === 'trans' && frame.beat <= clip.start + 1e-9) || frame.beat >= end - 1e-9);
       if (!cut && !handOver && clip.endMode !== 'stay' && below.length > 0) {
         const under = stateAt(below, end, secondsPerBeat);
         if (under !== null) {
