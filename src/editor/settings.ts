@@ -72,6 +72,8 @@ export interface Settings {
   /** Copies of the difficulty before it's overwritten, in the map's "Lumatic backups" folder: how many
    *  to keep (0: none). */
   backups: number;
+  /** The song's Ogg Vorbis quality when a map's song is made (Vorbis's -1…10; 6 ≈ 192 kbit/s). */
+  oggQuality: number;
   /** The format of a new map's difficulty. */
   newFormat: '2' | '3';
 }
@@ -112,6 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autosave: 0,
   backups: 5,
   newFormat: '3',
+  oggQuality: 6,
 };
 
 const STORAGE = 'lumatic.settings';

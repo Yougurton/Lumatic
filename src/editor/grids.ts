@@ -15,6 +15,14 @@ export const GRIDS: [number, string][] = [
   [0, 'без сетки'],
 ];
 
+/** The next grid finer or coarser — among the halves, or among the triplets when it is one. */
+export function nextGrid(current: number, finer: boolean): number {
+  const triplet = current > 0 && Math.abs(Math.log2(current) - Math.round(Math.log2(current))) > 1e-6;
+  const family = GRIDS.map(([value]) => value).filter((value) => value > 0 && (Math.abs(Math.log2(value) - Math.round(Math.log2(value))) > 1e-6) === triplet);
+  const at = family.findIndex((value) => Math.abs(value - current) < 1e-9);
+  return family[Math.min(family.length - 1, Math.max(0, (at < 0 ? family.indexOf(0.25) : at) + (finer ? 1 : -1)))]!;
+}
+
 // ----- what the wheel turns: a drum or a slider picked a moment ago -------------------------------------
 
 /** The control picked last (its key) and until when the wheel still turns it: 5 s after it was last
@@ -381,4 +389,27 @@ export function drum(spec: DrumSpec): HTMLElement {
   });
   new ResizeObserver(() => layout()).observe(root);
   return root;
+}
+
+/** Ogg Vorbis qualities offered: the setting and about how many kbit/s it is for a stereo song. */
+export const OGG_QUALITIES: [number, string][] = [
+  [3, '3 · ~112 кбит/с'],
+  [4, '4 · ~128 кбит/с'],
+  [5, '5 · ~160 кбит/с'],
+  [6, '6 · ~192 кбит/с'],
+  [7, '7 · ~224 кбит/с'],
+  [8, '8 · ~256 кбит/с'],
+  [9, '9 · ~320 кбит/с'],
+  [10, '10 · ~500 кбит/с'],
+];
+
+/** A drum for the Ogg quality (the setting kept). */
+export function oggQualityDrum(value: number, change: (value: number) => void) {
+  return drum({
+    key: 'ogg-quality',
+    count: OGG_QUALITIES.length,
+    label: (index) => OGG_QUALITIES[index]![1],
+    initial: Math.max(0, OGG_QUALITIES.findIndex(([quality]) => quality === value)),
+    change: (index) => change(OGG_QUALITIES[index]![0]),
+  });
 }

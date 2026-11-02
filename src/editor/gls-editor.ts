@@ -1,7 +1,7 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import type { Effect } from './effects';
-import { beatsLabel, drum, numberDrum } from './grids';
+import { beatsLabel, drum, GRIDS, nextGrid, numberDrum } from './grids';
 import { showMenu } from './menu';
 import { addPreset, presetFromSelection } from './presets';
 import { defaultFilter, filterFor, filterUnits, glsNeededLength, pointsToBlocks, spreadOf, type GlsBlock, type GlsLane, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
@@ -43,6 +43,8 @@ const STROBES = [0, 1, 2, 4, 8, 16, 32];
 
 export class GlsEditor {
   private shade: HTMLElement | null = null;
+  /** The picked box's settings, shown where the effects library is while the block is edited. */
+  private side: HTMLElement | null = null;
   private effectId = '';
   private boxId: string | null = null;
   private eventId: string | null = null;
@@ -130,6 +132,13 @@ export class GlsEditor {
     shade.className = 'gls-dock';
     document.body.append(shade);
     this.shade = shade;
+    const library = document.getElementById('library');
+    if (library !== null) {
+      this.side = document.createElement('div');
+      this.side.className = 'gls-side-panel';
+      library.classList.add('gls-side');
+      library.append(this.side);
+    }
     this.place();
     window.addEventListener('resize', this.resizeHandler);
     window.addEventListener('keydown', this.keyHandler, true);
@@ -155,6 +164,11 @@ export class GlsEditor {
     if (this.shade === null) return;
     this.shade.remove();
     this.shade = null;
+    this.side?.remove();
+    this.side = null;
+    document.getElementById('library')?.classList.remove('gls-side');
+    this.editor.glsInspect = null;
+    this.editor.emit('selection');
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.resizeHandler);
     window.removeEventListener('keydown', this.keyHandler, true);
@@ -170,11 +184,15 @@ export class GlsEditor {
     if (dock === null || timeline === null) return;
     const rect = timeline.getBoundingClientRect();
     const height = Math.max(420, rect.height);
+    // (the inspector on the right stays in sight: the picked block is edited there)
+    const inspector = document.getElementById('inspector')?.getBoundingClientRect();
+    const right = inspector !== undefined && inspector.width > 0 ? inspector.left : rect.right;
     dock.style.left = `${String(rect.left)}px`;
     dock.style.top = `${String(Math.min(rect.top, window.innerHeight - height))}px`;
-    dock.style.width = `${String(rect.width)}px`;
+    dock.style.width = `${String(Math.max(320, right - rect.left))}px`;
     dock.style.height = `${String(height)}px`;
   }
+
 
   private onKey(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
@@ -372,21 +390,56 @@ export class GlsEditor {
     const shade = this.shade;
     const effect = this.effect();
     if (shade === null || effect === undefined) return;
-    if (holdWhileTyping(shade, () => this.render())) return;
+    if (holdWhileTyping(shade, () => this.render()) || (this.side !== null && holdWhileTyping(this.side, () => this.render()))) return;
     const scroll = [...shade.querySelectorAll<HTMLElement>('.gls-col')].map((col) => col.scrollTop);
+    const sideScroll = this.side?.scrollTop ?? 0;
     // (a drum being turned with the keys keeps the focus in its new self)
-    const focused = document.activeElement instanceof HTMLElement && shade.contains(document.activeElement) ? document.activeElement.dataset.wheelKey : undefined;
+    const active = document.activeElement;
+    const focused = active instanceof HTMLElement && (shade.contains(active) || this.side?.contains(active) === true) ? active.dataset.wheelKey : undefined;
     shade.replaceChildren();
     const dialog = document.createElement('div');
     dialog.className = 'gls-dialog';
     dialog.append(this.header(effect), scrubStrip(this.editor, () => this.effect() ?? null));
     const body = document.createElement('div');
     body.className = 'gls-body';
-    body.append(this.boxList(effect), this.boxSettings(), this.laneColumn(effect));
+    body.append(this.boxList(effect), this.laneColumn(effect));
     dialog.append(body, this.result(effect));
     shade.append(dialog);
+    // the picked box's settings: where the effects are while the block is edited
+    if (this.side !== null) {
+      const box = this.box();
+      const lane = this.laneOf(box?.id);
+      const title = Object.assign(document.createElement('div'), { className: 'gls-side-title', textContent: box === undefined || lane === undefined ? 'GLS' : `${lane.name} · ${String(lane.boxes.indexOf(box) + 1)}. ${box.kind === 'color' ? 'Свет' : 'Кольца'}` });
+      this.side.replaceChildren(title, this.boxSettings());
+      this.side.scrollTop = sideScroll;
+    }
     [...shade.querySelectorAll<HTMLElement>('.gls-col')].forEach((col, index) => (col.scrollTop = scroll[index] ?? 0));
-    if (focused !== undefined) shade.querySelector<HTMLElement>(`[data-wheel-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+    if (focused !== undefined) (shade.querySelector<HTMLElement>(`[data-wheel-key="${CSS.escape(focused)}"]`) ?? this.side?.querySelector<HTMLElement>(`[data-wheel-key="${CSS.escape(focused)}"]`))?.focus({ preventScroll: true });
+    // the picked block (or ring turn): in the inspector on the right, as a clip is
+    this.inspect();
+  }
+
+  /** What the inspector on the right shows: the picked block, a ring turn — or the brush. */
+  private inspect() {
+    const box = this.box();
+    const block = box?.kind === 'color' ? box.blocks?.find((item) => item.id === this.eventId) : undefined;
+    const turn = box?.kind === 'rotation' ? box.rotations.find((item) => item.id === this.eventId) : undefined;
+    if (block !== undefined) {
+      this.editor.glsInspect = {
+        block: {
+          source: { ...block, fadeIn: block.fadeIn, start: block.start, end: block.end },
+          apply: (change) =>
+            this.changeBox((item) => {
+              const target = item.blocks?.find((entry) => entry.id === block.id);
+              if (target !== undefined) change(target);
+            }),
+          remove: () => this.deleteEvent(),
+        },
+      };
+    } else if (turn !== undefined) {
+      this.editor.glsInspect = { render: (root) => root.append(heading('Поворот колец'), this.rotationEventPanel(turn)) };
+    } else this.editor.glsInspect = {};
+    this.editor.emit('selection');
   }
 
   private header(effect: Effect) {
@@ -784,10 +837,9 @@ export class GlsEditor {
   private laneColumn(effect: Effect) {
     const col = document.createElement('div');
     col.className = 'gls-col gls-lane-col';
-    const box = this.box();
-    if (box === undefined) return col;
-    const title = heading(box.kind === 'color' ? 'События коробки' : 'Повороты');
-    const record = button(this.recording ? '⏺ Запись идёт' : '⏺ Запись', 'Запись по тапам (R): блок играет по кругу, T — поставить событие (держите — горит, пока держите; коротко — вспышка)', () => this.toggleRecording());
+    const current = this.box();
+    const title = heading('События коробок');
+    const record = button(this.recording ? '⏺ Запись идёт' : '⏺ Запись', 'Запись по тапам (R) в выбранную коробку: блок играет по кругу, T — поставить событие (держите — горит, пока держите; коротко — вспышка)', () => this.toggleRecording());
     record.classList.add('gls-record');
     record.classList.toggle('active', this.recording);
     title.append(record, this.zoomButtons(effect));
@@ -795,100 +847,32 @@ export class GlsEditor {
     const hint = document.createElement('div');
     hint.className = 'gls-note';
     hint.textContent = this.recording
-      ? 'Запись: жмите T в такт — держите, пока свет должен гореть; коротко — вспышка. Встаёт на сетку. R — остановить запись.'
-      : box.kind === 'color'
-        ? 'Протяните по пустому месту — новый блок (как кисть света справа); за блок — сдвинуть, за край — растянуть; Delete — удалить. Ctrl+колесо — масштаб. R — запись по тапам.'
-        : 'Клик — новый поворот, перетаскивание — сдвинуть, Delete — удалить. Поворот длится до следующего. Ctrl+колесо — масштаб.';
+      ? 'Запись в выбранную коробку: жмите T в такт — держите, пока свет должен гореть; коротко — вспышка. Встаёт на сетку. R — остановить.'
+      : 'Протяните по пустому месту — новый блок (кистью справа); за блок — сдвинуть, за край — растянуть; Delete — удалить. Alt+колесо — сетка, Ctrl+колесо — масштаб. Кольца: клик — поворот.';
     col.append(hint);
-    const canvas = document.createElement('canvas');
-    canvas.className = 'gls-lane';
-    col.append(canvas);
-    requestAnimationFrame(() => this.drawLane(canvas, effect, box));
-    this.bindLane(canvas, effect, box);
-    if (box.kind === 'color') {
-      const block = box.blocks?.find((item) => item.id === this.eventId);
-      if (block !== undefined) col.append(this.blockPanel(block));
-    } else {
-      const event = box.rotations.find((item) => item.id === this.eventId);
-      if (event !== undefined) col.append(this.rotationEventPanel(event));
+    this.laneCanvases.clear();
+    // every box of every group: a lane each, the picked one marked
+    for (const lane of this.lanes(effect)) {
+      lane.boxes.forEach((box, index) => {
+        const row = document.createElement('div');
+        row.className = `gls-lane-row${box.id === current?.id ? ' active' : ''}`;
+        const name = document.createElement('div');
+        name.className = 'gls-lane-name';
+        name.textContent = `${lane.name} · ${String(index + 1)}. ${box.kind === 'color' ? 'Свет' : 'Кольца'}${box.link !== undefined ? ' 🔗' : ''}`;
+        name.addEventListener('click', () => {
+          this.boxId = box.id;
+          this.eventId = null;
+          this.render();
+        });
+        const canvas = document.createElement('canvas');
+        canvas.className = 'gls-lane';
+        row.append(name, canvas);
+        col.append(row);
+        requestAnimationFrame(() => this.drawLane(canvas, effect, box));
+        this.bindLane(canvas, effect, box);
+      });
     }
     return col;
-  }
-
-  /** The picked block: its colour (and the gradient's), brightness, how it comes on and goes, a strobe. */
-  private blockPanel(block: GlsBlock) {
-    const panel = document.createElement('div');
-    panel.className = 'gls-event gls-block-panel';
-    const set = (patch: (item: GlsBlock) => void) =>
-      this.changeBox((box) => {
-        const item = box.blocks?.find((entry) => entry.id === block.id);
-        if (item !== undefined) patch(item);
-      });
-    const colors = this.editor.preview.colors;
-    const refs: [ClipColor['ref'], string, readonly number[]][] = [
-      ['left', 'Красный (левый)', colors.environmentLeft],
-      ['right', 'Синий (правый)', colors.environmentRight],
-      ['white', 'Белый', colors.environmentWhite],
-    ];
-    /** Colour swatches for the start (or the gradient's end) colour. */
-    const swatches = (color: ClipColor, pick: (color: ClipColor) => void) => {
-      const row = document.createElement('div');
-      row.className = 'gls-swatches';
-      for (const [ref, title, rgb] of refs) {
-        const swatch = button('', title, () => pick({ ref, brightness: color.brightness }));
-        swatch.className = `ins-swatch${color.ref === ref ? ' active' : ''}`;
-        swatch.style.background = hex(rgb as Rgb);
-        row.append(swatch);
-      }
-      const custom = document.createElement('input');
-      custom.type = 'color';
-      custom.title = 'Свой цвет (Chroma)';
-      custom.value = hex(color.ref === 'custom' ? (color.rgb ?? [1, 1, 1]) : ((refs.find(([ref]) => ref === color.ref)?.[2] as Rgb | undefined) ?? [1, 1, 1]));
-      if (color.ref === 'custom') custom.classList.add('active');
-      custom.addEventListener('change', () => pick({ ref: 'custom', rgb: fromHex(custom.value), brightness: color.brightness }));
-      row.append(custom);
-      return row;
-    };
-    const head = document.createElement('div');
-    head.className = 'gls-block-head';
-    head.append(
-      Object.assign(document.createElement('b'), { textContent: `Блок ${beatsLabel(block.start)}–${beatsLabel(block.end)}` }),
-      button('🗑', 'Удалить блок (Delete)', () => this.deleteEvent()),
-    );
-    panel.append(head);
-    const colorsRow = document.createElement('div');
-    colorsRow.className = 'gls-block-colors';
-    colorsRow.append(swatches(block.color, (color) => set((item) => (item.color = color))));
-    const gradient = button(block.endColor === null ? '→ градиент' : '→', block.endColor === null ? 'Градиент к концу блока: другой цвет и яркость в конце' : 'Убрать градиент', () =>
-      set((item) => (item.endColor = item.endColor === null ? { ...item.color, ref: item.color.ref === 'left' ? 'right' : 'left' } : null)),
-    );
-    gradient.classList.toggle('active', block.endColor !== null);
-    colorsRow.append(gradient);
-    if (block.endColor !== null) colorsRow.append(swatches(block.endColor, (color) => set((item) => (item.endColor = color))));
-    panel.append(colorsRow);
-    panel.append(slider(block.endColor === null ? 'Яркость' : 'Яркость в начале', block.color.brightness, 0, 1.5, 0.05, (value) => set((item) => (item.color = { ...item.color, brightness: value }))));
-    if (block.endColor !== null) panel.append(slider('Яркость в конце', block.endColor.brightness, 0, 1.5, 0.05, (value) => set((item) => (item.endColor = { ...item.endColor!, brightness: value }))));
-    const starts: [GlsBlock['startMode'], string][] = [
-      ['on', 'Сразу'],
-      ['flash', 'Вспышка'],
-      ['fadeIn', 'Из темноты'],
-      ['fade', 'Затухающая (игры)'],
-    ];
-    const ends: [GlsBlock['endMode'], string][] = [
-      ['off', 'Погаснуть'],
-      ['fade', 'Затухнуть'],
-      ['stay', 'Оставить'],
-    ];
-    const modes = document.createElement('div');
-    modes.className = 'gls-block-modes';
-    modes.append(
-      labeled('Начало', drum({ key: `gls-start:${block.id}`, count: starts.length, label: (index) => starts[index]![1], initial: Math.max(0, starts.findIndex(([mode]) => mode === block.startMode)), change: (index) => set((item) => (item.startMode = starts[index]![0])) })),
-      labeled('Конец', drum({ key: `gls-end:${block.id}`, count: ends.length, label: (index) => ends[index]![1], initial: Math.max(0, ends.findIndex(([mode]) => mode === block.endMode)), change: (index) => set((item) => (item.endMode = ends[index]![0])) })),
-    );
-    panel.append(modes);
-    if (block.startMode === 'fadeIn') panel.append(labeled('Разгорается, долей', numberDrum(`gls-fadein:${block.id}`, block.fadeIn, (value) => set((item) => (item.fadeIn = Math.max(1 / 64, value))), { step: 1 / 16, min: 1 / 16, max: 16, beats: true })));
-    panel.append(labeled('Строб, вспышек в долю', drum({ key: `gls-strobe:${block.id}`, count: STROBES.length, label: (index) => (STROBES[index] === 0 ? 'Нет' : String(STROBES[index])), initial: Math.max(0, STROBES.indexOf(block.strobe)), change: (index) => set((item) => (item.strobe = STROBES[index]!)) })));
-    return panel;
   }
 
   private rotationEventPanel(event: GlsRotationEvent) {
@@ -959,8 +943,9 @@ export class GlsEditor {
     const effect = this.effect();
     const box = this.box();
     if (effect === undefined) return;
-    const lane = this.shade?.querySelector<HTMLCanvasElement>('canvas.gls-lane');
-    if (lane !== undefined && lane !== null && box !== undefined) this.drawLane(lane, effect, box);
+    void box;
+    // (each lane its own box: drawn as they were bound)
+    for (const canvas of this.shade?.querySelectorAll<HTMLCanvasElement>('canvas.gls-lane') ?? []) canvas.dispatchEvent(new Event('gls-redraw'));
     const result = this.shade?.querySelector<HTMLCanvasElement>('canvas.gls-result-canvas');
     if (result !== undefined && result !== null) this.drawResult(result, effect);
   }
@@ -975,7 +960,16 @@ export class GlsEditor {
         if (effect === undefined) return;
         event.preventDefault();
         const x = event.clientX - canvas.getBoundingClientRect().left;
-        if (event.ctrlKey || event.metaKey) this.zoomView(effect, Math.exp(event.deltaY * 0.0015), beatAt(x));
+        if (event.altKey) {
+          // the grid a step finer or coarser (as on the timeline)
+          this.gridWheel += event.deltaY;
+          if (Math.abs(this.gridWheel) < 40) return;
+          this.editor.snap = nextGrid(this.editor.snap, this.gridWheel < 0);
+          this.gridWheel = 0;
+          this.editor.setStatus(`Сетка: ${GRIDS.find(([value]) => Math.abs(value - this.editor.snap) < 1e-9)?.[1] ?? ''}`);
+          this.editor.emit('selection');
+          this.redrawViews();
+        } else if (event.ctrlKey || event.metaKey) this.zoomView(effect, Math.exp(event.deltaY * 0.0015), beatAt(x));
         else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
           const { from, to } = this.shown(effect);
           this.panView(effect, ((event.deltaX !== 0 ? event.deltaX : event.deltaY) / Math.max(1, canvas.clientWidth)) * (to - from));
@@ -987,6 +981,8 @@ export class GlsEditor {
       { passive: false },
     );
   }
+
+  private gridWheel = 0;
 
   /** −, +, ⤢ for the lane and the result. */
   private zoomButtons(effect: Effect) {
@@ -1213,28 +1209,37 @@ export class GlsEditor {
         }
       });
     }
-    this.laneCanvas = { canvas, image: ctx.getImageData(0, 0, canvas.width, canvas.height), effect };
+    this.laneCanvases.set(canvas, { image: ctx.getImageData(0, 0, canvas.width, canvas.height), effect });
   }
 
-  private laneCanvas: { canvas: HTMLCanvasElement; image: ImageData; effect: Effect } | null = null;
+  private laneCanvases = new Map<HTMLCanvasElement, { image: ImageData; effect: Effect }>();
 
-  /** The song's cursor over the box's lane (drawn every frame over its picture). */
+  /** The song's cursor over the boxes' lanes (drawn every frame over their pictures). */
   private drawLanePlayhead() {
-    const lane = this.laneCanvas;
-    if (lane === null || !lane.canvas.isConnected) return;
-    const ctx = lane.canvas.getContext('2d')!;
-    ctx.putImageData(lane.image, 0, 0);
-    const g = this.laneGeometry(lane.canvas, lane.effect);
-    const x = g.toX(this.editor.playhead() - lane.effect.start);
-    if (x < 0 || x > g.width) return;
-    const ratio = window.devicePixelRatio || 1;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.fillStyle = '#ff4d6d';
-    ctx.fillRect(x, 0, 1.5, g.height);
+    for (const [canvas, lane] of this.laneCanvases) {
+      if (!canvas.isConnected) continue;
+      const ctx = canvas.getContext('2d')!;
+      ctx.putImageData(lane.image, 0, 0);
+      const g = this.laneGeometry(canvas, lane.effect);
+      const x = g.toX(this.editor.playhead() - lane.effect.start);
+      if (x < 0 || x > g.width) continue;
+      const ratio = window.devicePixelRatio || 1;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.fillStyle = '#ff4d6d';
+      ctx.fillRect(x, 0, 1.5, g.height);
+    }
   }
 
   private bindLane(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
     this.bindZoom(canvas, (x) => this.laneGeometry(canvas, this.effect() ?? effect).toBeat(x));
+    canvas.addEventListener('gls-redraw', () => this.drawLane(canvas, this.effect() ?? effect, box));
+    // (a lane of another box: that box picked first — and drawn so)
+    canvas.addEventListener('mousedown', () => {
+      if (this.boxId === box.id) return;
+      this.boxId = box.id;
+      this.eventId = null;
+      for (const row of this.shade?.querySelectorAll('.gls-lane-row') ?? []) row.classList.toggle('active', row.contains(canvas));
+    });
     const local = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };

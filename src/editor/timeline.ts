@@ -11,7 +11,7 @@ import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, typ
 import { groupHue, lightGroupName } from './names';
 import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
 import { settings } from './settings';
-import { GRIDS } from './grids';
+import { GRIDS, nextGrid } from './grids';
 import { NotesLanes } from './notes-timeline';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
@@ -43,13 +43,7 @@ const PLAY_ROOM = 74;
 /** The grids offered (beats; 0: none) — down to 1/64, triplets too. */
 export { GRIDS } from './grids';
 
-/** The next grid finer or coarser — among the halves, or among the triplets when it is one. */
-export function nextGrid(current: number, finer: boolean): number {
-  const triplet = current > 0 && Math.abs(Math.log2(current) - Math.round(Math.log2(current))) > 1e-6;
-  const family = GRIDS.map(([value]) => value).filter((value) => value > 0 && (Math.abs(Math.log2(value) - Math.round(Math.log2(value))) > 1e-6) === triplet);
-  const at = family.findIndex((value) => Math.abs(value - current) < 1e-9);
-  return family[Math.min(family.length - 1, Math.max(0, (at < 0 ? family.indexOf(0.25) : at) + (finer ? 1 : -1)))]!;
-}
+export { nextGrid } from './grids';
 
 /** The playback speed's range. */
 export const MIN_RATE = 0.1;

@@ -1,3 +1,4 @@
+import { settings } from './settings';
 import type { AudioReply, AudioRequest } from './audio-worker';
 import type { BpmResult } from './bpm-detect';
 import type { BandFlux } from './onsets';
@@ -57,7 +58,7 @@ export async function findBandFlux(buffer: AudioBuffer, bands: [number, number][
 
 /** The song as Ogg Vorbis with `silence` seconds in front of it. */
 export async function encodeOgg(buffer: AudioBuffer, silence: number, onProgress?: (done: number) => void): Promise<Uint8Array> {
-  const reply = await run({ kind: 'ogg', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, silence: Math.max(0, silence), quality: 6 }, onProgress);
+  const reply = await run({ kind: 'ogg', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, silence: Math.max(0, silence), quality: Math.max(-1, Math.min(10, settings().oggQuality)) }, onProgress);
   if (reply.kind !== 'ogg') throw new Error('unexpected reply');
   return reply.data;
 }

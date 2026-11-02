@@ -85,6 +85,9 @@ export class Inspector {
 
   /** The values shown: the first selected clip's (or the brush). */
   private current(): { clips: LightClip[]; source: Omit<LightClip, 'id' | 'type' | 'ids' | 'start' | 'end'> & { start?: number; end?: number } } {
+    // (a GLS block's block picked: it)
+    const gls = this.editor.glsInspect?.block;
+    if (gls !== undefined) return { clips: [], source: { ...gls.source, layer: 0 } };
     const clips = this.editor.selectedClips();
     const first = clips[0];
     if (first !== undefined) return { clips, source: first };
@@ -93,6 +96,11 @@ export class Inspector {
   }
 
   private apply(change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; layer: number; hsv?: boolean }) => void) {
+    const gls = this.editor.glsInspect?.block;
+    if (gls !== undefined) {
+      gls.apply((target) => change(target as Parameters<typeof change>[0]));
+      return;
+    }
     if (this.editor.selection.size > 0 && this.editor.selectedClips().length > 0) this.editor.updateSelected((clip) => change(clip));
     else {
       change(this.editor.brush);
@@ -125,17 +133,25 @@ export class Inspector {
       bar.append(text, out);
       root.append(bar);
     }
+    // the GLS editor's own (a ring turn)
+    const gls = this.editor.glsInspect;
+    if (gls?.render !== undefined) {
+      gls.render(root);
+      return;
+    }
     const effects = this.editor.selectedEffects();
-    if (effects.length > 0 && this.editor.selectedClips().length === 0) {
+    // (while a GLS block is edited with nothing of it picked: the brush its new blocks are drawn with)
+    if (gls === null && effects.length > 0 && this.editor.selectedClips().length === 0) {
       this.renderEffects(effects);
       return;
     }
     const { clips, source } = this.current();
     const rawSelected = (this.editor.project?.raw ?? []).filter((event) => this.editor.selection.has(event.id));
     const title = document.createElement('h3');
-    title.textContent = clips.length > 0 ? (clips.length === 1 ? 'Событие света' : `Выбрано: ${String(clips.length)}`) : rawSelected.length > 0 ? 'Другие события' : 'Кисть (новые события)';
+    const block = gls?.block;
+    title.textContent = block !== undefined ? 'Блок GLS' : clips.length > 0 ? (clips.length === 1 ? 'Событие света' : `Выбрано: ${String(clips.length)}`) : rawSelected.length > 0 ? 'Другие события' : 'Кисть (новые события)';
     root.append(title);
-    if (clips.length === 0 && rawSelected.length > 0) {
+    if (block === undefined && clips.length === 0 && rawSelected.length > 0) {
       this.renderRaw(rawSelected as RawEvent[]);
       return;
     }
@@ -168,6 +184,22 @@ export class Inspector {
       hsvBox.addEventListener('change', () => this.apply((target) => (target.hsv = hsvBox.checked)));
       hsv.append(hsvBox, ' Через оттенки (HSV)');
       root.append(hsv);
+    }
+    if (block !== undefined) {
+      // a GLS block's block: its strobe, where it is, and away with it
+      const strobes: [string, string, string][] = [0, 1, 2, 4, 8, 16, 32].map((value) => [String(value), value === 0 ? 'Нет' : String(value), value === 0 ? 'Без строба' : `${String(value)} вспышек в долю`]);
+      root.append(this.section('Строб', this.buttons(strobes, String(block.source.strobe), (value) => block.apply((target) => (target.strobe = Number(value))))));
+      root.append(
+        this.numberField('Начало, доля блока', block.source.start, this.editor.snap || 0.25, (value) => block.apply((target) => (target.start = Math.max(0, Math.min(value, target.end - 1 / 64))))),
+        this.numberField('Конец, доля блока', block.source.end, this.editor.snap || 0.25, (value) => block.apply((target) => (target.end = Math.max(value, target.start + 1 / 64)))),
+      );
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '🗑 Удалить блок';
+      remove.title = 'Delete';
+      remove.addEventListener('click', () => block.remove());
+      root.append(remove);
+      return;
     }
     root.append(this.numberField('Слой', source.layer, 1, (value) => this.apply((target) => (target.layer = Math.max(0, Math.round(value))))));
     if (clips.length === 1) {

@@ -10,7 +10,8 @@ import type { BpmResult } from './bpm-detect';
 import { createMapFolder, type MapFolder } from './platform';
 import { previewPicker, type PreviewPicker } from './song-picker';
 import { computeSpectrogram } from './spectrogram';
-import { settings as editorSettings } from './settings';
+import { setSettings as setEditorSettings, settings as editorSettings } from './settings';
+import { oggQualityDrum } from './grids';
 
 /**
  * "New map": a song (any audio file) → a map folder Beat Saber opens — the song as Ogg Vorbis
@@ -219,6 +220,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
               <label>Автор карты<input type="text" data-id="mapper"></label>
             </div>
             <div class="nm-dim">Обложка: <span data-id="cover">нарисую сам</span></div>
+            <div class="nm-row nm-ogg" title="Песня переводится в Ogg Vorbis: выше — лучше звук и больше файл (6 — обычно достаточно)"><span class="nm-dim">Качество песни (ogg)</span><span data-id="ogg"></span></div>
           </div>
         </div>
         <div class="nm-cols">
@@ -275,6 +277,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     el('silence-preview').append(startView.element);
     let spectrogram: Spectrogram | null = null;
     el<HTMLInputElement>('mapper').value = defaultMapper;
+    el('ogg').append(oggQualityDrum(editorSettings().oggQuality, (quality) => setEditorSettings({ oggQuality: quality })));
 
     let audio: AudioBuffer | null = null;
     let detected: BpmResult | null = null;

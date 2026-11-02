@@ -113,6 +113,16 @@ export interface Brush {
 
 type Listener = (what: 'all' | 'clips' | 'selection' | 'time' | 'rows' | 'lights') => void;
 
+/** See `Editor.glsInspect`. */
+export interface GlsInspect {
+  block?: {
+    source: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number };
+    apply: (change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number; layer?: number }) => void) => void;
+    remove: () => void;
+  };
+  render?: (root: HTMLElement) => void;
+}
+
 export class Editor {
   map: LoadedMap | null = null;
   row: DifficultyRow | null = null;
@@ -2060,6 +2070,10 @@ export class Editor {
 
   /** Opens a GLS block's editor (set by the app). */
   glsEditorHook: ((id: string) => void) | null = null;
+
+  /** While a GLS block is edited: what the inspector on the right shows instead of the brush — the
+   *  picked block (edited as a clip is), or something of its own (a ring turn). */
+  glsInspect: GlsInspect | null = null;
 
   /** Changes one effect (one undo step) and makes its events anew. */
   updateEffect(id: string, patch: (effect: Effect) => void) {
