@@ -153,6 +153,16 @@ export class GlsEditor {
         if (this.tap !== null) this.tapUp(effect.end - effect.start);
         this.editor.seek(Math.max(0, effect.start - 0.5), true);
       }
+      // (zoomed in: the lanes follow the song's cursor when it goes out of sight)
+      if (effect !== undefined && this.view !== null) {
+        const at = this.editor.playhead() - effect.start;
+        const { from, to } = this.view;
+        if ((at < from || at > to) && at > -1 && at < effect.end - effect.start + 1) {
+          const span = to - from;
+          this.view = { from: at - span * 0.1, to: at + span * 0.9 };
+          this.redrawViews();
+        }
+      }
       this.drawResultPlayhead();
       this.drawLanePlayhead();
       this.raf = requestAnimationFrame(tick);
@@ -654,102 +664,119 @@ export class GlsEditor {
     return col;
   }
 
+  /** The box panel's tab: which elements (and how the game's filter has it) or the spreads. */
+  private sideTab: 'elements' | 'spread' = 'elements';
+
   private boxSettings() {
     const col = document.createElement('div');
     col.className = 'gls-col gls-settings';
     const box = this.box();
     if (box === undefined) return col;
-    if (box.kind === 'color') {
-      const effect = this.effect()!;
-      const count = this.itemsOfBox(box).length;
-      col.append(heading('Какие элементы'));
-      col.append(this.lampPicker(effect, box));
-      // the usual picks, one click
-      const quick = document.createElement('div');
-      quick.className = 'gls-quick';
-      const pick = (label: string, title: string, elements: (index: number) => boolean) =>
-        quick.append(
-          button(label, title, () =>
-            this.changeBox((item) => (item.filter = filterFor(Array.from({ length: count }, (_, index) => index).filter(elements), count, item.filter))),
-          ),
-        );
-      const picked = new Set(filterUnits({ ...box.filter, limit: 1, random: box.filter.random === 'pick' ? 'none' : box.filter.random }, count).flat());
-      pick('Все', 'Все элементы', () => true);
-      pick('1, 3, 5…', 'Через один, с первого', (index) => index % 2 === 0);
-      pick('2, 4, 6…', 'Через один, со второго', (index) => index % 2 === 1);
-      pick('◧ ½', 'Первая половина', (index) => index < Math.ceil(count / 2));
-      pick('½ ◨', 'Вторая половина', (index) => index >= Math.floor(count / 2));
-      pick('⇄', 'Наоборот: невыбранные', (index) => !picked.has(index));
-      col.append(quick);
-      col.append(labeled('Порядок', this.orderDrum(box)));
-      // the game's own settings, for exact work: folded away
-      const more = document.createElement('details');
-      more.className = 'gls-more';
-      more.open = this.moreOpen;
-      more.addEventListener('toggle', () => (this.moreOpen = more.open));
-      more.append(Object.assign(document.createElement('summary'), { textContent: 'Точнее (как в игре)' }));
-      const kinds: ['division' | 'step' | 'custom', string][] = [
-        ['division', 'Секции'],
-        ['step', 'Шаг и сдвиг'],
-        ['custom', 'Выбранные'],
-      ];
-      more.append(
-        labeled(
-          'Фильтр',
-          drum({
-            key: `gls-filter-type:${box.id}`,
-            count: kinds.length,
-            label: (index) => kinds[index]![1],
-            initial: Math.max(0, kinds.findIndex(([kind]) => kind === box.filter.type)),
-            change: (index) =>
-              this.changeBox((item) => {
-                const kind = kinds[index]![0];
-                if (kind === 'custom') item.filter.elements = filterUnits({ ...item.filter, reverse: false, order: 'line', random: 'none', limit: 1 }, count).flat();
-                item.filter.type = kind;
-              }),
-          }),
-        ),
-      );
-      if (box.filter.type === 'division') {
-        more.append(
-          labeled('Секций', numberDrum(`gls-sections:${box.id}`, box.filter.sections, (value) => this.changeBox((item) => (item.filter.sections = Math.max(1, Math.round(value)))), { step: 1, min: 1, max: Math.max(2, count) })),
-          labeled('Номер секции', numberDrum(`gls-section:${box.id}`, box.filter.section + 1, (value) => this.changeBox((item) => (item.filter.section = Math.max(0, Math.round(value) - 1))), { step: 1, min: 1, max: Math.max(1, box.filter.sections) })),
-        );
-      } else if (box.filter.type === 'step') {
-        more.append(
-          labeled('Шаг (0 — один)', numberDrum(`gls-step:${box.id}`, box.filter.step, (value) => this.changeBox((item) => (item.filter.step = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: Math.max(1, count) })),
-          labeled('Сдвиг (с какого)', numberDrum(`gls-offset:${box.id}`, box.filter.offset + 1, (value) => this.changeBox((item) => (item.filter.offset = Math.max(0, Math.round(value) - 1))), { step: 1, min: 1, max: Math.max(1, count) })),
-        );
-      }
-      more.append(labeled('Куски (0 — нет)', numberDrum(`gls-chunks:${box.id}`, box.filter.chunks, (value) => this.changeBox((item) => (item.filter.chunks = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: Math.max(1, count) })));
-      more.append(labeled('Сколько взять, %', numberDrum(`gls-limit:${box.id}`, Math.round(box.filter.limit * 100), (value) => this.changeBox((item) => (item.filter.limit = Math.min(1, Math.max(0.01, value / 100)))), { step: 5, min: 5, max: 100 })));
-      more.append(check('Случайные элементы (не все)', box.filter.random === 'pick', (on) => this.changeBox((item) => (item.filter.random = on ? 'pick' : 'none'))));
-      if (box.filter.random !== 'none') more.append(button('🎲 Другой случай', 'Другое случайное распределение', () => this.changeBox((item) => (item.filter.seed = Math.floor(Math.random() * 1e6)))));
-      col.append(more);
-    } else {
-      col.append(heading('Кольца'));
+    // tabs, as the library's
+    const tabs = document.createElement('div');
+    tabs.className = 'lib-tabs gls-side-tabs';
+    for (const [key, label] of [
+      ['elements', box.kind === 'color' ? 'Элементы' : 'Кольца'],
+      ['spread', 'Распределение'],
+    ] as const) {
+      const tab = Object.assign(document.createElement('button'), { type: 'button', textContent: label });
+      tab.classList.toggle('active', this.sideTab === key);
+      tab.addEventListener('click', () => {
+        this.sideTab = key;
+        this.render();
+      });
+      tabs.append(tab);
+    }
+    col.append(tabs);
+    if (this.sideTab === 'elements') this.elementsTab(col, box);
+    else this.spreadTab(col, box);
+    return col;
+  }
+
+  /** Which elements the box lights and in what order — the lamps, the order, the game's own filter. */
+  private elementsTab(col: HTMLElement, box: GlsBox) {
+    if (box.kind !== 'color') {
       const systems = this.editor.preview.ringSystems().filter((system) => system.rotates);
-      col.append(labeled('Какие', select([['', 'Все кольца'], ...systems.map((system): [string, string] => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`])], box.rings, (value) => this.changeBox((item) => (item.rings = value)))));
+      col.append(labeled('Какие кольца', select([['', 'Все кольца'], ...systems.map((system): [string, string] => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`])], box.rings, (value) => this.changeBox((item) => (item.rings = value)))));
       const note = document.createElement('div');
       note.className = 'gls-note';
       note.textContent = 'Вращение крутит все кольца выбранной системы (так устроены события колец Chroma). Лазеры классических окружений поворачивать событиями нельзя.';
       col.append(note);
+      return;
     }
-    col.append(heading('Распределение по времени'));
+    const effect = this.effect()!;
+    const count = this.itemsOfBox(box).length;
+    col.append(this.lampPicker(effect, box));
+    const picked = new Set(filterUnits({ ...box.filter, limit: 1, random: box.filter.random === 'pick' ? 'none' : box.filter.random }, count).flat());
+    const invert = button('⇄ Инвертировать', 'Выбрать невыбранные лампы, а выбранные снять', () =>
+      this.changeBox((item) => (item.filter = filterFor(Array.from({ length: count }, (_, index) => index).filter((index) => !picked.has(index)), count, item.filter))),
+    );
+    invert.className = 'gls-invert';
+    col.append(invert);
+    // the order: a list
+    col.append(heading('Порядок'));
+    col.append(this.orderList(box));
+    if (box.filter.random !== 'none') {
+      const seed = document.createElement('div');
+      seed.className = 'gls-seed';
+      seed.append(
+        labeled('Сид случайности', numberInput(box.filter.seed, 1, (value) => this.changeBox((item) => (item.filter.seed = Math.max(0, Math.round(value)))))),
+        button('🎲', 'Другой случайный сид', () => this.changeBox((item) => (item.filter.seed = Math.floor(Math.random() * 1e6)))),
+      );
+      col.append(seed);
+    }
+    // the game's own filter, for exact work (not folded away)
+    col.append(heading('Фильтр (как в игре)'));
+    const kinds: ['division' | 'step' | 'custom', string][] = [
+      ['division', 'Секции'],
+      ['step', 'Шаг и сдвиг'],
+      ['custom', 'Выбранные'],
+    ];
+    col.append(
+      toggle(
+        kinds.map(([kind, label]) => [kind, label]),
+        box.filter.type,
+        (kind) =>
+          this.changeBox((item) => {
+            if (kind === 'custom') item.filter.elements = filterUnits({ ...item.filter, reverse: false, order: 'line', random: 'none', limit: 1 }, count).flat();
+            item.filter.type = kind;
+          }),
+      ),
+    );
+    if (box.filter.type === 'division') {
+      col.append(
+        labeled('Секций', numberDrum(`gls-sections:${box.id}`, box.filter.sections, (value) => this.changeBox((item) => (item.filter.sections = Math.max(1, Math.round(value)))), { step: 1, min: 1, max: Math.max(2, count) })),
+        labeled('Номер секции', numberDrum(`gls-section:${box.id}`, box.filter.section + 1, (value) => this.changeBox((item) => (item.filter.section = Math.max(0, Math.round(value) - 1))), { step: 1, min: 1, max: Math.max(1, box.filter.sections) })),
+      );
+    } else if (box.filter.type === 'step') {
+      col.append(
+        labeled('Шаг (0 — один)', numberDrum(`gls-step:${box.id}`, box.filter.step, (value) => this.changeBox((item) => (item.filter.step = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: Math.max(1, count) })),
+        labeled('Сдвиг (с какого)', numberDrum(`gls-offset:${box.id}`, box.filter.offset + 1, (value) => this.changeBox((item) => (item.filter.offset = Math.max(0, Math.round(value) - 1))), { step: 1, min: 1, max: Math.max(1, count) })),
+      );
+    }
+    col.append(labeled('Куски (0 — нет)', numberDrum(`gls-chunks:${box.id}`, box.filter.chunks, (value) => this.changeBox((item) => (item.filter.chunks = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: Math.max(1, count) })));
+    col.append(labeled('Сколько взять, %', numberDrum(`gls-limit:${box.id}`, Math.round(box.filter.limit * 100), (value) => this.changeBox((item) => (item.filter.limit = Math.min(1, Math.max(0.01, value / 100)))), { step: 5, min: 5, max: 100 })));
+    col.append(check('Случайные элементы (не все)', box.filter.random === 'pick', (on) => this.changeBox((item) => (item.filter.random = on ? 'pick' : 'none'))));
+  }
+
+  /** How the box's events spread over its elements: in time, in brightness (angle), in hue. */
+  private spreadTab(col: HTMLElement, box: GlsBox) {
+    col.append(heading('По времени'));
     col.append(toggle(spreads(), box.beatSpread, (value) => this.changeBox((item) => (item.beatSpread = value))));
     col.append(labeled(box.beatSpread === 'wave' ? 'Волна на всех, долей' : 'Шаг на элемент, долей', numberDrum(`gls-beat:${box.id}`, box.beatValue, (value) => this.changeBox((item) => (item.beatValue = Math.max(0, value))), { step: 1 / 16, min: 0, max: 64, beats: true })));
-    col.append(heading(box.kind === 'color' ? 'Распределение яркости' : 'Распределение угла'));
+    col.append(heading(box.kind === 'color' ? 'По яркости и оттенку' : 'По углу'));
     col.append(toggle(spreads(), box.valueSpread, (value) => this.changeBox((item) => (item.valueSpread = value))));
-    col.append(labeled(box.kind === 'color' ? (box.valueSpread === 'wave' ? 'Последнему элементу +' : 'Каждому следующему +') : box.valueSpread === 'wave' ? 'Последнему кольцу, °' : 'Каждому кольцу, °', box.kind === 'color' ? numberDrum(`gls-value:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 0.05, min: -1.5, max: 1.5, digits: 2 }) : numberDrum(`gls-angle:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 5, min: -360, max: 360 })));
+    const wave = box.valueSpread === 'wave';
     if (box.kind === 'color') {
+      col.append(labeled(wave ? 'Яркость последнему элементу +' : 'Яркость каждому следующему +', numberDrum(`gls-value:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 0.05, min: -1.5, max: 1.5, digits: 2 })));
+      col.append(slider(wave ? 'Оттенок последнему элементу, °' : 'Оттенок каждому следующему, °', box.hueSpread ?? 0, -360, 360, 5, (value) => this.changeBox((item) => (item.hueSpread = value))));
+      col.append(labeled('Сглаживание', select(EASINGS, box.easing, (value) => this.changeBox((item) => (item.easing = value)))));
       const tip = document.createElement('div');
       tip.className = 'gls-note';
-      tip.textContent = 'Или тяните ручку ◆ на дорожке событий: вправо — дольше волна, вверх/вниз — ярче/тусклее последний элемент.';
+      tip.textContent = 'Или тяните ручку ◆ на дорожке событий: вправо — дольше волна, вверх/вниз — ярче/тусклее последний элемент. Градиент по радуге внутри блока — справа, «Градиент к концу» + «Через оттенки».';
       col.append(tip);
-    }
-    if (box.kind === 'color') col.append(labeled('Сглаживание', select(EASINGS, box.easing, (value) => this.changeBox((item) => (item.easing = value)))));
+    } else col.append(labeled(wave ? 'Последнему кольцу, °' : 'Каждому кольцу, °', numberDrum(`gls-angle:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 5, min: -360, max: 360 })));
     col.append(check('Затрагивать первое событие', box.affectFirst, (on) => this.changeBox((item) => (item.affectFirst = on))));
-    return col;
   }
 
   private moreOpen = false;
@@ -808,30 +835,31 @@ export class GlsEditor {
     return wrap;
   }
 
-  /** The order the box's events go over its elements: a drum. */
-  private orderDrum(box: GlsBox) {
-    const options: ['line' | 'reverse' | 'outward' | 'inward' | 'shuffle', string][] = [
-      ['line', '→ По порядку'],
-      ['reverse', '← Обратно'],
-      ['outward', '↔ От центра'],
-      ['inward', '→← К центру'],
-      ['shuffle', '🔀 Вперемешку'],
+  /** The order the box's events go over its elements: a list. */
+  private orderList(box: GlsBox) {
+    const options: ['line' | 'reverse' | 'outward' | 'inward' | 'shuffle', string, string][] = [
+      ['line', '→ По порядку', 'Как идут элементы группы'],
+      ['reverse', '← Обратно', 'С последнего к первому'],
+      ['outward', '↔ От центра', 'Из середины к краям, симметричные пары вместе'],
+      ['inward', '→← К центру', 'С краёв к середине, симметричные пары вместе'],
+      ['shuffle', '🔀 Вперемешку', 'В случайном порядке (сид — ниже)'],
     ];
     const f = box.filter;
     const current = f.random === 'shuffle' ? 'shuffle' : f.order === 'outward' || f.order === 'inward' ? f.order : f.reverse ? 'reverse' : 'line';
-    return drum({
-      key: `gls-order:${box.id}`,
-      count: options.length,
-      label: (index) => options[index]![1],
-      initial: Math.max(0, options.findIndex(([value]) => value === current)),
-      change: (index) =>
-        this.changeBox((item) => {
-          const value = options[index]![0];
-          item.filter.random = value === 'shuffle' ? 'shuffle' : item.filter.random === 'shuffle' ? 'none' : item.filter.random;
-          item.filter.order = value === 'outward' || value === 'inward' ? value : 'line';
-          item.filter.reverse = value === 'reverse';
+    const list = document.createElement('div');
+    list.className = 'gls-order';
+    for (const [value, label, title] of options) {
+      const item = button(label, title, () =>
+        this.changeBox((target) => {
+          target.filter.random = value === 'shuffle' ? 'shuffle' : target.filter.random === 'shuffle' ? 'none' : target.filter.random;
+          target.filter.order = value === 'outward' || value === 'inward' ? value : 'line';
+          target.filter.reverse = value === 'reverse';
         }),
-    });
+      );
+      item.classList.toggle('active', value === current);
+      list.append(item);
+    }
+    return list;
   }
 
   private laneColumn(effect: Effect) {
@@ -1058,6 +1086,31 @@ export class GlsEditor {
     return points;
   }
 
+  /** What of a block is at a point of the lane (null: none). */
+  private blockZone(g: ReturnType<GlsEditor['laneGeometry']>, blocks: GlsBlock[], point: { x: number; y: number }): { block: GlsBlock; zone: 'startLevel' | 'endLevel' | 'level' | 'start' | 'end' | 'move' } | null {
+    const scale = this.laneScale(g.height);
+    const ordered = [...blocks].sort((a, b) => (a.id === this.eventId ? -1 : b.id === this.eventId ? 1 : 0));
+    const { x: px, y: py } = point;
+    for (const block of ordered) {
+      const x0 = g.toX(block.start);
+      const x1 = g.toX(block.end);
+      if (px < x0 - 6 || px > x1 + 6) continue;
+      const y0 = scale.y(block.color.brightness);
+      const y1 = scale.y((block.endColor ?? block.color).brightness);
+      const wide = x1 - x0 > 16;
+      if (wide && Math.abs(px - x0) <= 7 && Math.abs(py - y0) <= 7) return { block, zone: 'startLevel' };
+      if (wide && Math.abs(px - x1) <= 7 && Math.abs(py - y1) <= 7) return { block, zone: 'endLevel' };
+      if (px > x0 + 4 && px < x1 - 4) {
+        const topY = y0 + ((y1 - y0) * (px - x0)) / Math.max(1, x1 - x0);
+        if (Math.abs(py - topY) <= 5) return { block, zone: 'level' };
+      }
+      if (x1 - x0 > 8 && Math.abs(px - x0) <= 5) return { block, zone: 'start' };
+      if (x1 - x0 > 8 && Math.abs(px - x1) <= 5) return { block, zone: 'end' };
+      if (px >= x0 && px <= x1) return { block, zone: 'move' };
+    }
+    return null;
+  }
+
   private drawLane(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
     if (!canvas.isConnected || canvas.clientWidth === 0) return;
     const ratio = window.devicePixelRatio || 1;
@@ -1118,7 +1171,10 @@ export class GlsEditor {
           ctx.clip();
           ctx.fillStyle = 'rgba(0,0,0,0.45)';
           const period = 1 / block.strobe;
-          for (let beat = block.start + period / 2; beat < block.end; beat += period) ctx.fillRect(g.toX(beat), top, Math.max(1, g.toX(beat + period / 2) - g.toX(beat)), bottom - top);
+          const duty = block.strobeDuty ?? 0.5;
+          if (block.strobeWith === 'color' && block.strobeColor !== undefined) ctx.fillStyle = rgba(resolveRgb(block.strobeColor, scheme), 0.55);
+          else if (block.strobeWith === 'dim') ctx.fillStyle = `rgba(0,0,0,${String(0.45 * (1 - (block.strobeDim ?? 0.3)))})`;
+          for (let beat = block.start + period * duty; beat < block.end; beat += period) ctx.fillRect(g.toX(beat), top, Math.max(1, g.toX(beat + period * (1 - duty)) - g.toX(beat)), bottom - top);
           ctx.restore();
         }
         const selected = block.id === this.eventId;
@@ -1187,7 +1243,7 @@ export class GlsEditor {
       const turns = [...box.rotations].sort((a, b) => a.beat - b.beat);
       turns.forEach((event, index) => {
         const x0 = g.toX(event.beat);
-        const x1 = g.toX(Math.min(turns[index + 1]?.beat ?? event.beat + 2, Math.max(g.length, event.beat + 0.25)));
+        const x1 = g.toX(event.beat + turnLength(turns, index));
         const selected = event.id === this.eventId;
         const cy = (top + bottom) / 2;
         ctx.fillStyle = selected ? 'rgba(183,140,255,0.45)' : 'rgba(183,140,255,0.25)';
@@ -1233,6 +1289,13 @@ export class GlsEditor {
   private bindLane(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
     this.bindZoom(canvas, (x) => this.laneGeometry(canvas, this.effect() ?? effect).toBeat(x));
     canvas.addEventListener('gls-redraw', () => this.drawLane(canvas, this.effect() ?? effect, box));
+    // (the mouse shows what a drag would do)
+    canvas.addEventListener('mousemove', (event) => {
+      if (event.buttons !== 0 || box.kind !== 'color') return;
+      const rect = canvas.getBoundingClientRect();
+      const zone = this.blockZone(this.laneGeometry(canvas, this.effect() ?? effect), box.blocks ?? [], { x: event.clientX - rect.left, y: event.clientY - rect.top });
+      canvas.style.cursor = zone === null ? 'crosshair' : zone.zone === 'move' ? 'grab' : zone.zone === 'start' || zone.zone === 'end' ? 'ew-resize' : 'ns-resize';
+    });
     // (a lane of another box: that box picked first — and drawn so)
     canvas.addEventListener('mousedown', () => {
       if (this.boxId === box.id) return;
@@ -1276,7 +1339,10 @@ export class GlsEditor {
       const { x } = point;
       // the spread handle: dragged — sideways the time spread, up and down the brightness spread
       const knob = this.spreadKnob(canvas, effect, box);
-      if (knob !== null && Math.hypot(point.x - knob.x, point.y - knob.y) <= 9) {
+      // (a block's corner or top right there wins, unless the handle is right under the mouse)
+      const under = box.kind === 'color' ? this.blockZone(g, box.blocks ?? [], point) : null;
+      const onKnob = knob === null ? Infinity : Math.hypot(point.x - knob.x, point.y - knob.y);
+      if (knob !== null && onKnob <= 9 && (under === null || under.zone === 'move' || onKnob <= 4)) {
         const scale = this.laneScale(g.height);
         const original = { beatValue: box.beatValue, value: box.value };
         const step = this.editor.snap > 0 ? this.editor.snap : 1 / 16;
@@ -1303,45 +1369,67 @@ export class GlsEditor {
       const beat = g.toBeat(x);
       if (box.kind === 'color') {
         const blocks = box.blocks ?? [];
-        // a block's end (stretch), its body (move) — the selected one first
-        const near = (block: GlsBlock) => Math.min(Math.abs(g.toX(block.start) - x), Math.abs(g.toX(block.end) - x));
-        const ordered = [...blocks].sort((a, b) => (a.id === this.eventId ? -1 : b.id === this.eventId ? 1 : 0));
-        const edge = ordered.find((block) => near(block) <= 5 && g.toX(block.end) - g.toX(block.start) > 8);
-        const body = ordered.find((block) => beat >= block.start && beat <= block.end);
-        const hit = edge ?? body;
-        if (hit !== undefined) {
+        // what of a block is under the mouse: its top corners (brightness at its start, at its end),
+        // its top (all its brightness), its sides (stretch), its body (move) — the picked one first
+        const zone = this.blockZone(g, blocks, point);
+        if (zone !== null) {
+          const hit = zone.block;
           this.eventId = hit.id;
-          const original = { start: hit.start, end: hit.end };
-          const which = edge === undefined ? 'move' : Math.abs(g.toX(hit.start) - x) < Math.abs(g.toX(hit.end) - x) ? 'start' : 'end';
+          const original = structuredClone(hit);
           const grab = beat - hit.start;
+          const scale = this.laneScale(g.height);
+          const startLevel = scale.level(point.y);
+          const level = (y: number) => Math.round(Math.min(1.5, Math.max(0, scale.level(y))) * 20) / 20;
           // (the 3D view shows the block at that moment)
           if (this.editor.previewExtra === null && !this.editor.isPlaying()) this.editor.seek(effect.start + hit.start + 0.02);
           this.drawLane(canvas, effect, box);
-          drag(
-            (at) => {
-              const to = g.toBeat(at.x);
-              const length = original.end - original.start;
-              const min = grid() > 0 ? grid() : 1 / 64;
-              if (which === 'move') {
-                hit.start = snap(to - grab);
-                hit.end = hit.start + length;
-              } else if (which === 'start') hit.start = Math.min(original.end - min, snap(to));
-              else hit.end = Math.max(original.start + min, snap(to));
-            },
-            (moved) => {
-              const next = { start: Math.round(hit.start * 1e6) / 1e6, end: Math.round(hit.end * 1e6) / 1e6 };
+          const vertical = zone.zone === 'startLevel' || zone.zone === 'endLevel' || zone.zone === 'level';
+          let moved = false;
+          const move = (next: MouseEvent) => {
+            const at = local(next);
+            if (!moved && Math.abs(at.x - x) < 4 && Math.abs(at.y - point.y) < 4) return;
+            moved = true;
+            const to = g.toBeat(at.x);
+            const length = original.end - original.start;
+            const min = grid() > 0 ? grid() : 1 / 64;
+            if (zone.zone === 'move') {
+              hit.start = snap(to - grab);
+              hit.end = hit.start + length;
+            } else if (zone.zone === 'start') hit.start = Math.min(original.end - min, snap(to));
+            else if (zone.zone === 'end') hit.end = Math.max(original.start + min, snap(to));
+            else if (zone.zone === 'startLevel') {
+              // (a ramp: the end keeps its brightness)
+              hit.endColor = original.endColor ?? { ...original.color };
+              hit.color = { ...original.color, brightness: level(at.y) };
+            } else if (zone.zone === 'endLevel') hit.endColor = { ...(original.endColor ?? original.color), brightness: level(at.y) };
+            else {
+              const delta = Math.round((scale.level(at.y) - startLevel) * 20) / 20;
+              hit.color = { ...original.color, brightness: Math.min(1.5, Math.max(0, original.color.brightness + delta)) };
+              if (original.endColor !== null) hit.endColor = { ...original.endColor, brightness: Math.min(1.5, Math.max(0, original.endColor.brightness + delta)) };
+            }
+            this.drawLane(canvas, effect, box);
+          };
+          window.addEventListener('mousemove', move);
+          window.addEventListener(
+            'mouseup',
+            () => {
+              window.removeEventListener('mousemove', move);
+              const next = structuredClone(hit);
               Object.assign(hit, original);
               if (!moved) {
                 this.render();
                 return;
               }
+              next.start = Math.round(next.start * 1e6) / 1e6;
+              next.end = Math.round(next.end * 1e6) / 1e6;
               this.changeBox((item) => {
                 const block = item.blocks?.find((entry) => entry.id === hit.id);
                 if (block !== undefined) Object.assign(block, next);
               });
             },
-            x,
+            { once: true },
           );
+          void vertical;
           return;
         }
         // empty lane: a new block, drawn by dragging (a click: a grid step long)
@@ -1366,36 +1454,68 @@ export class GlsEditor {
         );
         return;
       }
-      // ring turns: a click near one picks (drag: moves) it, elsewhere puts a new one in
-      const hitTurn = box.rotations.map((item) => ({ item, d: Math.abs(g.toX(item.beat) - x) })).filter((entry) => entry.d <= 7 || (beat >= entry.item.beat && entry.d <= 40)).sort((a, b) => a.d - b.d)[0];
-      if (hitTurn !== undefined) {
-        const item = hitTurn.item;
+      // ring turns: blocks — the body moves, the right end sets how long the turn takes; on an empty
+      // spot a drag puts a new one in (as long as dragged)
+      const turns = [...box.rotations].sort((a, b) => a.beat - b.beat);
+      const span = (index: number) => [turns[index]!.beat, turns[index]!.beat + turnLength(turns, index)] as const;
+      const found = turns.map((item, index) => ({ item, index })).find(({ index }) => {
+        const [from, to] = span(index);
+        return x >= g.toX(from) - 4 && x <= g.toX(to) + 4;
+      });
+      if (found !== undefined) {
+        const { item, index } = found;
+        const [from, to] = span(index);
+        const resize = Math.abs(g.toX(to) - x) <= 6;
         this.eventId = item.id;
-        const origin = item.beat;
+        const original = { beat: item.beat, duration: item.duration };
+        const grab = beat - from;
         if (this.editor.previewExtra === null && !this.editor.isPlaying()) this.editor.seek(effect.start + item.beat + 0.02);
         this.drawLane(canvas, effect, box);
         drag(
-          (at) => (item.beat = Math.min(Math.max(g.length, g.to), snap(g.toBeat(at.x)))),
+          (at) => {
+            const there = g.toBeat(at.x);
+            if (resize) item.duration = Math.max(grid() > 0 ? grid() : 1 / 16, snap(there) - item.beat);
+            else item.beat = Math.min(Math.max(g.length, g.to), snap(there - grab));
+          },
           (moved) => {
-            const next = item.beat;
-            item.beat = origin;
+            const next = { beat: item.beat, duration: item.duration };
+            item.beat = original.beat;
+            if (original.duration === undefined) delete item.duration;
+            else item.duration = original.duration;
             if (!moved) {
               this.render();
               return;
             }
             this.changeBox((target) => {
               const entry = target.rotations.find((value) => value.id === item.id);
-              if (entry !== undefined) entry.beat = next;
+              if (entry === undefined) return;
+              entry.beat = next.beat;
+              if (next.duration !== undefined) entry.duration = next.duration;
             });
           },
           x,
         );
         return;
       }
+      const startBeat = Math.min(Math.max(g.length, g.to), snap(beat));
       const id = newId('v');
+      const made: GlsRotationEvent = { id, beat: startBeat, angle: 90, loops: 0, direction: 'cw', easing: 'outQuad' };
+      const turnsBefore = box.rotations;
+      box.rotations = [...turnsBefore, made];
       this.eventId = id;
-      const at = Math.min(Math.max(g.length, g.to), snap(beat));
-      this.changeBox((item) => item.rotations.push({ id, beat: at, angle: 90, loops: 0, direction: 'cw', easing: 'outQuad' }));
+      this.drawLane(canvas, effect, box);
+      drag(
+        (at) => {
+          const there = snap(g.toBeat(at.x));
+          if (there > startBeat) made.duration = there - startBeat;
+        },
+        () => {
+          box.rotations = turnsBefore;
+          const turn = { ...made };
+          this.changeBox((item) => item.rotations.push(turn));
+        },
+        x,
+      );
     });
   }
 
@@ -1419,13 +1539,19 @@ export class GlsEditor {
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-result-canvas';
     wrap.append(canvas);
-    // a click: the song there (the 3D view shows that moment)
+    // a click (and a drag): the song there (the 3D view shows that moment)
     canvas.addEventListener('mousedown', (event) => {
-      const current = this.effect() ?? effect;
-      const { from, to } = this.shown(current);
-      const x = event.clientX - canvas.getBoundingClientRect().left;
-      const beat = from + ((x - 96) / Math.max(1, canvas.clientWidth - 96 - 8)) * (to - from);
-      if (beat >= 0) this.editor.seek(current.start + beat);
+      const seek = (clientX: number) => {
+        const current = this.effect() ?? effect;
+        const { from, to } = this.shown(current);
+        const x = clientX - canvas.getBoundingClientRect().left;
+        const beat = from + ((x - 96) / Math.max(1, canvas.clientWidth - 96 - 8)) * (to - from);
+        this.editor.seek(Math.max(0, current.start + Math.max(0, beat)));
+      };
+      seek(event.clientX);
+      const move = (next: MouseEvent) => seek(next.clientX);
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', () => window.removeEventListener('mousemove', move), { once: true });
     });
     this.bindZoom(canvas, (x) => {
       const { from, to } = this.shown(this.effect() ?? effect);
@@ -1557,6 +1683,12 @@ function spreads(): [GlsSpread, string][] {
     ['wave', 'Волна'],
     ['step', 'Шаг'],
   ];
+}
+
+/** How long a ring turn lasts on the lane: its own length, or until the next turn (at most 2 beats). */
+function turnLength(turns: GlsRotationEvent[], index: number) {
+  const turn = turns[index]!;
+  return turn.duration ?? Math.max(0.25, Math.min(2, (turns[index + 1]?.beat ?? turn.beat + 2) - turn.beat));
 }
 
 /** A copy of a box (its own ids; unlinked). */

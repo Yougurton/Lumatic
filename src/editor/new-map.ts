@@ -11,7 +11,7 @@ import { createMapFolder, type MapFolder } from './platform';
 import { previewPicker, type PreviewPicker } from './song-picker';
 import { computeSpectrogram } from './spectrogram';
 import { setSettings as setEditorSettings, settings as editorSettings } from './settings';
-import { oggQualityDrum } from './grids';
+import { oggQualitySlider } from './grids';
 
 /**
  * "New map": a song (any audio file) → a map folder Beat Saber opens — the song as Ogg Vorbis
@@ -277,7 +277,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     el('silence-preview').append(startView.element);
     let spectrogram: Spectrogram | null = null;
     el<HTMLInputElement>('mapper').value = defaultMapper;
-    el('ogg').append(oggQualityDrum(editorSettings().oggQuality, (quality) => setEditorSettings({ oggQuality: quality })));
+    el('ogg').append(oggQualitySlider(editorSettings().oggQuality, (quality) => setEditorSettings({ oggQuality: quality })));
 
     let audio: AudioBuffer | null = null;
     let detected: BpmResult | null = null;

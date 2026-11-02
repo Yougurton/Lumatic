@@ -116,8 +116,8 @@ type Listener = (what: 'all' | 'clips' | 'selection' | 'time' | 'rows' | 'lights
 /** See `Editor.glsInspect`. */
 export interface GlsInspect {
   block?: {
-    source: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number };
-    apply: (change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number; layer?: number }) => void) => void;
+    source: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number; strobeDuty?: number; strobeWith?: 'dark' | 'color' | 'dim'; strobeColor?: ClipColor; strobeDim?: number };
+    apply: (change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number; strobeDuty?: number; strobeWith?: 'dark' | 'color' | 'dim'; strobeColor?: ClipColor; strobeDim?: number; layer?: number }) => void) => void;
     remove: () => void;
   };
   render?: (root: HTMLElement) => void;

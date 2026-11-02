@@ -1,6 +1,6 @@
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
-import { oggQualityDrum } from './grids';
+import { oggQualitySlider } from './grids';
 import { CHECK_RULES, CHECK_SOURCES, rulesOf, type CheckRule, type CheckSource } from './checks';
 
 /**
@@ -343,7 +343,7 @@ export function settingsDialog(restart: () => void) {
         ),
         'Перед каждым сохранением прежний файл сложности копируется в папку «Lumatic backups» рядом с картой; хранится столько последних копий.',
       ),
-      row('Качество песни (ogg)', oggQualityDrum(settings().oggQuality, (quality) => change({ oggQuality: quality })), 'Для новой карты и когда песня переделывается (тишина в начале): Ogg Vorbis, выше — лучше звук и больше файл.'),
+      row('Качество песни (ogg)', oggQualitySlider(settings().oggQuality, (quality) => change({ oggQuality: quality })), 'Для новой карты и когда песня переделывается (тишина в начале): Ogg Vorbis, выше — лучше звук и больше файл.'),
       row(
         'Формат новых карт',
         choice<Settings['newFormat']>(

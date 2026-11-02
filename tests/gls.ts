@@ -56,5 +56,25 @@ const made = generateGls({ boxes: [box] }, 10, 12, {
 });
 const starts = made.clips.map((clip) => [clip.slot, clip.start, Math.round(clip.color.brightness * 100) / 100]);
 check('blocks spread', JSON.stringify(starts) === JSON.stringify([[0, 10, 1], [1, 10.25, 1.13], [2, 10.5, 1.27], [3, 10.75, 1.4]]), starts);
+// a strobe: 2 flashes a beat, lit a quarter of each, a second colour between
+const strobeBox = { ...newColorBox({ ref: 'left', brightness: 1 }), beatValue: 0, blocks: [{ id: 's', start: 0, end: 1, color: { ref: 'left' as const, brightness: 1 }, endColor: null, startMode: 'on' as const, fadeIn: 0.25, endMode: 'off' as const, strobe: 2, strobeDuty: 0.25, strobeWith: 'color' as const, strobeColor: { ref: 'right' as const, brightness: 0.5 } }] };
+const strobed = generateGls({ boxes: [strobeBox] }, 0, 4, {
+  scheme,
+  items: 1,
+  makeClip: (item, start, end): LightClip => ({ id: '', type: 0, ids: null, start, end, startMode: 'on', fadeIn: 0.25, endMode: 'off', color: { ref: 'left', brightness: 1 }, endColor: null, layer: 1, slot: item }),
+  ringCount: () => 1,
+  secondsPerBeat: 0.5,
+}).clips.map((clip) => [clip.start, clip.end, clip.color.ref]);
+check('strobe duty + second colour', JSON.stringify(strobed) === JSON.stringify([[0, 0.125, 'left'], [0.125, 0.5, 'right'], [0.5, 0.625, 'left'], [0.625, 1, 'right']]), strobed);
+// the hue spread: the last of 2 elements turned 180° (red → cyan)
+const hueBox = { ...newColorBox({ ref: 'left', brightness: 1 }), beatValue: 0, hueSpread: 180 };
+const hued = generateGls({ boxes: [hueBox] }, 0, 4, {
+  scheme,
+  items: 2,
+  makeClip: (item, start, end): LightClip => ({ id: '', type: 0, ids: null, start, end, startMode: 'on', fadeIn: 0.25, endMode: 'off', color: { ref: 'left', brightness: 1 }, endColor: null, layer: 1, slot: item }),
+  ringCount: () => 1,
+  secondsPerBeat: 0.5,
+}).clips.map((clip) => clip.color.rgb?.map((v) => Math.round(v * 10) / 10) ?? clip.color.ref);
+check('hue spread', JSON.stringify(hued) === JSON.stringify(['left', [0, 1, 1]]), hued);
 console.log('checks', checks, 'failures', failures);
 if (failures > 0) process.exit(1);

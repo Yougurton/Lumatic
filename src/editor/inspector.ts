@@ -189,6 +189,25 @@ export class Inspector {
       // a GLS block's block: its strobe, where it is, and away with it
       const strobes: [string, string, string][] = [0, 1, 2, 4, 8, 16, 32].map((value) => [String(value), value === 0 ? 'Нет' : String(value), value === 0 ? 'Без строба' : `${String(value)} вспышек в долю`]);
       root.append(this.section('Строб', this.buttons(strobes, String(block.source.strobe), (value) => block.apply((target) => (target.strobe = Number(value))))));
+      if (block.source.strobe > 0) {
+        const source = block.source;
+        root.append(this.drumField('Скважность, % (горит)', Math.round((source.strobeDuty ?? 0.5) * 100), 5, { min: 5 }, (value) => block.apply((target) => (target.strobeDuty = Math.min(95, Math.max(5, value)) / 100))));
+        const withs: ['dark' | 'color' | 'dim', string, string][] = [
+          ['dark', 'Темнота', 'Между вспышками свет гаснет'],
+          ['color', 'Второй цвет', 'Между вспышками — второй цвет'],
+          ['dim', 'Тусклее', 'Между вспышками тот же свет, но тусклее'],
+        ];
+        root.append(this.section('Чередуется с', this.buttons(withs, source.strobeWith ?? 'dark', (value) => block.apply((target) => {
+          target.strobeWith = value;
+          if (value === 'color' && target.strobeColor === undefined) target.strobeColor = { ...target.color, ref: target.color.ref === 'left' ? 'right' : 'left' };
+        }))));
+        if ((source.strobeWith ?? 'dark') === 'color') root.append(this.section('Второй цвет', this.colorPicker(source.strobeColor ?? source.color, (color) => block.apply((target) => (target.strobeColor = color)), source.start)));
+        if (source.strobeWith === 'dim') root.append(this.drumField('Между вспышками, % яркости', Math.round((source.strobeDim ?? 0.3) * 100), 5, { min: 0 }, (value) => block.apply((target) => (target.strobeDim = Math.min(100, Math.max(0, value)) / 100))));
+        const tip = document.createElement('div');
+        tip.className = 'ins-note';
+        tip.textContent = 'С градиентом к концу вспышки идут по нему: цвет и яркость меняются к концу блока.';
+        root.append(tip);
+      }
       root.append(
         this.numberField('Начало, доля блока', block.source.start, this.editor.snap || 0.25, (value) => block.apply((target) => (target.start = Math.max(0, Math.min(value, target.end - 1 / 64))))),
         this.numberField('Конец, доля блока', block.source.end, this.editor.snap || 0.25, (value) => block.apply((target) => (target.end = Math.max(value, target.start + 1 / 64)))),

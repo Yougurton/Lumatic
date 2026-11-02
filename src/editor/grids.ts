@@ -403,13 +403,16 @@ export const OGG_QUALITIES: [number, string][] = [
   [10, '10 · ~500 кбит/с'],
 ];
 
-/** A drum for the Ogg quality (the setting kept). */
-export function oggQualityDrum(value: number, change: (value: number) => void) {
-  return drum({
-    key: 'ogg-quality',
-    count: OGG_QUALITIES.length,
-    label: (index) => OGG_QUALITIES[index]![1],
-    initial: Math.max(0, OGG_QUALITIES.findIndex(([quality]) => quality === value)),
-    change: (index) => change(OGG_QUALITIES[index]![0]),
-  });
+/** A slider for the Ogg quality (with about how many kbit/s it is). */
+export function oggQualitySlider(value: number, change: (value: number) => void) {
+  const wrap = document.createElement('span');
+  wrap.className = 'ogg-slider';
+  const input = Object.assign(document.createElement('input'), { type: 'range', min: '3', max: '10', step: '1', value: String(Math.min(10, Math.max(3, Math.round(value)))) });
+  const shown = Object.assign(document.createElement('span'), { className: 'ins-value' });
+  const label = () => (shown.textContent = OGG_QUALITIES.find(([quality]) => quality === Number(input.value))?.[1] ?? input.value);
+  label();
+  input.addEventListener('input', label);
+  input.addEventListener('change', () => change(Number(input.value)));
+  wrap.append(input, shown);
+  return wrap;
 }
