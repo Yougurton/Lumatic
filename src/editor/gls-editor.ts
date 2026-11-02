@@ -1,7 +1,8 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import type { Effect } from './effects';
-import { defaultFilter, filterUnits, glsNeededLength, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
+import { beatsLabel, drum, numberDrum } from './grids';
+import { defaultFilter, filterFor, filterUnits, glsNeededLength, spreadOf, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
 import { ringSystemName } from './library';
 import { findGroup, newId, type ClipColor, type Rgb } from './model';
 
@@ -41,6 +42,12 @@ export class GlsEditor {
   private raf = 0;
   /** What the box's lane and the result show (beats from the block's start); null: all of the block. */
   private view: { from: number; to: number } | null = null;
+  /** Tapping events in while it plays (T: down — on, up — off). */
+  private recording = false;
+  private tap: { beat: number } | null = null;
+  private keyUpHandler = (event: KeyboardEvent) => this.onKeyUp(event);
+  /** The spread handle on the lane being dragged. */
+  private knobDrag: { startX: number; startY: number; beatValue: number; value: number } | null = null;
 
   constructor(private readonly editor: Editor) {
     editor.glsEditorHook = (id) => this.open(id);
@@ -78,8 +85,17 @@ export class GlsEditor {
     this.place();
     window.addEventListener('resize', this.resizeHandler);
     window.addEventListener('keydown', this.keyHandler, true);
+    window.addEventListener('keyup', this.keyUpHandler, true);
+    this.recording = false;
     this.render();
     const tick = () => {
+      // (recording: the block over and over, kept here — a change to the block ends the editor's loop)
+      const effect = this.effect();
+      if (this.recording && effect !== undefined && this.editor.isPlaying() && this.editor.playhead() >= effect.end) {
+        // (a light still held at the loop's end: off right there)
+        if (this.tap !== null) this.tapUp(effect.end - effect.start);
+        this.editor.seek(Math.max(0, effect.start - 0.5), true);
+      }
       this.drawResultPlayhead();
       this.drawLanePlayhead();
       this.raf = requestAnimationFrame(tick);
@@ -94,6 +110,8 @@ export class GlsEditor {
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.resizeHandler);
     window.removeEventListener('keydown', this.keyHandler, true);
+    window.removeEventListener('keyup', this.keyUpHandler, true);
+    this.recording = false;
     this.editor.stopTrial();
   }
 
@@ -124,6 +142,8 @@ export class GlsEditor {
       event.stopImmediatePropagation();
       return;
     }
+    // (a drum's own keys: left to it — it stops them itself)
+    if (target.closest('.drum') !== null && /^(Arrow(Left|Right|Up|Down)|Home|End|Enter|[\d.,/])$/u.test(event.key)) return;
     const ctrl = event.ctrlKey || event.metaKey;
     if (ctrl && event.code === 'KeyZ') {
       event.preventDefault();
@@ -148,6 +168,18 @@ export class GlsEditor {
       event.preventDefault();
       event.stopImmediatePropagation();
       this.play();
+      return;
+    }
+    if (event.code === 'KeyR' && !ctrl) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.toggleRecording();
+      return;
+    }
+    if (event.code === 'KeyT' && !ctrl && this.recording) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!event.repeat) this.tapDown();
       return;
     }
     // (the rest of the editor's keys don't reach the timeline behind)
@@ -186,6 +218,81 @@ export class GlsEditor {
     else this.editor.startTrial({ clips: [], raw: [], start: effect.start, end: effect.end });
   }
 
+  // ----- tapping events in ---------------------------------------------------------------------------
+
+  private onKeyUp(event: KeyboardEvent) {
+    if (event.code !== 'KeyT' || this.tap === null) return;
+    event.stopImmediatePropagation();
+    this.tapUp();
+  }
+
+  private toggleRecording() {
+    this.recording = !this.recording;
+    this.tap = null;
+    // (recording: it plays — the block over and over)
+    const effect = this.effect();
+    if (this.recording && effect !== undefined && !this.editor.isPlaying()) {
+      this.editor.seek(Math.max(0, effect.start - 0.5));
+      this.editor.togglePlay();
+    }
+    this.render();
+  }
+
+  /** Where the song is in the block (beats from its start, on the grid; null: outside it — taps
+   *  never make the block longer). */
+  private tapBeat() {
+    const effect = this.effect();
+    if (effect === undefined) return null;
+    const step = this.editor.snap > 0 ? this.editor.snap : 1 / 16;
+    const length = effect.end - effect.start;
+    const beat = Math.round((this.editor.playhead() - effect.start) / step) * step;
+    return beat < -step / 2 || beat >= length - 1e-6 ? null : Math.max(0, beat);
+  }
+
+  /** T down: the light on here (a ring box: a turn like the last one). */
+  private tapDown() {
+    const box = this.box();
+    const beat = this.tapBeat();
+    if (box === undefined || beat === null) return;
+    const id = newId('v');
+    this.eventId = id;
+    this.tap = { beat };
+    const color = this.editor.brush.color;
+    this.changeBox((item) => {
+      if (item.kind === 'color') {
+        item.events = item.events.filter((event) => Math.abs(event.beat - beat) > 1e-4);
+        item.events.push({ id, beat, transition: 'instant', color: { ...color, brightness: 1 }, brightness: Math.max(0.05, color.brightness), strobe: 0 });
+      } else {
+        const last = [...item.rotations].sort((a, b) => b.beat - a.beat)[0];
+        item.rotations = item.rotations.filter((event) => Math.abs(event.beat - beat) > 1e-4);
+        item.rotations.push({ ...(last ?? { angle: 90, loops: 0, direction: 'cw', easing: 'outQuad' }), id, beat } as GlsRotationEvent);
+      }
+    });
+  }
+
+  /** T up: held a while — off here; a quick tap — a flash fading out over a grid step. */
+  private tapUp(at?: number) {
+    const tap = this.tap;
+    this.tap = null;
+    const box = this.box();
+    const effect = this.effect();
+    if (tap === null || box === undefined || effect === undefined || box.kind !== 'color') return;
+    const step = this.editor.snap > 0 ? this.editor.snap : 1 / 16;
+    const length = effect.end - effect.start;
+    // (let go past the block's end, or the song looped: off at the end)
+    const now = at ?? this.tapBeat() ?? length;
+    const held = now - tap.beat >= step - 1e-6;
+    const beat = Math.min(length, held ? now : tap.beat + step);
+    // (off at the block's end: the block's end puts it out anyway — no event, the block stays as long)
+    if (beat >= length - 1e-6) return;
+    this.changeBox((item) => {
+      // (what was there between is replaced by this)
+      item.events = item.events.filter((event) => !(event.beat > tap.beat + 1e-4 && event.beat <= beat + 1e-4));
+      const on = item.events.find((event) => Math.abs(event.beat - tap.beat) < 1e-4);
+      item.events.push({ id: newId('v'), beat, transition: held ? 'instant' : 'fade', color: { ...(on?.color ?? this.editor.brush.color) }, brightness: 0, strobe: 0 });
+    });
+  }
+
   // ----- rendering -------------------------------------------------------------------------------------
 
   private render() {
@@ -194,6 +301,8 @@ export class GlsEditor {
     if (shade === null || effect === undefined) return;
     if (holdWhileTyping(shade, () => this.render())) return;
     const scroll = [...shade.querySelectorAll<HTMLElement>('.gls-col')].map((col) => col.scrollTop);
+    // (a drum being turned with the keys keeps the focus in its new self)
+    const focused = document.activeElement instanceof HTMLElement && shade.contains(document.activeElement) ? document.activeElement.dataset.wheelKey : undefined;
     shade.replaceChildren();
     const dialog = document.createElement('div');
     dialog.className = 'gls-dialog';
@@ -204,6 +313,7 @@ export class GlsEditor {
     dialog.append(body, this.result(effect));
     shade.append(dialog);
     [...shade.querySelectorAll<HTMLElement>('.gls-col')].forEach((col, index) => (col.scrollTop = scroll[index] ?? 0));
+    if (focused !== undefined) shade.querySelector<HTMLElement>(`[data-wheel-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   }
 
   private header(effect: Effect) {
@@ -316,24 +426,72 @@ export class GlsEditor {
     const box = this.box();
     if (box === undefined) return col;
     if (box.kind === 'color') {
-      col.append(heading('Фильтр'));
-      col.append(toggle([['division', 'Секции'], ['step', 'Шаг и сдвиг']], box.filter.type, (value) => this.changeBox((item) => (item.filter.type = value))));
-      if (box.filter.type === 'division') {
-        col.append(
-          labeled('Секций', numberInput(box.filter.sections, 1, (value) => this.changeBox((item) => (item.filter.sections = Math.max(1, Math.round(value)))))),
-          labeled('Номер секции', numberInput(box.filter.section + 1, 1, (value) => this.changeBox((item) => (item.filter.section = Math.max(0, Math.round(value) - 1))))),
+      const effect = this.effect()!;
+      const count = this.editor.effectItemsOf(effect).length;
+      col.append(heading('Какие элементы'));
+      col.append(this.lampPicker(effect, box));
+      // the usual picks, one click
+      const quick = document.createElement('div');
+      quick.className = 'gls-quick';
+      const pick = (label: string, title: string, elements: (index: number) => boolean) =>
+        quick.append(
+          button(label, title, () =>
+            this.changeBox((item) => (item.filter = filterFor(Array.from({ length: count }, (_, index) => index).filter(elements), count, item.filter))),
+          ),
         );
-      } else {
-        col.append(
-          labeled('Шаг (0 — один)', numberInput(box.filter.step, 1, (value) => this.changeBox((item) => (item.filter.step = Math.max(0, Math.round(value)))))),
-          labeled('Сдвиг (с какого)', numberInput(box.filter.offset + 1, 1, (value) => this.changeBox((item) => (item.filter.offset = Math.max(0, Math.round(value) - 1))))),
+      const picked = new Set(filterUnits({ ...box.filter, limit: 1, random: box.filter.random === 'pick' ? 'none' : box.filter.random }, count).flat());
+      pick('Все', 'Все элементы', () => true);
+      pick('1, 3, 5…', 'Через один, с первого', (index) => index % 2 === 0);
+      pick('2, 4, 6…', 'Через один, со второго', (index) => index % 2 === 1);
+      pick('◧ ½', 'Первая половина', (index) => index < Math.ceil(count / 2));
+      pick('½ ◨', 'Вторая половина', (index) => index >= Math.floor(count / 2));
+      pick('⇄', 'Наоборот: невыбранные', (index) => !picked.has(index));
+      col.append(quick);
+      col.append(labeled('Порядок', this.orderDrum(box)));
+      // the game's own settings, for exact work: folded away
+      const more = document.createElement('details');
+      more.className = 'gls-more';
+      more.open = this.moreOpen;
+      more.addEventListener('toggle', () => (this.moreOpen = more.open));
+      more.append(Object.assign(document.createElement('summary'), { textContent: 'Точнее (как в игре)' }));
+      const kinds: ['division' | 'step' | 'custom', string][] = [
+        ['division', 'Секции'],
+        ['step', 'Шаг и сдвиг'],
+        ['custom', 'Выбранные'],
+      ];
+      more.append(
+        labeled(
+          'Фильтр',
+          drum({
+            key: `gls-filter-type:${box.id}`,
+            count: kinds.length,
+            label: (index) => kinds[index]![1],
+            initial: Math.max(0, kinds.findIndex(([kind]) => kind === box.filter.type)),
+            change: (index) =>
+              this.changeBox((item) => {
+                const kind = kinds[index]![0];
+                if (kind === 'custom') item.filter.elements = filterUnits({ ...item.filter, reverse: false, order: 'line', random: 'none', limit: 1 }, count).flat();
+                item.filter.type = kind;
+              }),
+          }),
+        ),
+      );
+      if (box.filter.type === 'division') {
+        more.append(
+          labeled('Секций', numberDrum(`gls-sections:${box.id}`, box.filter.sections, (value) => this.changeBox((item) => (item.filter.sections = Math.max(1, Math.round(value)))), { step: 1, min: 1, max: Math.max(2, count) })),
+          labeled('Номер секции', numberDrum(`gls-section:${box.id}`, box.filter.section + 1, (value) => this.changeBox((item) => (item.filter.section = Math.max(0, Math.round(value) - 1))), { step: 1, min: 1, max: Math.max(1, box.filter.sections) })),
+        );
+      } else if (box.filter.type === 'step') {
+        more.append(
+          labeled('Шаг (0 — один)', numberDrum(`gls-step:${box.id}`, box.filter.step, (value) => this.changeBox((item) => (item.filter.step = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: Math.max(1, count) })),
+          labeled('Сдвиг (с какого)', numberDrum(`gls-offset:${box.id}`, box.filter.offset + 1, (value) => this.changeBox((item) => (item.filter.offset = Math.max(0, Math.round(value) - 1))), { step: 1, min: 1, max: Math.max(1, count) })),
         );
       }
-      col.append(check('Обратный порядок', box.filter.reverse, (on) => this.changeBox((item) => (item.filter.reverse = on))));
-      col.append(labeled('Куски (0 — нет)', numberInput(box.filter.chunks, 1, (value) => this.changeBox((item) => (item.filter.chunks = Math.max(0, Math.round(value)))))));
-      col.append(labeled('Случайно', select([['none', 'Нет'], ['shuffle', 'Перемешать порядок'], ['pick', 'Случайные элементы']], box.filter.random, (value) => this.changeBox((item) => (item.filter.random = value)))));
-      col.append(labeled('Сколько взять, %', numberInput(Math.round(box.filter.limit * 100), 5, (value) => this.changeBox((item) => (item.filter.limit = Math.min(1, Math.max(0.01, value / 100)))))));
-      if (box.filter.random !== 'none') col.append(button('🎲 Другой случай', 'Другое случайное распределение', () => this.changeBox((item) => (item.filter.seed = Math.floor(Math.random() * 1e6)))));
+      more.append(labeled('Куски (0 — нет)', numberDrum(`gls-chunks:${box.id}`, box.filter.chunks, (value) => this.changeBox((item) => (item.filter.chunks = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: Math.max(1, count) })));
+      more.append(labeled('Сколько взять, %', numberDrum(`gls-limit:${box.id}`, Math.round(box.filter.limit * 100), (value) => this.changeBox((item) => (item.filter.limit = Math.min(1, Math.max(0.01, value / 100)))), { step: 5, min: 5, max: 100 })));
+      more.append(check('Случайные элементы (не все)', box.filter.random === 'pick', (on) => this.changeBox((item) => (item.filter.random = on ? 'pick' : 'none'))));
+      if (box.filter.random !== 'none') more.append(button('🎲 Другой случай', 'Другое случайное распределение', () => this.changeBox((item) => (item.filter.seed = Math.floor(Math.random() * 1e6)))));
+      col.append(more);
     } else {
       col.append(heading('Кольца'));
       const systems = this.editor.preview.ringSystems().filter((system) => system.rotates);
@@ -345,13 +503,100 @@ export class GlsEditor {
     }
     col.append(heading('Распределение по времени'));
     col.append(toggle(spreads(), box.beatSpread, (value) => this.changeBox((item) => (item.beatSpread = value))));
-    col.append(labeled(box.beatSpread === 'wave' ? 'Волна на всех, долей' : 'Шаг на элемент, долей', numberInput(box.beatValue, 0.125, (value) => this.changeBox((item) => (item.beatValue = Math.max(0, value))))));
+    col.append(labeled(box.beatSpread === 'wave' ? 'Волна на всех, долей' : 'Шаг на элемент, долей', numberDrum(`gls-beat:${box.id}`, box.beatValue, (value) => this.changeBox((item) => (item.beatValue = Math.max(0, value))), { step: 1 / 16, min: 0, max: 64, beats: true })));
     col.append(heading(box.kind === 'color' ? 'Распределение яркости' : 'Распределение угла'));
     col.append(toggle(spreads(), box.valueSpread, (value) => this.changeBox((item) => (item.valueSpread = value))));
-    col.append(labeled(box.kind === 'color' ? (box.valueSpread === 'wave' ? 'Последнему элементу +' : 'Каждому следующему +') : box.valueSpread === 'wave' ? 'Последнему кольцу, °' : 'Каждому кольцу, °', numberInput(box.value, box.kind === 'color' ? 0.05 : 5, (value) => this.changeBox((item) => (item.value = value)))));
+    col.append(labeled(box.kind === 'color' ? (box.valueSpread === 'wave' ? 'Последнему элементу +' : 'Каждому следующему +') : box.valueSpread === 'wave' ? 'Последнему кольцу, °' : 'Каждому кольцу, °', box.kind === 'color' ? numberDrum(`gls-value:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 0.05, min: -1.5, max: 1.5, digits: 2 }) : numberDrum(`gls-angle:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 5, min: -360, max: 360 })));
+    if (box.kind === 'color') {
+      const tip = document.createElement('div');
+      tip.className = 'gls-note';
+      tip.textContent = 'Или тяните ручку ◆ на дорожке событий: вправо — дольше волна, вверх/вниз — ярче/тусклее последний элемент.';
+      col.append(tip);
+    }
     if (box.kind === 'color') col.append(labeled('Сглаживание', select(EASINGS, box.easing, (value) => this.changeBox((item) => (item.easing = value)))));
     col.append(check('Затрагивать первое событие', box.affectFirst, (on) => this.changeBox((item) => (item.affectFirst = on))));
     return col;
+  }
+
+  private moreOpen = false;
+
+  /**
+   * The group's elements as lamps: the picked ones lit, numbered in the order the box's events go over
+   * them; a click (or a drag across) picks and unpicks — the filter that does just that is found.
+   */
+  private lampPicker(effect: Effect, box: GlsBox) {
+    const items = this.editor.effectItemsOf(effect);
+    const count = items.length;
+    const units = filterUnits(box.filter, count);
+    const order = new Map<number, number>();
+    units.forEach((unit, k) => unit.forEach((item) => order.set(item, k)));
+    const holder = document.createElement('div');
+    holder.className = `gls-lamps${count > 24 ? ' small' : ''}`;
+    const chosen = new Set(order.keys());
+    let paint: boolean | null = null;
+    const cells: HTMLElement[] = [];
+    const apply = (index: number) => {
+      if (paint === null) return;
+      if (paint) chosen.add(index);
+      else chosen.delete(index);
+      cells[index]?.classList.toggle('on', paint);
+    };
+    const commit = () => {
+      if (paint === null) return;
+      paint = null;
+      this.changeBox((item) => (item.filter = filterFor([...chosen], count, item.filter)));
+    };
+    items.forEach((item, index) => {
+      const cell = document.createElement('span');
+      cell.className = 'gls-lamp';
+      const k = order.get(index);
+      cell.title = `${item.kind === 'group' ? (findGroup(this.editor.groups, item.id)?.group.name ?? '') : `ID ${String(item.id)}`}${k === undefined ? '' : ` — ${String(k + 1)}-й в очереди`}`;
+      if (k !== undefined) {
+        cell.classList.add('on');
+        // (the order shown: early ones bright, late ones darker)
+        const t = units.length > 1 ? k / (units.length - 1) : 0;
+        cell.style.setProperty('--lamp', `hsl(205 85% ${String(Math.round(72 - t * 34))}%)`);
+        if (count <= 48) cell.textContent = String(k + 1);
+      }
+      cell.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        paint = !chosen.has(index);
+        apply(index);
+        window.addEventListener('mouseup', commit, { once: true });
+      });
+      cell.addEventListener('mouseenter', () => apply(index));
+      cells.push(cell);
+      holder.append(cell);
+    });
+    const wrap = document.createElement('div');
+    wrap.append(holder, Object.assign(document.createElement('div'), { className: 'gls-note', textContent: 'Щёлкните или проведите по лампам. Цифра — очередь в волне.' }));
+    return wrap;
+  }
+
+  /** The order the box's events go over its elements: a drum. */
+  private orderDrum(box: GlsBox) {
+    const options: ['line' | 'reverse' | 'outward' | 'inward' | 'shuffle', string][] = [
+      ['line', '→ По порядку'],
+      ['reverse', '← Обратно'],
+      ['outward', '↔ От центра'],
+      ['inward', '→← К центру'],
+      ['shuffle', '🔀 Вперемешку'],
+    ];
+    const f = box.filter;
+    const current = f.random === 'shuffle' ? 'shuffle' : f.order === 'outward' || f.order === 'inward' ? f.order : f.reverse ? 'reverse' : 'line';
+    return drum({
+      key: `gls-order:${box.id}`,
+      count: options.length,
+      label: (index) => options[index]![1],
+      initial: Math.max(0, options.findIndex(([value]) => value === current)),
+      change: (index) =>
+        this.changeBox((item) => {
+          const value = options[index]![0];
+          item.filter.random = value === 'shuffle' ? 'shuffle' : item.filter.random === 'shuffle' ? 'none' : item.filter.random;
+          item.filter.order = value === 'outward' || value === 'inward' ? value : 'line';
+          item.filter.reverse = value === 'reverse';
+        }),
+    });
   }
 
   private laneColumn(effect: Effect) {
@@ -360,11 +605,16 @@ export class GlsEditor {
     const box = this.box();
     if (box === undefined) return col;
     const title = heading(box.kind === 'color' ? 'События коробки' : 'Повороты');
-    title.append(this.zoomButtons(effect));
+    const record = button(this.recording ? '⏺ Запись идёт' : '⏺ Запись', 'Запись по тапам (R): блок играет по кругу, T — поставить событие (держите — горит, пока держите; коротко — вспышка)', () => this.toggleRecording());
+    record.classList.add('gls-record');
+    record.classList.toggle('active', this.recording);
+    title.append(record, this.zoomButtons(effect));
     col.append(title);
     const hint = document.createElement('div');
     hint.className = 'gls-note';
-    hint.textContent = 'Клик по дорожке — новое событие, перетаскивание — сдвинуть, Delete — удалить. Ctrl+колесо — масштаб, Shift+колесо — вдоль блока. Событие за концом блока удлиняет блок.';
+    hint.textContent = this.recording
+      ? 'Запись: жмите T в такт — держите, пока свет должен гореть; коротко — вспышка. Встаёт на сетку. R — остановить запись.'
+      : 'Клик по дорожке — новое событие, перетаскивание — сдвинуть, Delete — удалить. Ctrl+колесо — масштаб, Shift+колесо — вдоль блока. R — запись по тапам.';
     col.append(hint);
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-lane';
@@ -543,6 +793,32 @@ export class GlsEditor {
     };
   }
 
+  /** The lane's brightness scale: a level → y, y → a level. */
+  private laneScale(height: number) {
+    const top = 16;
+    const bottom = height - 8;
+    const span = bottom - top - 6;
+    return { top, bottom, y: (brightness: number) => bottom - (Math.min(1.5, brightness) / 1.5) * span, level: (y: number) => ((bottom - y) / span) * 1.5 };
+  }
+
+  /**
+   * The spread handle: the box's events as the last of its elements gets them (moved on by the time
+   * spread, brighter by the brightness spread) — the handle on its first event the spread touches.
+   */
+  private spreadKnob(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
+    if (box.kind !== 'color' || box.events.length === 0) return null;
+    const m = filterUnits(box.filter, this.editor.effectItemsOf(effect).length).length;
+    if (m < 2) return null;
+    const events = [...box.events].sort((a, b) => a.beat - b.beat);
+    const index = box.affectFirst || events.length === 1 ? 0 : 1;
+    const base = events[index]!;
+    const shift = spreadOf(box.beatSpread, box.beatValue, m - 1, m, null, false);
+    const extra = spreadOf(box.valueSpread, box.value, m - 1, m, box.easing, true);
+    const g = this.laneGeometry(canvas, effect);
+    const scale = this.laneScale(g.height);
+    return { m, events, index, base, shift, extra, x: g.toX(base.beat + shift), y: scale.y(Math.max(0, base.brightness + extra)) };
+  }
+
   private drawLane(canvas: HTMLCanvasElement, effect: Effect, box: GlsBox) {
     if (!canvas.isConnected || canvas.clientWidth === 0) return;
     const ratio = window.devicePixelRatio || 1;
@@ -616,6 +892,46 @@ export class GlsEditor {
         ctx.fillStyle = '#c9cdd8';
         const mark = event.transition === 'fade' ? '╱' : event.transition === 'extend' ? '→' : '';
         ctx.fillText(`${mark}${event.strobe > 0 ? ` /${String(event.strobe)}` : ''}`, x + 7, bottom - 2);
+      }
+      // the spread: when each element starts (ticks), the last one's light (dashed) and the handle
+      const knob = this.spreadKnob(canvas, effect, box);
+      if (knob !== null) {
+        const first = knob.events[0]!.beat;
+        ctx.fillStyle = 'rgba(255,214,90,0.75)';
+        for (let k = 0; k < knob.m; k++) ctx.fillRect(Math.round(g.toX(first + spreadOf(box.beatSpread, box.beatValue, k, knob.m, null, false))), bottom - 5, 1.5, 5);
+        ctx.strokeStyle = 'rgba(255,214,90,0.6)';
+        ctx.setLineDash([4, 3]);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        let ghost: { x: number; y: number } | null = null;
+        knob.events.forEach((event, index) => {
+          const level = event.transition === 'extend' ? null : Math.max(0, event.brightness + (index === 0 && !box.affectFirst ? 0 : knob.extra));
+          const x = g.toX(event.beat + knob.shift);
+          const yy = level === null ? (ghost?.y ?? y(0)) : y(level);
+          if (ghost === null) ctx.moveTo(x, yy);
+          else if (event.transition === 'fade') ctx.lineTo(x, yy);
+          else {
+            ctx.lineTo(x, ghost.y);
+            ctx.lineTo(x, yy);
+          }
+          ghost = { x, y: yy };
+        });
+        if (ghost !== null) ctx.lineTo(g.toX(Math.max(g.length, g.to)), (ghost as { y: number }).y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffd65a';
+        ctx.strokeStyle = '#1a1300';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(knob.x, knob.y - 7);
+        ctx.lineTo(knob.x + 7, knob.y);
+        ctx.lineTo(knob.x, knob.y + 7);
+        ctx.lineTo(knob.x - 7, knob.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#ffd65a';
+        ctx.fillText(`${box.beatSpread === 'wave' ? 'волна' : 'шаг'} ${beatsText(box.beatValue)} · ${knob.extra >= 0 ? '+' : ''}${knob.extra.toFixed(2)}`, Math.min(g.width - 120, knob.x + 10), Math.max(26, knob.y - 8));
       }
     } else {
       for (const event of [...box.rotations].sort((a, b) => a.beat - b.beat)) {
@@ -701,6 +1017,35 @@ export class GlsEditor {
     canvas.addEventListener('mousedown', (event) => {
       const g = this.laneGeometry(canvas, effect);
       const { x } = local(event);
+      // the spread handle: dragged — sideways the time spread, up and down the brightness spread
+      const knob = this.spreadKnob(canvas, effect, box);
+      const point = local(event);
+      if (knob !== null && Math.hypot(point.x - knob.x, point.y - knob.y) <= 9) {
+        const scale = this.laneScale(g.height);
+        const original = { beatValue: box.beatValue, value: box.value };
+        const step = this.editor.snap > 0 ? this.editor.snap : 1 / 16;
+        const drag = (move: MouseEvent) => {
+          const at = local(move);
+          const shift = Math.max(0, g.toBeat(at.x) - knob.base.beat);
+          const extra = Math.round((scale.level(at.y) - knob.base.brightness) * 20) / 20;
+          // (wave: the last of m is at (m − 1)/m of it; step: (m − 1) steps — the value itself on the
+          // grid; the brightness the same way)
+          const raw = box.beatSpread === 'wave' ? (shift * knob.m) / (knob.m - 1) : shift / (knob.m - 1);
+          box.beatValue = Math.max(0, Math.round(raw / step) * step);
+          box.value = box.valueSpread === 'wave' ? extra : extra / (knob.m - 1);
+          this.drawLane(canvas, effect, box);
+        };
+        const done = () => {
+          window.removeEventListener('mousemove', drag);
+          const next = { beatValue: Math.round(box.beatValue * 10000) / 10000, value: Math.round(box.value * 1000) / 1000 };
+          Object.assign(box, original);
+          if (next.beatValue === original.beatValue && next.value === original.value) return;
+          this.changeBox((item) => Object.assign(item, next));
+        };
+        window.addEventListener('mousemove', drag);
+        window.addEventListener('mouseup', done, { once: true });
+        return;
+      }
       const hit = list().map((item) => ({ item, d: Math.abs(g.toX(item.beat) - x) })).filter((entry) => entry.d <= 7).sort((a, b) => a.d - b.d)[0];
       if (hit !== undefined) {
         this.eventId = hit.item.id;
@@ -734,12 +1079,29 @@ export class GlsEditor {
   private result(effect: Effect) {
     const wrap = document.createElement('div');
     wrap.className = 'gls-result';
-    const title = heading('Что получается: элементы группы во времени блока');
-    title.append(this.zoomButtons(effect));
+    wrap.classList.toggle('folded', !resultOpen);
+    const title = heading(`${resultOpen ? '▾' : '▸'} Результат по элементам`);
+    title.classList.add('gls-fold');
+    title.title = 'Свернуть / развернуть. Клик по результату — песня туда';
+    title.addEventListener('click', (event) => {
+      if ((event.target as HTMLElement).closest('button') !== null) return;
+      resultOpen = !resultOpen;
+      this.render();
+    });
+    if (resultOpen) title.append(this.zoomButtons(effect));
     wrap.append(title);
+    if (!resultOpen) return wrap;
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-result-canvas';
     wrap.append(canvas);
+    // a click: the song there (the 3D view shows that moment)
+    canvas.addEventListener('mousedown', (event) => {
+      const current = this.effect() ?? effect;
+      const { from, to } = this.shown(current);
+      const x = event.clientX - canvas.getBoundingClientRect().left;
+      const beat = from + ((x - 96) / Math.max(1, canvas.clientWidth - 96 - 8)) * (to - from);
+      if (beat >= 0) this.editor.seek(current.start + beat);
+    });
     this.bindZoom(canvas, (x) => {
       const { from, to } = this.shown(this.effect() ?? effect);
       return from + ((x - 96) / Math.max(1, canvas.clientWidth - 96 - 8)) * (to - from);
@@ -844,10 +1206,14 @@ export class GlsEditor {
 
 // ----- small pieces -----------------------------------------------------------------------------------
 
+/** The result under the lanes open (kept while the editor runs). */
+let resultOpen = true;
+
 function describeFilter(box: GlsBox) {
   const f = box.filter;
-  const base = f.type === 'division' ? (f.sections <= 1 ? 'все' : `секция ${String(f.section + 1)}/${String(f.sections)}`) : f.step === 0 ? `№${String(f.offset + 1)}` : `каждый ${String(f.step)}-й с ${String(f.offset + 1)}`;
-  return `${base}${f.reverse ? ', обратно' : ''}`;
+  const base = f.type === 'custom' ? `выбрано ${String(f.elements?.length ?? 0)}` : f.type === 'division' ? (f.sections <= 1 ? 'все' : `секция ${String(f.section + 1)}/${String(f.sections)}`) : f.step === 0 ? `№${String(f.offset + 1)}` : `каждый ${String(f.step)}-й с ${String(f.offset + 1)}`;
+  const order = f.random === 'shuffle' ? ', вперемешку' : f.order === 'outward' ? ', от центра' : f.order === 'inward' ? ', к центру' : f.reverse ? ', обратно' : '';
+  return `${base}${order}`;
 }
 
 function spreads(): [GlsSpread, string][] {
@@ -1256,4 +1622,9 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
   );
   requestAnimationFrame(draw);
   return wrap;
+}
+
+/** Beats as a short text (fractions where they are the grid's). */
+function beatsText(beats: number) {
+  return `${beatsLabel(beats)} д.`;
 }

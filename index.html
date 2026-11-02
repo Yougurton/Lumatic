@@ -2388,7 +2388,7 @@
         border-radius: 8px;
       }
       .gls-dock .gls-result {
-        height: 150px;
+        height: 128px;
       }
       .gls-dock .gls-lane {
         height: 110px;
@@ -2603,6 +2603,80 @@
       }
       .ring-bars {
         cursor: ns-resize;
+      }
+      .gls-result.folded {
+        height: auto !important;
+        padding-bottom: 6px;
+      }
+      .gls-fold {
+        cursor: pointer;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .gls-lamps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+        user-select: none;
+      }
+      .gls-lamp {
+        min-width: 20px;
+        height: 20px;
+        padding: 0 2px;
+        border-radius: 4px;
+        border: 1px solid #343744;
+        background: #121318;
+        color: #0b0c10;
+        font: 600 10px system-ui, sans-serif;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .gls-lamps.small .gls-lamp {
+        min-width: 13px;
+        height: 13px;
+        border-radius: 3px;
+      }
+      .gls-lamp:hover {
+        border-color: #8fb4ff;
+      }
+      .gls-lamp.on {
+        background: var(--lamp, #6aa6ff);
+        border-color: rgba(255, 255, 255, 0.5);
+        box-shadow: 0 0 6px var(--lamp, #6aa6ff);
+      }
+      .gls-quick {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 6px 0 8px;
+      }
+      .gls-quick button {
+        padding: 2px 7px;
+        font-size: 12px;
+      }
+      .gls-more {
+        margin: 6px 0 4px;
+      }
+      .gls-more summary {
+        cursor: pointer;
+        color: var(--dim);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .gls-record.active {
+        background: #6b1d24;
+        border-color: #ff5c6c;
+        color: #fff;
+        animation: gls-blink 1s infinite;
+      }
+      @keyframes gls-blink {
+        50% {
+          box-shadow: 0 0 10px rgba(255, 92, 108, 0.7);
+        }
       }
       .gls-result {
         border-top: 1px solid var(--line);

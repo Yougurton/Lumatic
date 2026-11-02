@@ -48,7 +48,13 @@ export interface GlsRotationEvent {
 }
 
 export interface GlsFilter {
-  type: 'division' | 'step';
+  /** division / step: as the game's; custom: the elements picked by hand (`elements`). */
+  type: 'division' | 'step' | 'custom';
+  /** custom: the elements (their numbers, from 0). */
+  elements?: number[];
+  /** The order the events go over the picked ones: as they are (or reversed, `reverse`), from the
+   *  middle out, or from the edges in — the two of a pair at once. */
+  order?: 'line' | 'outward' | 'inward';
   /** division: how many sections, and which one (from 0). */
   sections: number;
   section: number;
@@ -168,7 +174,10 @@ export function filterUnits(filter: GlsFilter, count: number): number[][] {
   if (filter.reverse) units.reverse();
   const n = units.length;
   let picked: number[][];
-  if (filter.type === 'division') {
+  if (filter.type === 'custom') {
+    const wanted = new Set(filter.elements ?? []);
+    picked = units.filter((unit) => unit.some((item) => wanted.has(item))).map((unit) => unit.filter((item) => wanted.has(item)));
+  } else if (filter.type === 'division') {
     const sections = Math.max(1, Math.round(filter.sections));
     const section = Math.min(sections - 1, Math.max(0, Math.round(filter.section)));
     picked = units.slice(Math.floor((section * n) / sections), Math.floor(((section + 1) * n) / sections));
@@ -180,6 +189,7 @@ export function filterUnits(filter: GlsFilter, count: number): number[][] {
       if (units[offset] !== undefined) picked.push(units[offset]);
     } else for (let i = offset; i < n; i += step) picked.push(units[i]!);
   }
+  if (filter.order === 'outward' || filter.order === 'inward') picked = fromMiddle(picked, filter.order === 'inward');
   const keep = Math.max(picked.length === 0 ? 0 : 1, Math.ceil(Math.min(1, Math.max(0, filter.limit)) * picked.length));
   if (filter.random === 'none') return picked.slice(0, keep);
   const next = seeded(filter.seed);
@@ -192,8 +202,50 @@ export function filterUnits(filter: GlsFilter, count: number): number[][] {
     .map((entry) => entry.unit);
 }
 
+/** Units ordered from the middle out (or the edges in): the two at one distance from it together. */
+function fromMiddle(units: number[][], inward: boolean): number[][] {
+  const n = units.length;
+  const out: number[][] = [];
+  if (n % 2 === 1) out.push(units[(n - 1) / 2]!);
+  for (let i = n % 2 === 1 ? 1 : 0; ; i++) {
+    const left = n % 2 === 1 ? (n - 1) / 2 - i : n / 2 - 1 - i;
+    const right = n % 2 === 1 ? (n - 1) / 2 + i : n / 2 + i;
+    if (left < 0) break;
+    out.push([...units[left]!, ...units[right]!]);
+  }
+  return inward ? out.reverse() : out;
+}
+
+/**
+ * The simplest filter that picks just these elements (of `count`, no chunks): all, a section, every
+ * n-th from one, one alone — or, when none does, those by hand. Its order and the rest kept.
+ */
+export function filterFor(elements: number[], count: number, base: GlsFilter): GlsFilter {
+  const picked = [...new Set(elements)].filter((item) => item >= 0 && item < count).sort((a, b) => a - b);
+  const keep: GlsFilter = { ...base, chunks: 0, limit: 1, random: base.random === 'pick' ? 'none' : base.random, elements: undefined };
+  const same = (filter: GlsFilter) => {
+    const got = filterUnits({ ...filter, reverse: false, order: 'line', random: 'none', limit: 1 }, count).flat().sort((a, b) => a - b);
+    return got.length === picked.length && got.every((item, index) => item === picked[index]);
+  };
+  if (picked.length === 0) return { ...keep, type: 'custom', elements: [] };
+  if (picked.length === 1 && count > 1) return { ...keep, type: 'step', step: 0, offset: picked[0]! };
+  for (let sections = 1; sections <= Math.min(8, count); sections++) {
+    for (let section = 0; section < sections; section++) {
+      const filter: GlsFilter = { ...keep, type: 'division', sections, section };
+      if (same(filter)) return filter;
+    }
+  }
+  for (let step = 0; step <= Math.min(8, count); step++) {
+    for (let offset = 0; offset < Math.min(count, step === 0 ? count : step); offset++) {
+      const filter: GlsFilter = { ...keep, type: 'step', step, offset };
+      if (same(filter)) return filter;
+    }
+  }
+  return { ...keep, type: 'custom', elements: picked };
+}
+
 /** Time and value spread for the k-th of m units. */
-function spreadOf(mode: GlsSpread, value: number, k: number, m: number, easing: GlsEasing | null, last: boolean) {
+export function spreadOf(mode: GlsSpread, value: number, k: number, m: number, easing: GlsEasing | null, last: boolean) {
   if (mode === 'step') return value * k;
   const fraction = last ? (m > 1 ? k / (m - 1) : 0) : m > 0 ? k / m : 0;
   return value * (easing === null ? fraction : ease(easing, fraction));
