@@ -60,8 +60,11 @@ export interface EffectParams {
   vibratoHue?: number;
   /** vibrato: the light coming on item after item as a wave (beats it takes; none / 0: all at once)… */
   vibratoIn?: number;
-  /** …and going off the same way at the end, the first one lit the first to go (beats). */
+  /** …and going off the same way at the end, the first one lit the first to go. (Both a sway long;
+   *  above 0: on.) */
   vibratoOut?: number;
+  /** vibrato: the colour its waves come on and go off in (none: the effect's own). */
+  vibratoWaveColor?: ClipColor | null;
   /** endMode fade: the beats each flash's fade out takes (none / 0: all of it). */
   fadeOut?: number;
   /** Its colours turned round the hue circle (degrees)… */
@@ -183,7 +186,7 @@ export function waveSteps(count: number, direction: Direction) {
  */
 export function effectNeededLength(effect: Effect, items: number): number {
   const p = effect.params;
-  if (effect.kind === 'fire' && p.wobble === 'vibrato') return (p.vibratoIn ?? 0) + (p.vibratoOut ?? 0);
+  if (effect.kind === 'fire' && p.wobble === 'vibrato') return vibratoPlan(effect, items).needed;
   if (effect.kind === 'fill') return Math.max(0, p.pulse) / 0.95;
   if (effect.kind === 'wave' && (p.spacing ?? 0) > 0) return waveLength(p, waveSteps(items, p.direction));
   return 0;
@@ -411,6 +414,47 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
 }
 
 /**
+ * A vibrato's waves, each one sway long: coming on item after item (in the direction picked) — in the
+ * waves' own colour, if it has one, turning to the effect's over a sway; and at the end turning back
+ * to that colour over a sway, the wave passing item after item, then (ending in a fade) dying down
+ * over one more sway. Per item: when it's lit, the moments its colour waves start and end, how far
+ * into the waves' colour it is and how bright it still is at a time.
+ */
+export function vibratoPlan(effect: Pick<Effect, 'start' | 'end' | 'params'>, count: number) {
+  const p = effect.params;
+  const sway = Math.max(1 / 16, p.rate);
+  const waveIn = (p.vibratoIn ?? 0) > 0;
+  const waveOut = (p.vibratoOut ?? 0) > 0;
+  const fadeOut = waveOut && p.endMode === 'fade' ? sway : 0;
+  const order = stepsOf(count, p.direction === 'pingpong' ? 'forward' : p.direction);
+  const steps = Math.max(1, ...order.map((step) => step + 1));
+  const clamp = (value: number) => Math.min(1, Math.max(0, value));
+  return {
+    sway,
+    waveIn,
+    waveOut,
+    /** `slot` -1: everything at once (no waves). */
+    item(slot: number) {
+      const share = slot < 0 || steps <= 1 ? 0 : (order[slot] ?? 0) / (steps - 1);
+      const from = slot >= 0 && waveIn ? effect.start + share * sway : effect.start;
+      const peak = slot >= 0 && waveOut ? Math.max(from + 1 / 16, effect.end - fadeOut - sway + share * sway) : effect.end;
+      const to = slot >= 0 && waveOut ? Math.max(from + 1 / 16, peak + fadeOut) : effect.end;
+      const coloured = slot >= 0 && p.vibratoWaveColor != null;
+      return {
+        from,
+        to,
+        fades: slot >= 0 && fadeOut > 0,
+        marks: [from + sway, peak - sway, peak],
+        wave: (t: number) => (!coloured ? 0 : Math.max(waveIn ? 1 - clamp((t - from) / sway) : 0, waveOut ? clamp((t - (peak - sway)) / sway) : 0)),
+        fade: (t: number) => (slot >= 0 && fadeOut > 0 ? 1 - clamp((t - peak) / fadeOut) : 1),
+      };
+    },
+    /** How long the effect needs for its waves. */
+    needed: (waveIn ? sway : 0) + (waveOut ? sway + fadeOut : 0) + (p.vibratoWaveColor != null && (waveIn || waveOut) ? sway : 0),
+  };
+}
+
+/**
  * A flame: the light comes up, dies down or burns on — slowly — and trembles on its way: every step
  * (about `rate` beats, never quite the same) it goes a little dimmer, now and then a little brighter,
  * never far from where the slow change has it. Each item burns on its own (pattern 'all': all of
@@ -431,42 +475,40 @@ function fire(
   const duration = Math.max(1 / 64, effect.end - effect.start);
   const level = (u: number) => (shape === 'rise' ? floor + (1 - floor) * u : shape === 'fall' ? 1 - (1 - floor) * u : 1);
   const out: LightClip[] = [];
-  // vibrato coming on and going off as waves: each item's own start and end (its step in the order)
-  const vibratoWaves = p.wobble === 'vibrato' && items.length > 0 && ((p.vibratoIn ?? 0) > 0 || (p.vibratoOut ?? 0) > 0);
-  const order = stepsOf(items.length, p.direction === 'pingpong' ? 'forward' : p.direction);
-  const orderSteps = Math.max(1, ...order.map((step) => step + 1));
-  const fit = Math.min(1, (duration * 0.95) / Math.max(1e-6, (p.vibratoIn ?? 0) + (p.vibratoOut ?? 0)));
-  const waveIn = (p.vibratoIn ?? 0) * fit;
-  const waveOut = (p.vibratoOut ?? 0) * fit;
-  const span = (slot: number) => {
-    if (!vibratoWaves || slot < 0) return { from: effect.start, to: effect.end };
-    const share = orderSteps <= 1 ? 0 : (order[slot] ?? 0) / (orderSteps - 1);
-    return { from: effect.start + share * waveIn, to: effect.end - waveOut + (orderSteps <= 1 ? waveOut : share * waveOut) };
-  };
+  // vibrato coming on and going off as waves, each a sway long (see vibratoPlan)
+  const plan = p.wobble === 'vibrato' ? vibratoPlan(effect, items.length) : null;
+  const vibratoWaves = plan !== null && items.length > 0 && (plan.waveIn || plan.waveOut);
   const burn = (item: EffectItem | null, slot: number, lagSlot = slot) => {
     const next = random(p.seed * 7919 + slot * 104729 + 1);
-    if (p.wobble === 'vibrato') {
+    if (plan !== null) {
       // even sways: eight steps a sway, each a fade to the next (smooth, near enough a sine); all of
       // them on the effect's own beat, so items coming on later sway with the rest
-      const sway = Math.max(1 / 16, p.rate);
+      const sway = plan.sway;
       const step = Math.max(1 / 64, sway / 8);
       const lag = (p.vibratoLag ?? 0) * Math.max(0, lagSlot);
-      const { from: itemStart, to: itemEnd } = span(slot);
-      const times: number[] = [itemStart];
-      // (no slivers next to the item's own start and end)
-      const edge = itemStart > effect.start + 1e-6 || itemEnd < effect.end - 1e-6 ? 1 / 64 : 1e-6;
-      for (let t = effect.start; t < itemEnd - edge; t += step) if (t > itemStart + edge) times.push(Math.round(t * 1e5) / 1e5);
-      times.push(itemEnd);
-      const points = times.map((time) => {
+      const own = plan.item(vibratoWaves ? slot : -1);
+      const times = new Set<number>([own.from, own.to]);
+      const keep = (t: number) => {
+        if (t > own.from + 1 / 64 - 1e-9 && t < own.to - 1 / 64 + 1e-9) times.add(Math.round(t * 1e5) / 1e5);
+      };
+      for (let t = effect.start; t < own.to; t += step) keep(t);
+      // (the colour waves' own moments: where they begin and end on this item)
+      for (const t of own.marks) keep(t);
+      const sorted = [...times].sort((a, b) => a - b);
+      const points = sorted.map((time) => {
         const u = (time - effect.start) / duration;
         const phase = 2 * Math.PI * ((time - effect.start) / sway - lag);
         // (down from full by `tremor` and back: a dip each sway)
         const dip = 0.5 - 0.5 * Math.cos(phase);
-        const brightness = Math.round(Math.max(0, p.color.brightness * level(u) * (1 - tremor * dip)) * 1000) / 1000;
+        let brightness = Math.max(0, p.color.brightness * level(u) * (1 - tremor * dip));
         let color = mixColor(p.color, p.color2, p.color2 === null ? 0 : dip, p.hsv, scheme);
         const hue = (p.vibratoHue ?? 0) * Math.sin(phase);
         if (Math.abs(hue) > 0.01) color = { ref: 'custom', rgb: shiftHue(resolveRgb(color, scheme), hue), brightness: color.brightness };
-        return { time, color: { ...color, brightness } };
+        // the waves' own colour: coming on in it and turning to the effect's; turning back to it at the end
+        const wave = own.wave(time);
+        if (p.vibratoWaveColor != null && wave > 0) color = mixColor(color, p.vibratoWaveColor, wave, p.hsv, scheme);
+        brightness *= own.fade(time);
+        return { time, color: { ...color, brightness: Math.round(brightness * 1000) / 1000 } };
       });
       for (let k = 0; k + 1 < points.length; k++) {
         const from = points[k]!;
@@ -474,7 +516,8 @@ function fire(
         const clip = make(from.time, to.time, from.color, slot);
         clip.startMode = k === 0 ? (p.startMode === 'fade' ? 'on' : p.startMode) : 'on';
         clip.endColor = to.color;
-        clip.endMode = k + 2 < points.length ? 'stay' : p.endMode;
+        // (a fade made by the steps themselves ends dark: then just off)
+        clip.endMode = k + 2 < points.length ? 'stay' : own.fades ? 'off' : p.endMode;
         out.push(onItem(clip, item));
       }
       return;

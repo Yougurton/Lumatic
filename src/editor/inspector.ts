@@ -1,4 +1,5 @@
 import type { Editor } from './editor';
+import { tr } from './i18n';
 import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
@@ -376,23 +377,26 @@ export class Inspector {
       root.append(this.slider(vibrato ? 'Глубина вибрато' : 'Дрожание', p.tremor ?? 0.3, 0, 1, 0.05, (value) => change((params) => (params.tremor = value))));
       root.append(this.section(vibrato ? 'Одно качание, долей' : 'Дрожит каждые, долей', gridSelect(p.rate, (value) => change((params) => (params.rate = value)), vibrato ? [2, 4] : [], null, vibrato ? 'vibrato' : 'flame')));
       if (vibrato) {
-        root.append(this.slider('Отставание следующей лампы', p.vibratoLag ?? 0, 0, 1, 0.05, (value) => change((params) => (params.vibratoLag = value))));
+        // (each next lamp's dip later by this share of a sway: the dips run over the lamps as a ripple)
+        const lag = this.slider('Сдвиг качания у соседних ламп', p.vibratoLag ?? 0, 0, 1, 0.05, (value) => change((params) => (params.vibratoLag = value)));
+        lag.title = 'Насколько позже (в долях одного качания) качается каждая следующая лампа: 0 — все разом, 0,5 — соседние в противофазе';
+        root.append(lag);
         root.append(this.drumField('Оттенок качается на, °', p.vibratoHue ?? 0, 5, (value) => change((params) => (params.vibratoHue = value))));
-        // coming on and going off as waves (the effect made longer if they don't fit)
-        const waves = (p.vibratoIn ?? 0) > 0 || (p.vibratoOut ?? 0) > 0;
-        root.append(
-          this.check(' Вход и выход волной', waves, (on) =>
-            change((params) => {
-              params.vibratoIn = on ? 1 : 0;
-              params.vibratoOut = on ? 1 : 0;
-            }),
-          ),
-        );
-        if (waves) {
-          const step = beatDrumStep(editor.snap);
-          root.append(this.drumField('Вход волной, долей (0 — сразу)', p.vibratoIn ?? 0, step, (value) => change((params) => (params.vibratoIn = Math.max(0, value)))));
-          root.append(this.drumField('Выход волной, долей (0 — разом)', p.vibratoOut ?? 0, step, (value) => change((params) => (params.vibratoOut = Math.max(0, value)))));
+        // coming on and going off as waves, each a sway long (the effect made longer if they don't fit)
+        const waveIn = (p.vibratoIn ?? 0) > 0;
+        const waveOut = (p.vibratoOut ?? 0) > 0;
+        root.append(this.check(' Вход волной', waveIn, (on) => change((params) => (params.vibratoIn = on ? 1 : 0))));
+        root.append(this.check(' Выход волной', waveOut, (on) => change((params) => (params.vibratoOut = on ? 1 : 0))));
+        if (waveIn || waveOut) {
           root.append(this.section('Направление волны', this.buttons(directions.filter(([key]) => key !== 'pingpong'), p.direction === 'pingpong' ? 'forward' : p.direction, (value) => change((params) => (params.direction = value)))));
+          const coloured = p.vibratoWaveColor != null;
+          root.append(this.check(' Волны своим цветом', coloured, (on) => change((params) => (params.vibratoWaveColor = on ? { ref: params.color.ref === 'left' ? 'right' : 'left', brightness: params.color.brightness } : null))));
+          if (coloured) root.append(this.section('Цвет волн', this.colorPicker(p.vibratoWaveColor!, (color) => change((params) => (params.vibratoWaveColor = color)), effect.start)));
+          // (whole phrases, each translated as it is)
+          const parts = [tr('Вход и выход длятся по одному качанию.')];
+          if (coloured) parts.push(tr('Лампы загораются цветом волн и за качание перекрашиваются в цвет эффекта; в конце за качание перекрашиваются обратно.'));
+          if (waveOut) parts.push(p.endMode === 'fade' ? tr('После выхода — затухание за качание.') : tr('Чтобы после выхода было затухание, выберите «Конец вспышки: Затухание».'));
+          root.append(this.note(parts.join(' ')));
         }
       }
       const together: [string, string, string][] = [
