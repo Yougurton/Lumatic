@@ -2667,6 +2667,49 @@
         font-size: 12px;
         margin-bottom: 6px;
       }
+      .gls-lane-head {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin: 10px 0 4px;
+        color: #fff;
+        font-size: 12.5px;
+      }
+      .gls-lane-head:first-child {
+        margin-top: 0;
+      }
+      .gls-lane-head .gls-dim {
+        flex: 1;
+      }
+      .gls-lane-head button {
+        padding: 0 6px;
+      }
+      .gls-block-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .gls-block-colors {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+      .gls-block-colors .gls-swatches {
+        margin-bottom: 0;
+      }
+      .gls-block-colors > button.active {
+        background: #2d3a55;
+        border-color: #4d6aa8;
+      }
+      .gls-block-modes {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 4px 12px;
+        margin-top: 6px;
+      }
       .gls-record.active {
         background: #6b1d24;
         border-color: #ff5c6c;

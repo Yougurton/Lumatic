@@ -90,7 +90,7 @@ function drawEffectSketch(canvas: HTMLCanvasElement, card: EffectCard, colors: S
     start: 0,
     end: card.length,
     layer: 1,
-    ...(card.kind === 'gls' ? { gls: { boxes: [{ ...newColorBox(main), beatValue: 2, events: [{ id: 'a', beat: 0, transition: 'instant', color: main, brightness: 1, strobe: 0 }, { id: 'b', beat: 1.5, transition: 'fade', color: main, brightness: 0, strobe: 0 }] }] } } : {}),
+    ...(card.kind === 'gls' ? { gls: { boxes: [{ ...newColorBox(main), beatValue: 2, blocks: [{ id: 'a', start: 0, end: 1.5, color: { ...main, brightness: 1 }, endColor: null, startMode: 'on' as const, fadeIn: 0.25, endMode: 'fade' as const, strobe: 0 }] }] } } : {}),
     params: { color: main, color2: null, hsv: false, startMode: 'flash', endMode: 'fade', fadeIn: 0.25, pulse: 1, repeats: 1, direction: 'forward', rate: 0.25, duty: 0.5, pattern: 'all', density: 0.3, seed: 7, ...card.params({ main, other }) },
   };
   const items: EffectItem[] = Array.from({ length: 8 }, (_, id) => ({ kind: 'light', type: 0, id }));

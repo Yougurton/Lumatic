@@ -76,9 +76,20 @@ export function presetFromSelection(editor: Editor, name: string): Preset | null
     effects: effects.map((effect) => {
       const { id: _id, ...rest } = structuredClone(effect);
       const targetName = effect.target === undefined ? undefined : findGroup(groups, effect.target)?.group.name;
+      // (a GLS block's further groups: their names kept, to find them again in another map)
+      for (const lane of rest.gls?.lanes ?? []) {
+        const name = lane.target === undefined ? undefined : findGroup(groups, lane.target)?.group.name;
+        if (name !== undefined) lane.targetName = name;
+      }
       return { effect: { ...rest, start: effect.start - first, end: effect.end - first }, ...(targetName === undefined ? {} : { targetName }), children: editor.effectChildren(effect.id).map(save) };
     }),
   };
+}
+
+/** A preset kept with the others (first in the list). */
+export function addPreset(preset: Preset) {
+  storePresets([preset, ...loadPresets()]);
+  window.dispatchEvent(new Event('lumatic-presets'));
 }
 
 /** Puts a preset into the show from `at` (selected afterwards). */
@@ -133,6 +144,16 @@ export function insertPreset(editor: Editor, preset: Preset, at: number) {
         continue;
       } else delete copy.target;
     }
+    // (its further groups: found by name where theirs aren't here; left out when none is)
+    if (copy.gls?.lanes !== undefined) {
+      copy.gls.lanes = copy.gls.lanes.filter((lane) => {
+        if (lane.target === undefined || findGroup(groups, lane.target) !== null) return true;
+        const same = lane.targetName === undefined ? null : byName(lane.targetName, groups);
+        if (same === null) return false;
+        lane.target = same.id;
+        return true;
+      });
+    }
     editor.effects.push(copy);
     if (copy.custom === true) for (const child of children) put(child, copy.id);
     else for (const child of editor.previewEffectChildren(copy)) project.clips.push(child);
@@ -154,6 +175,11 @@ export class PresetPanel {
   constructor(private readonly editor: Editor, private readonly root: HTMLElement) {
     editor.onChange((what) => {
       if (what === 'selection' || what === 'all') this.renderButton();
+    });
+    // (a preset saved elsewhere — the GLS editor: the list read again)
+    window.addEventListener('lumatic-presets', () => {
+      this.presets = loadPresets();
+      this.render();
     });
     this.render();
   }

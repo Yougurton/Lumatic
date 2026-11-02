@@ -1,6 +1,6 @@
 import type { SchemeColors } from './bake';
 import { resolveRgb } from './bake';
-import { newId, type ClipColor, type LightClip, type RawEvent, type Rgb } from './model';
+import { newId, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
 import { ringPropFor } from '../engine/core/lighting/ring-motion';
 
 /**
@@ -33,6 +33,26 @@ export interface GlsColorEvent {
   /** 0…(about 1.2). */
   brightness: number;
   /** Flashes per beat (0: none). */
+  strobe: number;
+}
+
+/**
+ * A box's event as the timeline's clips are (since 0.19): lit from `start` to `end` (beats from the
+ * block's start) — its colour and brightness, a gradient to `endColor`, how it comes on (on, a flash,
+ * the game's fade, up from the dark over `fadeIn`) and goes (off, fading out, staying lit), and a
+ * strobe over it (flashes per beat).
+ */
+export interface GlsBlock {
+  id: string;
+  start: number;
+  end: number;
+  color: ClipColor;
+  endColor: ClipColor | null;
+  startMode: StartMode;
+  fadeIn: number;
+  endMode: EndMode;
+  fadeOut?: number;
+  hsv?: boolean;
   strobe: number;
 }
 
@@ -82,13 +102,32 @@ export interface GlsBox {
   value: number;
   affectFirst: boolean;
   easing: GlsEasing;
+  /** The box's events as points (before 0.19; made into `blocks` when the block is opened). */
   events: GlsColorEvent[];
+  /** Its events as clips (colour boxes; when there, `events` aren't used). */
+  blocks?: GlsBlock[];
+  /** Boxes with one link share their events (blocks): a change to one is made to all. */
+  link?: string;
   rotations: GlsRotationEvent[];
   /** rotation boxes: which ring system (Chroma nameFilter; empty: all). */
   rings: string;
 }
 
 export interface GlsData {
+  /** The boxes on the block's own group. */
+  boxes: GlsBox[];
+  /** More groups the block runs over, each with its own boxes (the timing shared). */
+  lanes?: GlsLane[];
+}
+
+/** One more group a GLS block runs over: what it is (as an effect's target) and its boxes. */
+export interface GlsLane {
+  id: string;
+  target?: string;
+  /** In a preset: the target group's name (to find it in another map). */
+  targetName?: string;
+  type: number;
+  ids: number[] | null;
   boxes: GlsBox[];
 }
 
@@ -107,10 +146,8 @@ export function newColorBox(color: ClipColor): GlsBox {
     value: 0,
     affectFirst: false,
     easing: 'linear',
-    events: [
-      { id: newId('v'), beat: 0, transition: 'instant', color: { ...color }, brightness: 1, strobe: 0 },
-      { id: newId('v'), beat: 1, transition: 'fade', color: { ...color }, brightness: 0, strobe: 0 },
-    ],
+    events: [],
+    blocks: [{ id: newId('v'), start: 0, end: 1, color: { ...color, brightness: 1 }, endColor: null, startMode: 'on', fadeIn: 0.25, endMode: 'fade', strobe: 0 }],
     rotations: [],
     rings: '',
   };
@@ -273,7 +310,7 @@ const withBrightness = (color: ClipColor, brightness: number): ClipColor => ({ .
  * One element's light from a box's frames (beats absolute): clips, ending at `end` (where the block
  * ends, the light goes back to what is under it).
  */
-function framesToClips(frames: Frame[], end: number, scheme: SchemeColors, make: (start: number, stop: number) => LightClip): LightClip[] {
+function framesToClips(frames: Frame[], end: number, scheme: SchemeColors, make: (start: number, stop: number) => LightClip, strobes?: Map<LightClip, number>): LightClip[] {
   const out: LightClip[] = [];
   // extend: holds what was before until here (a fade after it starts from here)
   const resolved: Frame[] = [];
@@ -294,7 +331,7 @@ function framesToClips(frames: Frame[], end: number, scheme: SchemeColors, make:
     const b0 = frame.brightness;
     const b1 = fadesIn ? next.brightness : b0;
     if (b0 <= 0 && b1 <= 0) continue;
-    if (frame.strobe > 0) {
+    if (frame.strobe > 0 && strobes === undefined) {
       // strobe: on and off at its rate (fading along if the next event fades)
       const period = 1 / frame.strobe;
       for (let t = frame.beat; t < stop - 1e-6; t += period) {
@@ -332,8 +369,82 @@ function framesToClips(frames: Frame[], end: number, scheme: SchemeColors, make:
         }
       } else clip.endMode = isLast ? 'off' : next.brightness > 0 ? 'stay' : 'off';
     }
+    if (frame.strobe > 0) strobes?.set(clip, frame.strobe);
     out.push(clip);
   }
+  return out;
+}
+
+/**
+ * A box's point events (before 0.19) as blocks: the light they make, clip by clip (within the block's
+ * `length`), each clip a block — the same light.
+ */
+export function pointsToBlocks(events: GlsColorEvent[], length: number, scheme: SchemeColors): GlsBlock[] {
+  const frames: Frame[] = [...events]
+    .sort((a, b) => a.beat - b.beat)
+    .map((event) => ({ beat: event.beat, transition: event.transition, color: event.color, brightness: event.brightness, strobe: event.strobe }));
+  const strobes = new Map<LightClip, number>();
+  const clips = framesToClips(frames, Math.max(length, ...events.map((event) => event.beat)), scheme, (start, stop) => ({ id: '', type: 0, ids: null, start, end: stop, startMode: 'on', fadeIn: 0.25, endMode: 'off', color: { ref: 'left', brightness: 1 }, endColor: null, layer: 0 }), strobes);
+  return clips.map((clip) => ({
+    id: newId('v'),
+    start: Math.round(clip.start * 1e6) / 1e6,
+    end: Math.round(clip.end * 1e6) / 1e6,
+    color: clip.color,
+    endColor: clip.endColor,
+    startMode: clip.startMode,
+    fadeIn: clip.fadeIn,
+    endMode: clip.endMode,
+    strobe: strobes.get(clip) ?? 0,
+  }));
+}
+
+/** A box's blocks (its points made into blocks when it has none yet). */
+export function boxBlocks(box: GlsBox, length: number, scheme: SchemeColors): GlsBlock[] {
+  return box.blocks ?? pointsToBlocks(box.events, length, scheme);
+}
+
+/** A colour a little brighter (or dimmer): the brightness spread. */
+const brighter = (color: ClipColor, extra: number): ClipColor => ({ ...color, ...(color.rgb === undefined ? {} : { rgb: [...color.rgb] as Rgb }), brightness: Math.max(0, color.brightness + extra) });
+
+/** One element's clips from a box's blocks: moved on by `offset`, brighter by `extra`, cut at `end`. */
+function blocksToClips(blocks: GlsBlock[], affectFirst: boolean, offset: number, extra: number, start: number, end: number, scheme: SchemeColors, make: (from: number, to: number) => LightClip): LightClip[] {
+  const out: LightClip[] = [];
+  [...blocks]
+    .sort((a, b) => a.start - b.start)
+    .forEach((block, index) => {
+      const from = start + offset + block.start;
+      const to = Math.min(end, start + offset + block.end);
+      if (to - from < 1e-6) return;
+      const add = index === 0 && !affectFirst ? 0 : extra;
+      const color = brighter(block.color, add);
+      const endColor = block.endColor === null ? null : brighter(block.endColor, add);
+      const cut = to < start + offset + block.end - 1e-6;
+      if (block.strobe > 0) {
+        // a strobe: on and off at its rate (through the gradient, if it has one)
+        const period = 1 / block.strobe;
+        for (let t = from; t < to - 1e-6; t += period) {
+          const share = (t - from) / Math.max(1e-6, block.end - block.start);
+          const fading = block.endMode === 'fade' ? 1 - share : 1;
+          const clip = make(t, Math.min(to, t + period / 2));
+          const c = endColor === null ? color : mix(color, endColor, share, scheme);
+          clip.color = { ...c, brightness: (color.brightness + ((endColor?.brightness ?? color.brightness) - color.brightness) * share) * fading };
+          if (clip.color.brightness <= 0.001) continue;
+          clip.startMode = 'on';
+          clip.endMode = 'off';
+          out.push(clip);
+        }
+        return;
+      }
+      const clip = make(from, to);
+      clip.color = color;
+      clip.endColor = endColor;
+      clip.startMode = block.startMode;
+      clip.fadeIn = block.fadeIn;
+      clip.endMode = cut ? 'off' : block.endMode;
+      if (block.fadeOut !== undefined) clip.fadeOut = block.fadeOut;
+      if (block.hsv === true) clip.hsv = true;
+      out.push(clip);
+    });
   return out;
 }
 
@@ -355,8 +466,8 @@ export function glsNeededLength(data: GlsData, items: number): number {
   let needed = 0;
   for (const box of data.boxes) {
     if (box.kind === 'color') {
-      const last = Math.max(0, ...box.events.map((event) => event.beat));
-      if (box.events.length === 0) continue;
+      const last = box.blocks !== undefined ? Math.max(0, ...box.blocks.map((block) => block.start + 1 / 64)) : Math.max(0, ...box.events.map((event) => event.beat));
+      if ((box.blocks ?? box.events).length === 0) continue;
       const m = filterUnits(box.filter, items).length;
       for (let k = 0; k < m; k++) needed = Math.max(needed, spreadOf(box.beatSpread, box.beatValue, k, m, null, false) + last);
     } else if (box.rotations.length > 0) needed = Math.max(needed, Math.max(...box.rotations.map((event) => event.beat)) + 1 / 64);
@@ -380,6 +491,10 @@ export function generateGls(data: GlsData, start: number, end: number, context: 
   for (const [item, { box, k, m }] of owner) {
     const offset = spreadOf(box.beatSpread, box.beatValue, k, m, null, false);
     const extra = spreadOf(box.valueSpread, box.value, k, m, box.easing, true);
+    if (box.blocks !== undefined) {
+      clips.push(...blocksToClips(box.blocks, box.affectFirst, offset, extra, start, end, context.scheme, (from, to) => context.makeClip(item, from, to)));
+      continue;
+    }
     const events = [...box.events].sort((a, b) => a.beat - b.beat);
     const frames: Frame[] = events.map((event, index) => ({
       beat: start + offset + event.beat,

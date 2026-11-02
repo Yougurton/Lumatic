@@ -91,6 +91,8 @@ export interface EffectExtras {
   secondsPerBeat: number;
   /** Rings in a ring system ('': all of them together). */
   ringCount: (system: string) => number;
+  /** What a GLS block's further group runs over. */
+  itemsOf?: (target: Pick<Effect, 'target' | 'type' | 'ids'>) => EffectItem[];
 }
 
 /** What an effect goes through, one by one. */
@@ -224,13 +226,30 @@ export function turnHue(color: ClipColor, degrees: number, scheme: SchemeColors)
 
 function buildEffectEvents(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
   if (effect.kind === 'gls') {
-    const made = generateGls(effect.gls ?? { boxes: [] }, effect.start, effect.end, {
+    const made = generateGls({ boxes: effect.gls?.boxes ?? [] }, effect.start, effect.end, {
       scheme,
       items: items.length,
       makeClip: (item, start, end) => childClip(effect, items[item] ?? null, start, end, item),
       ringCount: extras?.ringCount ?? (() => 1),
       secondsPerBeat: extras?.secondsPerBeat ?? 0.5,
     });
+    // its further groups: each over its own elements (their slots after the ones before)
+    let slot = items.length;
+    for (const lane of effect.gls?.lanes ?? []) {
+      const laneItems = extras?.itemsOf?.(lane) ?? [];
+      const base = slot;
+      const laneEffect: Effect = { ...effect, target: lane.target, type: lane.type, ids: lane.ids };
+      if (lane.target === undefined) delete laneEffect.target;
+      const more = generateGls({ boxes: lane.boxes.filter((box) => box.kind === 'color') }, effect.start, effect.end, {
+        scheme,
+        items: laneItems.length,
+        makeClip: (item, start, end) => childClip(laneEffect, laneItems[item] ?? null, start, end, base + item),
+        ringCount: () => 1,
+        secondsPerBeat: extras?.secondsPerBeat ?? 0.5,
+      });
+      made.clips.push(...more.clips);
+      slot += laneItems.length;
+    }
     return { clips: made.clips, raw: made.raw.map((event) => ({ ...event, group: effect.id })) };
   }
   return { clips: classicEffect(effect, items, scheme), raw: [] };

@@ -979,6 +979,13 @@ export class Editor {
       const proxy = this.effectProxy(effect);
       proxies.set(proxy.id, effect);
       candidates.push(proxy);
+      // (a GLS block over several groups: shown on each of their rows — the same block)
+      for (const lane of effect.gls?.lanes ?? []) {
+        const { target: _target, scope: _scope, ...rest } = proxy;
+        void _target;
+        void _scope;
+        candidates.push({ ...rest, type: lane.type, ids: lane.ids === null ? null : [...lane.ids], ...(lane.target === undefined ? {} : { target: lane.target }), ...(lane.ids !== null && lane.ids.length === 1 && lane.target === undefined ? { scope: 'light' as const } : {}) });
+      }
     }
     for (const clip of candidates) {
       const lights = clipLights(clip, groups);
@@ -1005,6 +1012,8 @@ export class Editor {
         partial = count < members.length;
       }
       if (!touched) continue;
+      // (a block over several groups shows once on a row both touch)
+      if (proxies.has(clip.id) && found.some((item) => item.clip.id === clip.id)) continue;
       const priority = clipPriority(clip, groups);
       let role: ShownClip['role'];
       if (row.kind === 'group') role = priority === 0 ? 'own' : 'inner';
@@ -1957,6 +1966,7 @@ export class Editor {
     return {
       secondsPerBeat: 60 / this.songBpm,
       ringCount: (name) => (name === '' ? Math.max(1, ...systems.map((system) => system.rings)) : (systems.find((system) => system.name === name)?.rings ?? 1)),
+      itemsOf: (target) => this.effectItemsOf(target),
     };
   }
 
@@ -1990,7 +2000,7 @@ export class Editor {
   }
 
   /** The row an effect would go on → what it runs over (null: not a light row). */
-  private targetOfRow(row: Row): Pick<Effect, 'target' | 'type' | 'ids'> | null {
+  targetOfRow(row: Row): Pick<Effect, 'target' | 'type' | 'ids'> | null {
     if (!isLightRow(row)) return null;
     if (row.kind === 'group') return { type: row.type, ids: this.takenLights().has(row.type) ? [...row.lights] : null };
     if (row.kind === 'light') return { type: row.type, ids: [row.id] };
@@ -2042,7 +2052,7 @@ export class Editor {
       startMode: 'on',
       fadeIn: 0.5,
       endMode: 'stay',
-      color: effect.kind === 'gls' ? (effect.gls?.boxes.find((box) => box.kind === 'color')?.events[0]?.color ?? p.color) : p.color,
+      color: effect.kind === 'gls' ? (effect.gls?.boxes.find((box) => box.kind === 'color')?.blocks?.[0]?.color ?? effect.gls?.boxes.find((box) => box.kind === 'color')?.events[0]?.color ?? p.color) : p.color,
       endColor: effect.kind === 'gls' ? null : p.color2,
       layer: effect.layer,
     };
