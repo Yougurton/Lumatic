@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import type { Spectrogram } from './spectrogram';
 
 /**
@@ -153,9 +154,11 @@ export function silencePreview() {
     };
     if (view.downbeat !== null) mark(view.downbeat, '#7fe39a', 'сильная доля');
     else mark(view.firstBeat, '#7fe39a', 'первая доля');
-    const silenceText = lead > 1e-3 ? `Тишина: ${lead.toFixed(3)} с` : lead < -1e-3 ? `Отрежется: ${(-lead).toFixed(3)} с` : 'Песня начнётся сразу';
-    const landing = (view.downbeat ?? view.firstBeat) === null ? '' : ` · ${view.downbeat !== null ? 'сильная доля' : 'первая доля'} встанет на долю ${(((view.downbeat ?? view.firstBeat)! + lead) / beat).toFixed(2)}`;
-    note.textContent = `${silenceText}${landing}. Цифры сверху — такты.`;
+    // (put together from whole phrases: each one translated as it is)
+    const silenceText = lead > 1e-3 ? tr('Тишина: {0} с', lead.toFixed(3)) : lead < -1e-3 ? tr('Отрежется: {0} с', (-lead).toFixed(3)) : tr('Песня начнётся сразу');
+    const at = view.downbeat ?? view.firstBeat;
+    const landing = at === null ? '' : ` · ${tr(view.downbeat !== null ? 'сильная доля встанет на долю {0}' : 'первая доля встанет на долю {0}', ((at + lead) / beat).toFixed(2))}`;
+    note.textContent = `${silenceText}${landing}. ${tr('Цифры сверху — такты.')}`;
     if (now !== null) {
       // where it plays
       ctx.fillStyle = '#ff4d6d';

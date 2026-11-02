@@ -1819,4 +1819,11 @@ export const EN: Record<string, string> = {
   "Между вспышками, % яркости": "Between the flashes, % brightness",
   "С градиентом к концу вспышки идут по нему: цвет и яркость меняются к концу блока.": "With a gradient to the end the flashes follow it: colour and brightness change toward the block's end.",
   "{0} BPM · {1} с": "{0} BPM · {1} s",
+  "сетка {0}": "grid {0}",
+  "Короче — в ту сторону, где ближе": "Shortest — whichever way is closer",
+  "Против часовой стрелки": "Counterclockwise",
+  "По часовой стрелке": "Clockwise",
+  "В игре: сжато — {0}, в начале — {1}, растянуто — {2}.": "In the game: squeezed — {0}, at the start — {1}, stretched — {2}.",
+  "сильная доля встанет на долю {0}": "the downbeat lands on beat {0}",
+  "первая доля встанет на долю {0}": "the first beat lands on beat {0}",
 };

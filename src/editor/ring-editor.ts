@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
 import { button, check, holdWhileTyping, scrubStrip, type StripLane, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
+import { easingPicker } from './easing-picker';
 import { numberDrum } from './grids';
 import { fillRingShape, ringSystemName } from './library';
 import { newId } from './model';
@@ -18,11 +19,25 @@ import { absolutePose, dataFirstRing, poseBefore, EASINGS, EVENT_SHAPES, firstRi
  * side.
  */
 
-const WAYS: [TurnWay, string][] = [
-  ['short', 'Короче'],
-  ['ccw', 'Против часовой'],
-  ['cw', 'По часовой'],
+const WAYS: [TurnWay, string, string][] = [
+  // (a short arc: the shorter way round; three quarters of a circle, an arrow on its end)
+  ['short', 'Короче — в ту сторону, где ближе', '<path d="M6 15a7 7 0 0 1 12 0"/><path d="M3 12l3 3 3-3"/><path d="M15 12l3 3 3-3"/>'],
+  ['ccw', 'Против часовой стрелки', '<path d="M17 6.5A7.5 7.5 0 1 0 19.5 12"/><path d="M12.5 3.5l4.5 3-3.5 4"/>'],
+  ['cw', 'По часовой стрелке', '<path d="M7 6.5A7.5 7.5 0 1 1 4.5 12"/><path d="M11.5 3.5L7 6.5l3.5 4"/>'],
 ];
+
+/** Which way round the rings turn: three icon buttons. */
+function wayIcons(current: TurnWay, change: (value: TurnWay) => void) {
+  const row = document.createElement('div');
+  row.className = 'ins-buttons gls-toggle way-icons';
+  for (const [value, title, path] of WAYS) {
+    const element = button('', title, () => change(value));
+    element.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+    if (value === current) element.classList.add('active');
+    row.append(element);
+  }
+  return row;
+}
 
 export class RingEditor {
   private dock: HTMLElement | null = null;
@@ -110,6 +125,8 @@ export class RingEditor {
   private onKey(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     const typing = target instanceof HTMLInputElement && ['text', 'number'].includes(target.type);
+    // (an open list — an easing's — closes first, by its own Escape)
+    if (event.key === 'Escape' && document.querySelector('.ep-list') !== null) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -193,12 +210,16 @@ export class RingEditor {
     if (dock === null || block === undefined) return;
     if (holdWhileTyping(dock, () => this.render())) return;
     const scroll = [...dock.querySelectorAll<HTMLElement>('.gls-col')].map((col) => col.scrollTop);
+    // (a drum being turned with the keys or the wheel keeps the focus in its new self)
+    const active = document.activeElement;
+    const focused = active instanceof HTMLElement && dock.contains(active) ? active.dataset.wheelKey : undefined;
     dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null, this.stripLane()));
     const body = document.createElement('div');
     body.className = 'gls-body ring-body';
     body.append(this.laneColumn(block), isZoom(block) ? this.zoomColumn(block) : this.poseColumn(block), isZoom(block) ? this.zoomView(block) : this.viewColumn(block));
     dock.append(body);
     [...dock.querySelectorAll<HTMLElement>('.gls-col')].forEach((col, index) => (col.scrollTop = scroll[index] ?? 0));
+    if (focused !== undefined) dock.querySelector<HTMLElement>(`[data-wheel-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   }
 
   private header(block: RingBlock) {
@@ -325,6 +346,12 @@ export class RingEditor {
     return box;
   }
 
+  /** Where a pose is in its block: a drum a grid step a notch. */
+  private beatDrum(block: RingBlock, pose: RingPose) {
+    const step = this.editor.snap > 0 ? this.editor.snap : 1 / 16;
+    return numberDrum(`ring-beat:${pose.id}:${String(step)}`, pose.beat, (value) => this.changePose((item) => (item.beat = Math.min(block.end - block.start, Math.max(0, value)))), { step, min: 0, max: block.end - block.start, beats: true });
+  }
+
   private poseColumn(block: RingBlock) {
     const col = document.createElement('div');
     col.className = 'gls-col';
@@ -335,7 +362,7 @@ export class RingEditor {
     }
     const events = block.mode === 'event';
     col.append(heading('Поза'));
-    col.append(labeled('Доля (от начала блока)', numberInput(pose.beat, this.editor.snap || 0.25, (value) => this.changePose((item) => (item.beat = Math.max(0, value))))));
+    col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
     const shapes = SHAPES.filter(([shape]) => !events || EVENT_SHAPES.has(shape));
     col.append(toggle(shapes, shapeOf(pose, block), (value) => this.changePose((item) => {
       if (value === 'manual' && item.shape !== 'manual') {
@@ -388,27 +415,27 @@ export class RingEditor {
         col.append(note(`Шаг до неё — ${String(round(before))}°, после — ${String(round(before + pose.step))}°.${events ? ' В игре — к шагу последнего события колец перед ней.' : ''}`));
       }
     }
-    if (shape === 'wave' || shape === 'alternate' || shape === 'random') col.append(labeled(shape === 'alternate' ? 'Каждое второе повёрнуто на, °' : 'Размах, °', numberInput(pose.step, 1, (value) => this.changePose((item) => (item.step = value)))));
+    if (shape === 'wave' || shape === 'alternate' || shape === 'random') col.append(labeled(shape === 'alternate' ? 'Каждое второе повёрнуто на, °' : 'Размах, °', numberDrum(`ring-swing:${pose.id}`, pose.step, (value) => this.changePose((item) => (item.step = value)), { step: 1, min: -360, max: 360, digits: 2 })));
     if (shape === 'wave') {
-      col.append(labeled('Волн по кольцам', numberInput(pose.periods, 0.25, (value) => this.changePose((item) => (item.periods = value)))));
-      col.append(labeled('Сдвиг волны, °', numberInput(pose.phase, 15, (value) => this.changePose((item) => (item.phase = value)))));
+      col.append(labeled('Волн по кольцам', numberDrum(`ring-periods:${pose.id}`, pose.periods, (value) => this.changePose((item) => (item.periods = value)), { step: 0.25, min: -8, max: 8, digits: 3 })));
+      col.append(labeled('Сдвиг волны, °', numberDrum(`ring-phase:${pose.id}`, pose.phase, (value) => this.changePose((item) => (item.phase = value)), { step: 5, min: -360, max: 360, digits: 2 })));
     }
     if (shape === 'random') col.append(button('🎲 Другой случай', 'Другие случайные углы', () => this.changePose((item) => (item.seed = Math.floor(Math.random() * 1e6)))));
     if (shape === 'manual') col.append(note('Углы колец задаются справа: тяните столбики (Shift — точнее, по 1°).'));
     col.append(note('Углы — как кольца видны с платформы: плюс — против часовой стрелки, минус — по часовой.'));
 
     col.append(heading('Поворот к позе'));
-    col.append(toggle(WAYS, pose.way, (value) => this.changePose((item) => (item.way = value))));
-    col.append(labeled('Целых оборотов сверху', numberInput(pose.loops, 1, (value) => this.changePose((item) => (item.loops = Math.max(0, Math.round(value)))))));
-    col.append(labeled('Время поворота, долей (0 — сразу)', numberInput(pose.duration, 0.25, (value) => this.changePose((item) => (item.duration = Math.max(0, value))))));
-    if (!events) col.append(labeled('Сглаживание', select(EASINGS, pose.easing, (value) => this.changePose((item) => (item.easing = value)))));
+    col.append(wayIcons(pose.way, (value) => this.changePose((item) => (item.way = value))));
+    col.append(labeled('Целых оборотов сверху', numberDrum(`ring-loops:${pose.id}`, pose.loops, (value) => this.changePose((item) => (item.loops = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: 32 })));
+    col.append(labeled('Время поворота, долей (0 — сразу)', numberDrum(`ring-duration:${pose.id}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: 1 / 8, min: 0, max: 64, beats: true })));
+    if (!events) col.append(labeled('Сглаживание', easingPicker(EASINGS, pose.easing, (value) => this.changePose((item) => (item.easing = value)))));
     else {
       // (the game's own closing in, or an easing made of short ring events)
       const options: [string, string][] = [['', 'Как в игре: плавно с торможением'], ...EASINGS];
       col.append(
         labeled(
           'Движение',
-          select(options, pose.eventEasing ?? '', (value) =>
+          easingPicker(options, pose.eventEasing ?? '', (value) =>
             this.changePose((item) => {
               if (value === '') delete item.eventEasing;
               else item.eventEasing = value;
@@ -424,7 +451,7 @@ export class RingEditor {
         ),
       );
     }
-    col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberInput(pose.delay, 0.125, (value) => this.changePose((item) => (item.delay = Math.max(0, value))))));
+    col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberDrum(`ring-delay:${pose.id}`, pose.delay, (value) => this.changePose((item) => (item.delay = Math.max(0, value))), { step: 1 / 16, min: 0, max: 8, beats: true })));
     if (pose.delay > 0) col.append(check('От дальних к ближним', pose.reverse, (on) => this.changePose((item) => (item.reverse = on))));
     if (events && pose.reverse && pose.delay > 0) col.append(note('События колец ведут волну только от ближних колец к дальним.'));
     col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
@@ -477,23 +504,12 @@ export class RingEditor {
       return col;
     }
     col.append(heading('Поза'));
-    col.append(labeled('Доля (от начала блока)', numberInput(pose.beat, this.editor.snap || 0.25, (value) => this.changePose((item) => (item.beat = Math.max(0, value))))));
-    col.append(labeled('Расстояние между кольцами', numberInput(pose.step, 0.1, (value) => this.changePose((item) => (item.step = round(value))))));
-    if (system !== undefined) {
-      const quick = document.createElement('div');
-      quick.className = 'gls-swatches';
-      const presets: [string, string, number][] = [
-        ['Сжать', 'Как сжимает обычное событие зума', system.position.minPositionStep],
-        ['Как в начале', 'Расстояние, с которым кольца стоят в начале песни', system.initialStep],
-        ['Растянуть', 'Как растягивает обычное событие зума', system.position.maxPositionStep],
-        ['Вплотную', 'Все кольца в одном месте', 0],
-      ];
-      for (const [label, title, value] of presets) quick.append(button(label, `${title}: ${String(round(value))}`, () => this.changePose((item) => (item.step = round(value)))));
-      quick.append(button('×½', 'Вдвое ближе', () => this.changePose((item) => (item.step = round(item.step / 2)))), button('×2', 'Вдвое дальше', () => this.changePose((item) => (item.step = round(item.step * 2)))));
-      col.append(quick);
-    }
+    col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
+    // (spacings a tenth apart; the game's own ones — squeezed, at the start, stretched — among them)
+    col.append(labeled('Расстояние между кольцами', numberDrum(`zoom-step:${pose.id}`, pose.step, (value) => this.changePose((item) => (item.step = round(value))), { step: 0.1, min: -20, max: 40, digits: 2 })));
+    if (system !== undefined) col.append(note(`В игре: сжато — ${String(round(system.position.minPositionStep))}, в начале — ${String(round(system.initialStep))}, растянуто — ${String(round(system.position.maxPositionStep))}.`));
     col.append(heading('Переход'));
-    col.append(labeled('Время перехода, долей (0 — сразу)', numberInput(pose.duration, 0.25, (value) => this.changePose((item) => (item.duration = Math.max(0, value))))));
+    col.append(labeled('Время перехода, долей (0 — сразу)', numberDrum(`zoom-duration:${pose.id}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: 1 / 8, min: 0, max: 64, beats: true })));
     col.append(note('Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная. Кольца доезжают плавно, с торможением; время перехода задаёт скорость.'));
     col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
     return col;
@@ -592,7 +608,16 @@ export class RingEditor {
       press: (beat, at, place) => {
         const block = this.block();
         if (block === undefined) return null;
-        const hit = block.poses.map((pose) => ({ pose, d: Math.abs(place(block.start + pose.beat) - at) })).filter((entry) => entry.d <= 11).sort((a, b) => a.d - b.d)[0];
+        // (a pose is picked where it's drawn: the angle's circle; the zoom's bars, reaching right)
+        const widest = Math.max(1e-3, ...block.poses.map((pose) => Math.abs(pose.step)));
+        const reach = (pose: RingPose) => (isZoom(block) ? 3 * (2 + (Math.abs(pose.step) / widest) * 6) + 6 : 11);
+        const hit = block.poses
+          .map((pose) => {
+            const px = place(block.start + pose.beat);
+            return { pose, d: at < px ? px - at : Math.max(0, at - px - reach(pose) + 11) };
+          })
+          .filter((entry) => entry.d <= 11)
+          .sort((a, b) => a.d - b.d)[0];
         if (hit !== undefined) {
           // picked; dragged — moved (one undo step when let go)
           const id = hit.pose.id;

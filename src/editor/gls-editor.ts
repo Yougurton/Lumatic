@@ -1,10 +1,11 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import type { Effect } from './effects';
+import { easingPicker } from './easing-picker';
 import { beatsLabel, drum, GRIDS, nextGrid, numberDrum } from './grids';
 import { showMenu } from './menu';
 import { addPreset, presetFromSelection } from './presets';
-import { defaultFilter, filterFor, filterUnits, glsNeededLength, pointsToBlocks, spreadOf, type GlsBlock, type GlsLane, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
+import { defaultFilter, ease, filterFor, filterUnits, glsNeededLength, pointsToBlocks, spreadOf, type GlsBlock, type GlsLane, newColorBox, newRotationBox, type GlsBox, type GlsColorEvent, type GlsEasing, type GlsRotationEvent, type GlsSpread, type GlsTransition } from './gls';
 import { ringSystemName } from './library';
 import { findGroup, newId, type ClipColor, type Rgb } from './model';
 
@@ -32,6 +33,9 @@ const EASINGS: [GlsEasing, string][] = [
   ['outQuad', 'Торможение (OutQuad)'],
   ['inOutQuad', 'Разгон и торможение'],
 ];
+
+/** How a GLS easing goes (for its pick's pictures): 'none' — at once. */
+const glsCurve = (kind: GlsEasing) => (t: number) => (kind === 'none' ? (t > 0 ? 1 : 0) : ease(kind, t));
 
 const TRANSITIONS: [GlsTransition, string, string][] = [
   ['instant', 'Сразу', 'Значение ставится мгновенно'],
@@ -207,6 +211,8 @@ export class GlsEditor {
   private onKey(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     const typing = target instanceof HTMLInputElement && ['text', 'number'].includes(target.type);
+    // (an open list — an easing's — closes first, by its own Escape)
+    if (event.key === 'Escape' && document.querySelector('.ep-list') !== null) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -770,7 +776,7 @@ export class GlsEditor {
     if (box.kind === 'color') {
       col.append(labeled(wave ? 'Яркость последнему элементу +' : 'Яркость каждому следующему +', numberDrum(`gls-value:${box.id}`, box.value, (value) => this.changeBox((item) => (item.value = value)), { step: 0.05, min: -1.5, max: 1.5, digits: 2 })));
       col.append(slider(wave ? 'Оттенок последнему элементу, °' : 'Оттенок каждому следующему, °', box.hueSpread ?? 0, -360, 360, 5, (value) => this.changeBox((item) => (item.hueSpread = value))));
-      col.append(labeled('Сглаживание', select(EASINGS, box.easing, (value) => this.changeBox((item) => (item.easing = value)))));
+      col.append(labeled('Сглаживание', easingPicker(EASINGS, box.easing, (value) => this.changeBox((item) => (item.easing = value)), glsCurve)));
       const tip = document.createElement('div');
       tip.className = 'gls-note';
       tip.textContent = 'Или тяните ручку ◆ на дорожке событий: вправо — дольше волна, вверх/вниз — ярче/тусклее последний элемент. Градиент по радуге внутри блока — справа, «Градиент к концу» + «Через оттенки».';
@@ -919,7 +925,7 @@ export class GlsEditor {
     panel.append(labeled('Целых оборотов', numberInput(event.loops, 1, (value) => set((item) => (item.loops = Math.max(0, Math.round(value)))))));
     // ('cw' is Chroma's direction 0 — which turns the rings counterclockwise as the player sees them)
     panel.append(toggle([['cw', 'Против часовой'], ['ccw', 'По часовой']], event.direction, (value) => set((item) => (item.direction = value))));
-    panel.append(labeled('Сглаживание', select(EASINGS, event.easing, (value) => set((item) => (item.easing = value)))));
+    panel.append(labeled('Сглаживание', easingPicker(EASINGS, event.easing, (value) => set((item) => (item.easing = value)), glsCurve)));
     panel.append(button('Удалить событие', 'Delete', () => this.deleteEvent()));
     return panel;
   }
@@ -1978,7 +1984,7 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
     const view = span();
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
-    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)} ${editor.spectrogram === null ? '' : 's'} ${lane?.key() ?? ''}`;
+    const key = `${String(width)} ${String(height)} ${String(beat)} ${JSON.stringify(view)} ${editor.spectrogram === null ? '' : 's'} ${lane?.key() ?? ''} ${String(editor.snap)}`;
     if (view === null || width === 0 || key === drawn) return;
     drawn = key;
     const ratio = window.devicePixelRatio || 1;
@@ -2029,7 +2035,18 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
         ctx.fillText(String(Math.round(at * 100) / 100), x(at) + 3, 11);
       }
     }
-    if (lane !== null) lane.draw(ctx, x, SONG, height - SONG, width);
+    if (lane !== null) {
+      // the grid poses snap to (Alt+wheel), where its lines aren't too close
+      const grid = editor.snap;
+      if (grid > 0 && (grid * width) / (view.to - view.from) >= 5) {
+        ctx.fillStyle = 'rgba(140,170,255,0.13)';
+        for (let at = Math.max(view.block.start, Math.ceil((view.from - view.block.start) / grid) * grid + view.block.start); at <= Math.min(view.to, view.block.end) + 1e-9; at += grid) ctx.fillRect(Math.round(x(at)), SONG, 1, height - SONG);
+      }
+      lane.draw(ctx, x, SONG, height - SONG, width);
+      ctx.fillStyle = 'rgba(214,217,228,0.55)';
+      ctx.font = '10px system-ui, sans-serif';
+      ctx.fillText(`сетка ${GRIDS.find(([value]) => Math.abs(value - grid) < 1e-9)?.[1] ?? beatsLabel(grid)}`, 6, height - 6);
+    }
     const cursor = x(beat);
     ctx.fillStyle = '#ff5a5a';
     ctx.fillRect(Math.round(cursor) - 1, 0, 2, height);
@@ -2077,12 +2094,24 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
   });
+  let gridWheel = 0;
   canvas.addEventListener(
     'wheel',
     (event) => {
       event.preventDefault();
       const view = span();
       if (view === null) return;
+      if (event.altKey) {
+        // the grid a step finer or coarser (as on the timeline)
+        gridWheel += event.deltaY;
+        if (Math.abs(gridWheel) < 40) return;
+        editor.snap = nextGrid(editor.snap, gridWheel < 0);
+        gridWheel = 0;
+        editor.setStatus(`Сетка: ${GRIDS.find(([value]) => Math.abs(value - editor.snap) < 1e-9)?.[1] ?? ''}`);
+        editor.emit('selection');
+        drawn = '';
+        return;
+      }
       if (event.ctrlKey || event.metaKey) {
         zoom(Math.exp(event.deltaY * 0.0015), beatAt(event.clientX));
         return;
