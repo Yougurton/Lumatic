@@ -15,6 +15,20 @@ export interface PreviewPicker {
   /** Silence that will be put in front of the song. */
   setLead(lead: number): void;
   stop(): void;
+  /** While the tempo is checked by ear: the stretch being played, close, with the grid's beats over
+   *  it (bars brighter) — null: the whole song again. */
+  listen(state: ListenView | null): void;
+}
+
+export interface ListenView {
+  /** Where it plays (seconds of the song file). */
+  time(): number;
+  active(): boolean;
+  bpm: number;
+  /** A beat of the grid (seconds of the song file). */
+  firstBeat: number;
+  /** The strong beats (null: every 4th). */
+  bar: { downbeat: number; beats: number } | null;
 }
 
 const EDGE = 7;
@@ -55,6 +69,51 @@ export function previewPicker(buffer: AudioBuffer, spectrogram: Spectrogram | Pr
     length = Math.min(Math.max(1, length), songLength);
     from = Math.min(Math.max(0, from), Math.max(0, songLength - length));
   };
+  let listening: ListenView | null = null;
+  /** The stretch being played, close up: its spectrogram, the beats over it, where it is. */
+  const drawListening = (ctx: CanvasRenderingContext2D, state: ListenView, width: number, height: number) => {
+    const now = state.time();
+    const span = 6;
+    const t0 = now - span / 3;
+    const toX = (t: number) => ((t - t0) / span) * width;
+    ctx.fillStyle = '#0b0b10';
+    ctx.fillRect(0, 0, width, height);
+    if (picture !== null) {
+      const f0 = t0 / picture.secondsPerFrame;
+      const f1 = (t0 + span) / picture.secondsPerFrame;
+      const from = Math.max(0, f0);
+      const to = Math.min(picture.frames, f1);
+      if (to > from) ctx.drawImage(picture.image, from, 0, to - from, picture.image.height, toX(from * picture.secondsPerFrame), 0, toX(to * picture.secondsPerFrame) - toX(from * picture.secondsPerFrame), height);
+    }
+    const period = 60 / Math.max(1, state.bpm);
+    ctx.font = '600 11px system-ui, sans-serif';
+    for (let k = Math.floor((t0 - state.firstBeat) / period); state.firstBeat + k * period <= t0 + span; k++) {
+      const t = state.firstBeat + k * period;
+      const bar = state.bar;
+      const index = bar === null ? k : Math.round((t - bar.downbeat) / period);
+      const beats = bar?.beats ?? 4;
+      const strong = ((index % beats) + beats) % beats === 0;
+      const x = toX(t);
+      ctx.fillStyle = strong ? 'rgba(255,230,160,0.9)' : 'rgba(255,255,255,0.35)';
+      ctx.fillRect(Math.round(x), 0, strong ? 2 : 1, height);
+      // (the half beats, faint)
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(Math.round(toX(t + period / 2)), height * 0.6, 1, height * 0.4);
+      if (strong) {
+        ctx.fillStyle = '#ffe3a8';
+        ctx.fillText(String(Math.floor(index / beats) + 1), x + 4, 13);
+      }
+    }
+    ctx.fillStyle = '#ff4d6d';
+    ctx.fillRect(toX(now), 0, 2, height);
+    const label = `${String(Math.round(state.bpm * 100) / 100)} BPM · ${now.toFixed(1)} с`;
+    ctx.font = '11px system-ui, sans-serif';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(10,11,15,0.8)';
+    ctx.fillRect(width - tw - 12, height - 20, tw + 8, 16);
+    ctx.fillStyle = '#e8eaf0';
+    ctx.fillText(label, width - tw - 8, height - 8);
+  };
   const draw = () => {
     if (!canvas.isConnected || canvas.clientWidth === 0) return;
     const ratio = window.devicePixelRatio || 1;
@@ -62,6 +121,13 @@ export function previewPicker(buffer: AudioBuffer, spectrogram: Spectrogram | Pr
     canvas.height = Math.round(canvas.clientHeight * ratio);
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    if (listening !== null) {
+      if (listening.active()) {
+        drawListening(ctx, listening, canvas.clientWidth, canvas.clientHeight);
+        return;
+      }
+      listening = null;
+    }
     const g = geometry();
     ctx.fillStyle = '#0b0b10';
     ctx.fillRect(0, 0, g.width, g.height);
@@ -198,5 +264,18 @@ export function previewPicker(buffer: AudioBuffer, spectrogram: Spectrogram | Pr
       draw();
     },
     stop: stopPlaying,
+    listen: (state) => {
+      listening = state;
+      if (state === null) {
+        draw();
+        return;
+      }
+      const tick = () => {
+        if (listening !== state) return;
+        draw();
+        if (listening === state) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    },
   };
 }

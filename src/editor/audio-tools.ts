@@ -65,7 +65,16 @@ export async function encodeOgg(buffer: AudioBuffer, silence: number, onProgress
 
 /** Plays the song from `from` seconds with a click on every beat of the grid (to check a tempo by
  *  ear). Returns a stop function. */
-export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: number, from: number, bar: { downbeat: number; beats: number } | null = null): () => void {
+export interface Listening {
+  /** Stops it. */
+  (): void;
+  /** Where in the song it plays now (seconds). */
+  time(): number;
+  /** Still playing. */
+  active(): boolean;
+}
+
+export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: number, from: number, bar: { downbeat: number; beats: number } | null = null): Listening {
   const context = new AudioContext();
   const source = context.createBufferSource();
   source.buffer = buffer;
@@ -100,5 +109,5 @@ export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: numb
     void context.close();
   };
   window.setTimeout(stop, Math.min(64 * period, 30) * 1000);
-  return stop;
+  return Object.assign(stop, { time: () => from + Math.max(0, context.currentTime - start), active: () => !stopped });
 }

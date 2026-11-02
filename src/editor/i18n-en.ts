@@ -1818,4 +1818,5 @@ export const EN: Record<string, string> = {
   "Чередуется с": "Alternates with",
   "Между вспышками, % яркости": "Between the flashes, % brightness",
   "С градиентом к концу вспышки идут по нему: цвет и яркость меняются к концу блока.": "With a gradient to the end the flashes follow it: colour and brightness change toward the block's end.",
+  "{0} BPM · {1} с": "{0} BPM · {1} s",
 };

@@ -466,7 +466,9 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       }
       void song().then((buffer) => {
         // (the map's own grid: beat 0 at the song's start)
-        stopListening = playWithClicks(buffer, Number(el<HTMLInputElement>('bpm').value), 0, Math.max(0, buffer.duration * 0.3));
+        const listening = playWithClicks(buffer, Number(el<HTMLInputElement>('bpm').value), 0, Math.max(0, buffer.duration * 0.3));
+        stopListening = listening;
+        picker?.listen({ time: listening.time, active: listening.active, bpm: Number(el<HTMLInputElement>('bpm').value), firstBeat: 0, bar: null });
         el('listen').textContent = '■ Стоп';
       });
     });

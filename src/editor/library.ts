@@ -120,7 +120,7 @@ function drawEffectSketch(canvas: HTMLCanvasElement, card: EffectCard, colors: S
 }
 
 /** The ring sketch: 7 rings seen down the tunnel turning to the form. */
-function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | null) {
+function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | null, outline: { polygons: [number, number][][]; radius: number } | null = null) {
   const ctx = canvas.getContext('2d')!;
   const { width, height } = canvas;
   ctx.fillStyle = '#0c0d11';
@@ -157,7 +157,18 @@ function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | n
     const hue = 270 - k * 12;
     ctx.strokeStyle = `hsl(${String(hue)} 80% ${String(70 - k * 5)}%)`;
     ctx.lineWidth = Math.max(1, 3 * scale);
-    ctx.strokeRect(-size, -size * 0.62, size * 2, size * 1.24);
+    if (outline === null) ctx.strokeRect(-size, -size * 0.62, size * 2, size * 1.24);
+    else {
+      // (the environment's own rings: their parts' outlines, y up)
+      const unit = (size * 1.15) / outline.radius;
+      ctx.lineWidth = Math.max(0.75, 1.6 * scale);
+      for (const polygon of outline.polygons) {
+        ctx.beginPath();
+        polygon.forEach(([x, y], index) => (index === 0 ? ctx.moveTo(x * unit, -y * unit) : ctx.lineTo(x * unit, -y * unit)));
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
     ctx.restore();
   }
 }
@@ -196,8 +207,15 @@ export class Library {
       tabs.append(button);
     }
     root.append(tabs, this.body);
+    let rings = '';
     editor.onChange((what) => {
       if (what === 'selection' || what === 'rows' || what === 'all') this.updateTarget();
+      // (another environment: its own rings on the cards)
+      const now = editor.preview.ringSystems().map((system) => system.name).join('|');
+      if (what === 'all' && now !== rings) {
+        rings = now;
+        if (this.tab === 'rings') this.render();
+      }
     });
     const loop = () => {
       const anim = this.animating;
@@ -380,7 +398,11 @@ export class Library {
 
   private ringCard(card: RingCard) {
     const canvas = document.createElement('canvas');
-    const element = this.cardFrame(card.name, card.hint, canvas, (t) => drawRingSketch(canvas, card, t), () => this.tryRing(card));
+    // (the environment's own rings — the ones these events turn, or move)
+    const systems = this.editor.preview.ringSystems();
+    const index = systems.findIndex((system) => (card.type === 8 ? system.rotates : system.zooms));
+    const outline = index < 0 ? null : this.editor.preview.ringOutline(index);
+    const element = this.cardFrame(card.name, card.hint, canvas, (t) => drawRingSketch(canvas, card, t, outline), () => this.tryRing(card));
     element.addEventListener('click', () => this.insertRing(card));
     return element;
   }

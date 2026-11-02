@@ -87,6 +87,11 @@ export class Preview {
     return this.view.ringSystems();
   }
 
+  /** One ring of a ring system seen down the tunnel (see MapView.ringOutline). */
+  ringOutline(system = 0) {
+    return this.view.ringOutline(system);
+  }
+
   get colors(): ColorScheme {
     return this.view.currentColors;
   }

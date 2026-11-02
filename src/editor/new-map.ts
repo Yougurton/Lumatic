@@ -250,6 +250,10 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
             <div class="nm-section">Окружение</div>
             <div class="env-plate" data-id="env"></div>
             <div class="nm-section">Превью в списке песен</div>
+            <div class="nm-grid">
+              <label>Превью с, сек<input type="number" data-id="preview" step="any" min="0"></label>
+              <label>Превью длится, сек<input type="number" data-id="preview-length" step="any" min="1" value="10"></label>
+            </div>
             <div data-id="picker"><div class="nm-dim">Появится, когда выберете песню.</div></div>
           </section>
           <section class="nm-col">
@@ -275,6 +279,8 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     // the song's start as it will be (the silence, the beats)
     const startView = silencePreview();
     el('silence-preview').append(startView.element);
+    // the preview typed in: the picker follows
+    for (const id of ['preview', 'preview-length']) el(id).addEventListener('change', () => picker?.set(Number(el<HTMLInputElement>('preview').value) || 0, Number(el<HTMLInputElement>('preview-length').value) || 10));
     let spectrogram: Spectrogram | null = null;
     el<HTMLInputElement>('mapper').value = defaultMapper;
     el('ogg').append(oggQualitySlider(editorSettings().oggQuality, (quality) => setEditorSettings({ oggQuality: quality })));
@@ -448,7 +454,12 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
             spectrogram = made;
             refresh();
           });
-          picker = previewPicker(audio, computed, audio.duration * 0.35, 10, () => undefined);
+          picker = previewPicker(audio, computed, audio.duration * 0.35, 10, (start, duration) => {
+            el<HTMLInputElement>('preview').value = start.toFixed(2);
+            el<HTMLInputElement>('preview-length').value = duration.toFixed(2);
+          });
+          el<HTMLInputElement>('preview').value = (silence() + audio.duration * 0.35).toFixed(2);
+          el<HTMLInputElement>('preview-length').value = '10.00';
           el('picker').replaceChildren(picker.element);
           await detect();
         } catch (error) {
@@ -471,7 +482,9 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
       if (audio === null) return;
       const from = Math.max(0, audio.duration * 0.3);
       const strong = align.value === 'bar' && downbeat !== null && downbeat.key === downbeatKey() ? { downbeat: downbeat.time, beats: beatsPerBar() } : null;
-      stopListening = playWithClicks(audio, Number(bpmInput.value), firstBeat(), from, strong);
+      const listening = playWithClicks(audio, Number(bpmInput.value), firstBeat(), from, strong);
+      stopListening = listening;
+      picker?.listen({ time: listening.time, active: listening.active, bpm: Number(bpmInput.value), firstBeat: firstBeat(), bar: strong ?? { downbeat: firstBeat(), beats: beatsPerBar() } });
       el('listen').textContent = '■ Стоп';
     });
     el('cover-pick').addEventListener('click', () => {
