@@ -184,6 +184,8 @@ void app.whenReady().then(() => {
   });
   ipcMain.handle('write-file', async (_event, file: string, data: ArrayBuffer | string) => {
     if (!allowed(file)) throw new Error('not in an opened folder');
+    // (a file in a folder of the map's — "Lumatic backups" — made with it)
+    await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, typeof data === 'string' ? data : Buffer.from(data));
   });
   ipcMain.handle('backup-file', async (_event, file: string, keep: number) => {

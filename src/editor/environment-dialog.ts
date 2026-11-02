@@ -7,7 +7,8 @@ import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
 /**
  * "Environment": a ready-made environment for the map (MadChase's, Phøenix's, Lonely's), or the environment as it is
  * with parts taken away and its rings and their lights made bigger. Applying saves the map and opens
- * it again (the 3D view and the lights as they then are).
+ * it again (the 3D view and the lights as they then are). While it's open it stands off the 3D view,
+ * every lamp lit white, and the parts ticked off are taken away there at once (tried, not saved).
  */
 export async function environmentDialog(editor: Editor): Promise<void> {
   const map = editor.map;
@@ -22,9 +23,20 @@ export async function environmentDialog(editor: Editor): Promise<void> {
 
   return new Promise((resolve) => {
     const shade = document.createElement('div');
-    shade.className = 'ce-shade';
+    shade.className = 'ce-shade env-shade';
     const box = document.createElement('div');
     box.className = 'ce-dialog env-dialog';
+    // (off the 3D view: under it, or beside it — where there's room)
+    const view = document.getElementById('preview-wrap')?.getBoundingClientRect();
+    if (view !== undefined && view.width > 0) {
+      const below = window.innerHeight - view.bottom;
+      const right = window.innerWidth - view.right;
+      const left = view.left;
+      box.classList.add('env-docked');
+      if (below >= 300) Object.assign(box.style, { top: `${String(view.bottom + 6)}px`, left: '8px', width: `${String(Math.min(900, window.innerWidth - 16))}px`, maxHeight: `${String(below - 14)}px` });
+      else if (right >= 380 || left >= 380) Object.assign(box.style, { top: '8px', [right >= left ? 'right' : 'left']: '8px', width: `${String(Math.min(900, Math.max(right, left) - 14))}px`, maxHeight: `${String(window.innerHeight - 16)}px` });
+      else box.classList.remove('env-docked');
+    }
     box.innerHTML = `
       <div class="ce-dialog-title">Окружение карты</div>
       <div class="env-tabs"><button type="button" data-tab="presets">Окружения</button><button type="button" data-tab="parts">Детали и кольца</button></div>
@@ -37,15 +49,37 @@ export async function environmentDialog(editor: Editor): Promise<void> {
     const el = <T extends HTMLElement>(selector: string) => box.querySelector<T>(selector)!;
     const status = el<HTMLElement>('[data-id="status"]');
     let busy = false;
+    // every lamp lit white while it's open: what's taken away shows
+    editor.staticLights = true;
+    editor.rebuildPreview(true);
+    let applied = false;
     const finish = () => {
       shade.remove();
+      window.removeEventListener('keydown', escape, true);
+      if (previewTimer !== null) window.clearTimeout(previewTimer);
+      editor.staticLights = false;
+      if (!applied) void editor.previewEnvironmentMods(null);
+      editor.rebuildPreview(true);
       resolve();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || busy) return;
+      event.preventDefault();
+      event.stopPropagation();
+      finish();
+    };
+    window.addEventListener('keydown', escape, true);
+    // the changes tried in the 3D view a moment after each one
+    let previewTimer: number | null = null;
+    const tryOut = () => {
+      if (previewTimer !== null) window.clearTimeout(previewTimer);
+      previewTimer = window.setTimeout(() => {
+        previewTimer = null;
+        void editor.previewEnvironmentMods(currentMods()).catch((error: unknown) => console.error('[lumatic] environment preview failed', error));
+      }, 120);
     };
     el('[data-id="close"]').addEventListener('click', () => {
       if (!busy) finish();
-    });
-    shade.addEventListener('mousedown', (event) => {
-      if (event.target === shade && !busy) finish();
     });
 
     const apply = async (next: EnvironmentMods, nextEnvironment?: string) => {
@@ -53,12 +87,14 @@ export async function environmentDialog(editor: Editor): Promise<void> {
       busy = true;
       status.textContent = 'Сохраняю карту и открываю её заново…';
       try {
+        applied = true;
         await editor.setEnvironmentMods(next, nextEnvironment);
         editor.setStatus('Окружение карты изменено');
         finish();
       } catch (error) {
         console.error(error);
         status.textContent = `Не получилось: ${error instanceof Error ? error.message : String(error)}`;
+        applied = false;
         busy = false;
       }
     };
@@ -99,6 +135,15 @@ export async function environmentDialog(editor: Editor): Promise<void> {
     const parts = el<HTMLElement>('[data-page="parts"]');
     const hidden = new Set(mods.hidden ?? []);
     const rings: Record<string, RingLook> = structuredClone(mods.rings ?? {});
+    /** The changes as they're set now. */
+    function currentMods(): EnvironmentMods {
+      const cleaned: Record<string, RingLook> = {};
+      for (const [ring, look] of Object.entries(rings)) {
+        const kept = Object.fromEntries(Object.entries(look).filter(([, value]) => (typeof value === 'number' ? Math.abs(value - 1) > 1e-6 : value === true))) as RingLook;
+        if (Object.keys(kept).length > 0) cleaned[ring] = kept;
+      }
+      return { ...mods, hidden: [...hidden], rings: cleaned };
+    }
     if (source === null) parts.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Не удалось загрузить данные окружения.' }));
     else {
       parts.append(Object.assign(document.createElement('div'), { className: 'nm-dim env-note', textContent: `${environment}: отмеченное убирается из окружения (Chroma). Работает у всех игроков с Chroma, не зависит от версии игры.` }));
@@ -112,6 +157,7 @@ export async function environmentDialog(editor: Editor): Promise<void> {
         check.addEventListener('change', () => {
           if (check.checked) hidden.add(part.name);
           else hidden.delete(part.name);
+          tryOut();
         });
         label.append(check, ` Убрать ${part.name}${part.count > 1 ? ` ×${String(part.count)}` : ''}${part.lights ? ' 💡' : ''}`);
         label.title = part.lights ? 'В этой части есть свет — убрав её, вы уберёте и его' : '';
@@ -138,6 +184,7 @@ export async function environmentDialog(editor: Editor): Promise<void> {
             input.addEventListener('change', () => {
               const value = Number(input.value);
               if (Number.isFinite(value) && value > 0) look[key] = value;
+              tryOut();
             });
             wrap.append(label, input);
             return wrap;
@@ -148,7 +195,10 @@ export async function environmentDialog(editor: Editor): Promise<void> {
           geometryCheck.type = 'checkbox';
           geometryCheck.checked = look.geometry === true;
           geometryCheck.disabled = version !== '3';
-          geometryCheck.addEventListener('change', () => (look.geometry = geometryCheck.checked || undefined));
+          geometryCheck.addEventListener('change', () => {
+            look.geometry = geometryCheck.checked || undefined;
+            tryOut();
+          });
           geometry.append(geometryCheck, 'Из геометрии Chroma (Noodle)');
           line.append(
             field('Размер ×', 'size', 'Во сколько раз больше сами кольца'),
@@ -162,12 +212,7 @@ export async function environmentDialog(editor: Editor): Promise<void> {
     }
 
     el('[data-id="apply"]').addEventListener('click', () => {
-      const cleaned: Record<string, RingLook> = {};
-      for (const [ring, look] of Object.entries(rings)) {
-        const kept = Object.fromEntries(Object.entries(look).filter(([, value]) => (typeof value === 'number' ? Math.abs(value - 1) > 1e-6 : value === true))) as RingLook;
-        if (Object.keys(kept).length > 0) cleaned[ring] = kept;
-      }
-      const next: EnvironmentMods = { ...mods, hidden: [...hidden], rings: cleaned };
+      const next = currentMods();
       if (version === '2' && !fitsV2(modsFragment(next, source))) status.textContent = 'Часть изменений не подходит для карты v2 и не будет записана.';
       void apply(next);
     });

@@ -10,6 +10,7 @@ import { DEFAULT_NJS } from './jump';
 import { applyDifficulties } from './difficulties';
 import { difficultyPanel } from './difficulty-panel';
 import { silencePreview } from './silence-preview';
+import { readSongSource, setSongSourceLead, writeSongSource } from './song-source';
 import type { EnvironmentChoice } from './environment-gallery';
 
 /**
@@ -468,7 +469,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
         // (the map's own grid: beat 0 at the song's start)
         const listening = playWithClicks(buffer, Number(el<HTMLInputElement>('bpm').value), 0, Math.max(0, buffer.duration * 0.3));
         stopListening = listening;
-        picker?.listen({ time: listening.time, active: listening.active, bpm: Number(el<HTMLInputElement>('bpm').value), firstBeat: 0, bar: null });
+        startView.listen(listening);
         el('listen').textContent = '■ Стоп';
       });
     });
@@ -544,9 +545,15 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
           }
           if (Math.abs(shift) > 1e-6) {
             status.textContent = 'Перевожу песню…';
-            const prepared = withStart(await song(), shift);
+            // (made from the song as it was first put in — compressed once, however often this is
+            // changed; a map without one keeps its song as it is now as the source first)
+            let kept = await readSongSource(map.folder);
+            if (kept === null && map.parsed.audioData !== null && (await writeSongSource(map.folder, map.parsed.audioData.slice(0), fields.song, 0))) kept = await readSongSource(map.folder);
+            const lead = (kept?.source.lead ?? 0) + shift;
+            const prepared = kept === null ? withStart(await song(), shift) : withStart(await decodeAudio(kept.data), lead);
             const ogg = await encodeOgg(prepared.buffer, prepared.silence, (done) => (status.textContent = `Перевожу песню… ${String(Math.round(done * 100))}%`));
             await map.folder.writeBinary(fields.song, ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
+            if (kept !== null) await setSongSourceLead(map.folder, kept.source, lead);
             next.preview = Math.max(0, next.preview + shift);
           }
           let info = writeInfo(await map.folder.readText(infoName), next, place);

@@ -70,6 +70,7 @@ export class Preview {
 
   async setEnvironment(id: string, chromaEnvironment?: ChromaEnvironmentData) {
     const result = await this.view.setEnvironment(id, chromaEnvironment);
+    this.outlines.clear();
     return result.isOk();
   }
 
@@ -89,8 +90,12 @@ export class Preview {
 
   /** One ring of a ring system seen down the tunnel (see MapView.ringOutline). */
   ringOutline(system = 0) {
-    return this.view.ringOutline(system);
+    // (kept till the environment changes: the ring editor draws it every frame)
+    if (!this.outlines.has(system)) this.outlines.set(system, this.view.ringOutline(system));
+    return this.outlines.get(system) ?? null;
   }
+
+  private outlines = new Map<number, ReturnType<MapView['ringOutline']>>();
 
   get colors(): ColorScheme {
     return this.view.currentColors;

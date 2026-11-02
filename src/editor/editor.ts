@@ -1,7 +1,7 @@
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
 import type { BeatmapCustomData, BpmEvent } from '../engine/core/beatmap/types';
 import { parseNoodleBeatmap, type NoodleBeatmapData } from '../engine/core/noodle-data';
-import { EMPTY_CHROMA_ENVIRONMENT, parseV3ChromaEnvironment, type ChromaEnvironmentData } from '../engine/core/chroma-environment';
+import { EMPTY_CHROMA_ENVIRONMENT, parseV2ChromaEnvironment, parseV3ChromaEnvironment, type ChromaEnvironmentData } from '../engine/core/chroma-environment';
 import { createAudioClock, createSilentClock, type SongClock } from '../engine/core/clock/song-clock';
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import { bakeLights, rawEvents, type OutEvent, type SchemeColors } from './bake';
@@ -432,6 +432,7 @@ export class Editor {
     this.preview.setTiming(this.songBpm, this.bpmEvents, row.colorScheme);
     this.mapChroma = difficulty.chromaEnvironment;
     this.previewChroma = difficulty.chromaEnvironment;
+    this.envPreviewBase = null;
     this.mapNoodle = difficulty.noodle;
     this.ringParentKey = '';
     this.preview.setNoodle(difficulty.noodle);
@@ -657,6 +658,49 @@ export class Editor {
     if (!hasMods(mods)) return { ...EMPTY_FRAGMENT };
     const preset = mods?.preset === undefined ? undefined : await loadPreset(mods.preset);
     return modsFragment(mods, await this.environmentSource(environment).catch(() => null), preset);
+  }
+
+  /** While the Environment window is open: every lamp on, white at 30% (what's taken away shows). */
+  staticLights = false;
+  /** The map's own Chroma environment while changes are being tried in the 3D view. */
+  private envPreviewBase: ChromaEnvironmentData | undefined | null = null;
+  private envPreviewToken = 0;
+
+  /**
+   * The environment's changes tried in the 3D view, before they're applied (nothing saved) — null: the
+   * map's own again.
+   */
+  async previewEnvironmentMods(mods: EnvironmentMods | null) {
+    const map = this.map;
+    const row = this.row;
+    const project = this.project;
+    if (map === null || row === null || project === null) return;
+    const token = ++this.envPreviewToken;
+    if (mods === null) {
+      if (this.envPreviewBase === null) return;
+      this.mapChroma = this.envPreviewBase;
+      this.envPreviewBase = null;
+    } else {
+      const original = await map.folder.readText(difficultyFile(row));
+      const version = difficultyVersion(original);
+      if (version === '4') return;
+      const fragment = await this.environmentFragment(mods);
+      if (token !== this.envPreviewToken) return;
+      // (the file as saving would make it, read back as opening does)
+      const root = JSON.parse(writeDifficulty(original, [], undefined, undefined, { previous: project.writtenEnvironment, next: fragment })) as Record<string, unknown>;
+      const parsed = (version === '2' ? parseV2ChromaEnvironment(root._customData as BeatmapCustomData) : parseV3ChromaEnvironment(root.customData as BeatmapCustomData)).chromaEnvironment;
+      for (const animation of parsed.animations) {
+        animation.songBpmTime = this.toSong(animation.jsonTime);
+        animation.durationSongBpmTime = this.toSong(animation.jsonTime + animation.duration) - animation.songBpmTime;
+      }
+      if (this.envPreviewBase === null) this.envPreviewBase = this.mapChroma;
+      this.mapChroma = parsed;
+    }
+    // (loaded again with the ring tracks on top, as usual)
+    this.ringEnhancementKey = '';
+    this.ringAnimationKey = '';
+    this.previewChroma = undefined;
+    this.rebuildPreview(true);
   }
 
   /**
@@ -2789,7 +2833,7 @@ export class Editor {
           this.shownNotes = key;
           this.preview.setObjects(show ? engineObjects(this.objects, this.toSong) : null);
         }
-        this.preview.setEvents(settings().previewLights ? this.previewEvents() : this.dimLights());
+        this.preview.setEvents(settings().previewLights && !this.staticLights ? this.previewEvents() : this.dimLights());
       } catch (error) {
         console.error('[chroeditor] preview rebuild failed', error);
       }

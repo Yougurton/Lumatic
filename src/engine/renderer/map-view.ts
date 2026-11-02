@@ -356,58 +356,47 @@ export class MapView implements RenderView {
   }
 
   /**
-   * What one ring of a ring system looks like, seen down the tunnel: each of its parts' outline
-   * (the convex hull of its box, in metres, the ring's centre at 0, x right, y up) — for sketches of
-   * ring poses in the environment's own shape. Null: no rings.
+   * One ring of a ring system as the player sees it down the tunnel: its parts' triangles flattened
+   * onto the ring's plane (x, y pairs, three a triangle; laser beams and glows left out) and how far
+   * from the middle they reach — for drawing ring poses in the environment's own shape. Null: no rings.
    */
-  ringOutline(system = 0): { polygons: [number, number][][]; radius: number } | null {
+  ringOutline(system = 0): { triangles: Float32Array; radius: number } | null {
     const group = this.environment?.ringGroups[system];
     const ring = group?.rings[Math.min(1, (group?.rings.length ?? 1) - 1)]?.target;
     if (ring === undefined) return null;
     ring.updateMatrixWorld(true);
     const toRing = new Matrix4().copy(ring.matrixWorld).invert();
-    const polygons: [number, number][][] = [];
+    const points: number[] = [];
     const corner = new Vector3();
     const matrix = new Matrix4();
     ring.traverse((part) => {
       const mesh = part as Mesh;
-      if (!(mesh as { isMesh?: boolean }).isMesh || mesh.geometry === undefined || !mesh.visible) return;
-      mesh.geometry.computeBoundingBox();
-      const box = mesh.geometry.boundingBox;
-      if (box === null) return;
+      if (!(mesh as { isMesh?: boolean }).isMesh || mesh.geometry === undefined || !mesh.visible || /bloom|glow|flare/iu.test(mesh.name)) return;
+      const position = mesh.geometry.getAttribute('position');
+      if (position === undefined) return;
       matrix.multiplyMatrices(toRing, mesh.matrixWorld);
-      const points: [number, number][] = [];
-      for (let k = 0; k < 8; k++) {
-        corner.set(k & 1 ? box.max.x : box.min.x, k & 2 ? box.max.y : box.min.y, k & 4 ? box.max.z : box.min.z).applyMatrix4(matrix);
-        points.push([corner.x, corner.y]);
+      const flat: number[] = [];
+      for (let k = 0; k < position.count; k++) {
+        corner.fromBufferAttribute(position, k).applyMatrix4(matrix);
+        flat.push(corner.x, corner.y);
       }
-      polygons.push(convexHull(points));
-    });
-    if (polygons.length === 0) return null;
-    // (laser beams — long and thin — would dwarf the ring: they're kept short, the ring's size is
-    // taken without them)
-    const extent = (polygon: [number, number][]) => {
-      const xs = polygon.map(([x]) => x);
-      const ys = polygon.map(([, y]) => y);
+      // (a laser beam — long and thin, reaching far off — isn't the ring)
+      const xs = flat.filter((_, k) => k % 2 === 0);
+      const ys = flat.filter((_, k) => k % 2 === 1);
       const w = Math.max(...xs) - Math.min(...xs);
       const h = Math.max(...ys) - Math.min(...ys);
-      return { long: Math.max(w, h), short: Math.min(w, h) };
-    };
-    const isBeam = (polygon: [number, number][]) => {
-      const { long, short } = extent(polygon);
-      return long > 30 * Math.max(short, 1e-3);
-    };
-    const solid = polygons.filter((polygon) => !isBeam(polygon));
-    const radiusOf = (list: [number, number][][]) => Math.max(1e-6, ...list.flat().map(([x, y]) => Math.hypot(x, y)));
-    const body = radiusOf(solid.length > 0 ? solid : polygons);
-    const reach = body * 3;
-    const shortened = polygons.map((polygon) =>
-      polygon.map(([x, y]): [number, number] => {
-        const length = Math.hypot(x, y);
-        return length > reach ? [(x / length) * reach, (y / length) * reach] : [x, y];
-      }),
-    );
-    return { polygons: shortened, radius: radiusOf(shortened) };
+      if (Math.max(w, h) > 30 * Math.max(Math.min(w, h), 1e-3)) return;
+      const index = mesh.geometry.getIndex();
+      const count = index === null ? position.count : index.count;
+      for (let k = 0; k < count && points.length < 400000; k++) {
+        const at = index === null ? k : index.getX(k);
+        points.push(flat[at * 2]!, flat[at * 2 + 1]!);
+      }
+    });
+    if (points.length < 6) return null;
+    let radius = 1e-6;
+    for (let k = 0; k < points.length; k += 2) radius = Math.max(radius, Math.hypot(points[k]!, points[k + 1]!));
+    return { triangles: Float32Array.from(points), radius };
   }
 
   /** The environment's ring systems: their names (what Chroma's nameFilter picks), how many rings,
@@ -1056,21 +1045,4 @@ export class MapView implements RenderView {
     this.pipeline.dispose();
     this.postBloom.dispose();
   }
-}
-
-/** The convex hull of points in a plane (Andrew's monotone chain). */
-function convexHull(points: [number, number][]): [number, number][] {
-  const sorted = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const cross = (o: [number, number], a: [number, number], b: [number, number]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-  const lower: [number, number][] = [];
-  for (const point of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, point) <= 0) lower.pop();
-    lower.push(point);
-  }
-  const upper: [number, number][] = [];
-  for (const point of [...sorted].reverse()) {
-    while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, point) <= 0) upper.pop();
-    upper.push(point);
-  }
-  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }

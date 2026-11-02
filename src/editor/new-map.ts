@@ -1,6 +1,7 @@
 import { DEFAULT_NJS } from './jump';
 import { difficultyPanel } from './difficulty-panel';
 import { silencePreview } from './silence-preview';
+import { writeSongSource } from './song-source';
 import type { Spectrogram } from './spectrogram';
 import { environmentCatalog, isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
 import { choiceLabel, environmentGallery, type EnvironmentChoice } from './environment-gallery';
@@ -286,6 +287,8 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     el('ogg').append(oggQualitySlider(editorSettings().oggQuality, (quality) => setEditorSettings({ oggQuality: quality })));
 
     let audio: AudioBuffer | null = null;
+    /** The picked file as it is (kept in the map as the song's source). */
+    let original: { data: ArrayBuffer; name: string } | null = null;
     let detected: BpmResult | null = null;
     let cover: File | null = null;
     /** The cover came from the song's tags (another song's replaces it). */
@@ -429,6 +432,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
         try {
           const data = await file.arrayBuffer();
           audio = await decodeAudio(data);
+          original = { data, name: file.name };
           const minutes = Math.floor(audio.duration / 60);
           el('song').textContent = `${file.name} · ${String(minutes)}:${String(Math.floor(audio.duration % 60)).padStart(2, '0')}`;
           // the title, the artist and the cover from the file's tags; else from its name: "Artist - Title"
@@ -484,7 +488,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
       const strong = align.value === 'bar' && downbeat !== null && downbeat.key === downbeatKey() ? { downbeat: downbeat.time, beats: beatsPerBar() } : null;
       const listening = playWithClicks(audio, Number(bpmInput.value), firstBeat(), from, strong);
       stopListening = listening;
-      picker?.listen({ time: listening.time, active: listening.active, bpm: Number(bpmInput.value), firstBeat: firstBeat(), bar: strong ?? { downbeat: firstBeat(), beats: beatsPerBar() } });
+      startView.listen(listening);
       el('listen').textContent = '■ Стоп';
     });
     el('cover-pick').addEventListener('click', () => {
@@ -540,6 +544,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
           status.textContent = 'Записываю карту…';
           if (settings.difficulties.length === 0) throw new Error('Отметьте хотя бы одну сложность');
           await folder.writeBinary('song.ogg', ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
+          if (original !== null) await writeSongSource(folder, original.data, original.name, settings.silence);
           await folder.writeBinary('cover.jpg', await coverJpeg(cover, settings.title, settings.artist));
           for (const entry of settings.difficulties) await folder.writeText(newDifficultyFile(entry), emptyDifficulty(editorSettings().newFormat));
           await folder.writeText('Info.dat', infoText(settings, 'song.ogg', 'cover.jpg'));

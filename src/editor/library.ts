@@ -120,7 +120,27 @@ function drawEffectSketch(canvas: HTMLCanvasElement, card: EffectCard, colors: S
 }
 
 /** The ring sketch: 7 rings seen down the tunnel turning to the form. */
-function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | null, outline: { polygons: [number, number][][]; radius: number } | null = null) {
+export interface RingShape {
+  /** x, y pairs, three a triangle (the ring's plane, y up). */
+  triangles: Float32Array;
+  radius: number;
+}
+
+/** An environment's ring (see Preview.ringOutline) filled, `reach` px from the middle to its farthest point. */
+export function fillRingShape(ctx: CanvasRenderingContext2D, shape: RingShape, reach: number) {
+  const unit = reach / shape.radius;
+  const t = shape.triangles;
+  ctx.beginPath();
+  for (let k = 0; k + 5 < t.length; k += 6) {
+    ctx.moveTo(t[k]! * unit, -t[k + 1]! * unit);
+    ctx.lineTo(t[k + 2]! * unit, -t[k + 3]! * unit);
+    ctx.lineTo(t[k + 4]! * unit, -t[k + 5]! * unit);
+    ctx.closePath();
+  }
+  ctx.fill();
+}
+
+function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | null, outline: RingShape | null = null) {
   const ctx = canvas.getContext('2d')!;
   const { width, height } = canvas;
   ctx.fillStyle = '#0c0d11';
@@ -159,15 +179,9 @@ function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | n
     ctx.lineWidth = Math.max(1, 3 * scale);
     if (outline === null) ctx.strokeRect(-size, -size * 0.62, size * 2, size * 1.24);
     else {
-      // (the environment's own rings: their parts' outlines, y up)
-      const unit = (size * 1.15) / outline.radius;
-      ctx.lineWidth = Math.max(0.75, 1.6 * scale);
-      for (const polygon of outline.polygons) {
-        ctx.beginPath();
-        polygon.forEach(([x, y], index) => (index === 0 ? ctx.moveTo(x * unit, -y * unit) : ctx.lineTo(x * unit, -y * unit)));
-        ctx.closePath();
-        ctx.stroke();
-      }
+      // (the environment's own ring, filled)
+      ctx.fillStyle = ctx.strokeStyle;
+      fillRingShape(ctx, outline, size * 1.15);
     }
     ctx.restore();
   }

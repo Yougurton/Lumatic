@@ -149,7 +149,8 @@ export function numberDrum(name: string, value: number, change: (value: number) 
   const step = options.step;
   const min = options.min ?? 0;
   const max = options.max ?? Math.max(value, min) + step * 400;
-  const digits = options.digits ?? 3;
+  // (beats: kept exact enough to be shown as the fractions they are — 15/16, not 0,938)
+  const digits = options.digits ?? (options.beats === true ? 9 : 3);
   const count = Math.max(1, Math.floor((max - min) / step + 1e-6) + 1);
   const valueAt = (index: number) => Math.round((min + index * step) * 10 ** digits) / 10 ** digits;
   const format = (number: number) => (options.beats === true ? beatsLabel(number) : String(Math.round(number * 10 ** digits) / 10 ** digits).replace('.', ','));
