@@ -1927,10 +1927,11 @@ const stripViews = new Map<string, { from: number; to: number }>();
  */
 /** The strip's view of one block taken over by another (the poses and the zoom at the same place:
  *  switching between them keeps the zoom of the strip). */
-export function shareStripView(from: string, to: string) {
-  const view = stripViews.get(from);
-  if (view !== undefined) stripViews.set(to, { ...view });
-  else stripViews.delete(to);
+export function shareStripView(from: { id: string; start: number; end: number }, to: string) {
+  // (the view as it's shown: zoomed by hand, or the block and a little round it)
+  const pad = Math.max(1, (from.end - from.start) * 0.15);
+  const view = stripViews.get(from.id) ?? { from: Math.max(0, from.start - pad), to: from.end + pad };
+  stripViews.set(to, { ...view });
 }
 
 /** The song's speed: a small slider with its % (a double click — the usual), kept up to date. */

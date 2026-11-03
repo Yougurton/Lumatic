@@ -145,7 +145,22 @@ function sampleChanges(initial: number, changes: SampledTargetChange[], seconds:
   const fraction = seconds / tickSeconds - ticks;
   const previous = valueAfterTicks(initial, changes, Math.max(ticks - 1, 0));
   const current = valueAfterTicks(initial, changes, ticks);
+  // (a turn there in one tick — an instant one — shown there at once, not slid over the tick)
+  if (instantAt(changes, ticks)) return current;
   return lerp(previous, current, fraction);
+}
+
+/** Whether a change starting at tick `tick` takes its ring all the way there in that tick. */
+function instantAt(changes: SampledTargetChange[], tick: number) {
+  let low = 0;
+  let high = changes.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((changes[middle]?.tick ?? Infinity) < tick) low = middle + 1;
+    else high = middle;
+  }
+  const change = changes[low];
+  return change !== undefined && change.tick === tick && tickSeconds * change.speed >= 1;
 }
 
 function sortChanges(changes: TargetChange[][]) {

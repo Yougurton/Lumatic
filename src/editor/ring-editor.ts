@@ -260,14 +260,14 @@ export class RingEditor {
       .sort((a, b) => overlap(b) - overlap(a))[0];
     // (the strip zoomed as it was)
     if (found !== undefined) {
-      shareStripView(block.id, found.id);
+      shareStripView(block, found.id);
       this.open(found.id);
       return;
     }
     const zooms = this.editor.zoomInfo;
     const made = zoom ? newZoomBlock(zooms[0], block.start, block.end, zooms.length > 1 ? (zooms[0]?.name ?? '') : '') : newRingBlock(this.editor.ringInfo[0]?.name ?? '', 'event', block.start, block.end);
     this.editor.addRingBlock(made);
-    shareStripView(block.id, made.id);
+    shareStripView(block, made.id);
     this.open(made.id);
   }
 
