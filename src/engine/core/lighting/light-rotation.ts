@@ -1,8 +1,5 @@
 import type { BasicEvent } from '../beatmap/types';
-import {
-  beatSaberBooleanSchema as booleanSchema,
-  beatSaberNumberSchema as numberSchema,
-} from '../beatmap/value-schema';
+import { beatSaberBoolean, beatSaberNumber } from '../beatmap/value-schema';
 
 export type RotationRandom = (event: BasicEvent, index: number, channel: 'direction' | 'angle') => number;
 
@@ -42,13 +39,13 @@ function createRotationSampler(
     angle += (event.songBpmTime - previousBeat) * degreesPerBeat * speed;
     previousBeat = event.songBpmTime;
 
-    const lockRotation = booleanSchema.parse(customValue(event, '_lockPosition', 'lockRotation'));
+    const lockRotation = beatSaberBoolean(customValue(event, '_lockPosition', 'lockRotation'));
     let value = event.value;
     if (value > 0) {
       const preciseSpeed = customValue(event, '_preciseSpeed', 'preciseSpeed');
       const customSpeed = customValue(event, '_speed', 'speed');
-      if (preciseSpeed !== undefined) value = numberSchema.parse(preciseSpeed);
-      else if (customSpeed !== undefined) value = numberSchema.parse(customSpeed);
+      if (preciseSpeed !== undefined) value = beatSaberNumber(preciseSpeed);
+      else if (customSpeed !== undefined) value = beatSaberNumber(customSpeed);
     }
 
     if (value === 0) {
@@ -69,7 +66,7 @@ function createRotationSampler(
           ? 1
           : -1
         : // (as Chroma: 0 turns the left lasers one way and the right ones the other, 1 the opposite)
-          (numberSchema.parse(customDirection) === 0 ? 1 : -1) * (leftLasers ? -1 : 1);
+          (beatSaberNumber(customDirection) === 0 ? 1 : -1) * (leftLasers ? -1 : 1);
     if (mirrored) direction *= -1;
     if (!lockRotation) angle = startAngle + random(event, index, 'angle') * randomAngle;
     speed = value * speedMultiplier * 20 * direction;

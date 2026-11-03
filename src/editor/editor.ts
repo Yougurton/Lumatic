@@ -1551,7 +1551,13 @@ export class Editor {
 
   private snapshot() {
     const project = this.project;
-    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null });
+    if (project === null) return '';
+    // (an effect's events made from its settings aren't kept — they're made again on undo: a vibrato
+    // is thousands of them, and each change wrote them all out)
+    const made = new Set((project.effects ?? []).filter((effect) => effect.custom !== true).map((effect) => effect.id));
+    const clips = made.size === 0 ? project.clips : project.clips.filter((clip) => clip.group === undefined || !made.has(clip.group));
+    const raw = made.size === 0 ? project.raw : project.raw.filter((event) => event.group === undefined || !made.has(event.group));
+    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null });
   }
 
   /** Call before a change (one undo step). */
@@ -1622,6 +1628,8 @@ export class Editor {
     project.clips = data.clips;
     project.raw = data.raw;
     project.effects = data.effects ?? [];
+    // (the events their settings make: made again — they aren't in the snapshot)
+    for (const effect of project.effects) if (effect.custom !== true) this.regenerate(effect);
     const hadPoses = (project.ringBlocks ?? []).length > 0;
     project.ringBlocks = data.ringBlocks ?? [];
     if (this.openEffect !== null && !project.effects.some((effect) => effect.id === this.openEffect)) this.openEffect = null;
@@ -2681,6 +2689,13 @@ export class Editor {
     this.rate = rate;
     this.clock?.setRate(rate);
     this.emit('time');
+  }
+
+  /** The speed a step (10 %) up or down (the − / + keys), 10 %…200 %. */
+  stepRate(up: boolean) {
+    const rate = Math.min(2, Math.max(0.1, Math.round((this.rate + (up ? 0.1 : -0.1)) * 100) / 100));
+    this.setRate(rate);
+    this.setStatus(`Скорость: ${String(Math.round(rate * 100))}%`);
   }
 
   // ----- ring poses -----------------------------------------------------------------------------------

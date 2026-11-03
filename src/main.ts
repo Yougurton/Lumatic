@@ -399,11 +399,7 @@ const brushColor = (ref: 'left' | 'right' | 'white', name: string) => {
   editor.setStatus(`Кисть: ${name}`);
 };
 const stepGrid = (finer: boolean) => timeline.stepGrid(finer);
-const stepRate = (up: boolean) => {
-  const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, Math.round((editor.rate + (up ? 0.1 : -0.1)) * 100) / 100));
-  editor.setRate(rate);
-  editor.setStatus(`Скорость: ${String(rate)}×`);
-};
+const stepRate = (up: boolean) => editor.stepRate(up);
 const ACTIONS_RUN: Record<string, () => void> = {
   play: () => editor.togglePlay(),
   start: () => editor.seek(0),

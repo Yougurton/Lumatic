@@ -1,9 +1,5 @@
 import type { BasicEvent } from '../beatmap/types';
-import {
-  beatSaberBooleanSchema as booleanSchema,
-  beatSaberNumberSchema as numberSchema,
-  beatSaberStringSchema as stringSchema,
-} from '../beatmap/value-schema';
+import { beatSaberBoolean, beatSaberNumber, beatSaberString } from '../beatmap/value-schema';
 
 /**
  * How often the game's ring motion ticks (seconds) — its fixed step: each tick a turn's wave moves
@@ -244,14 +240,14 @@ export class RingTurnModel {
     const hasCustomData = event.customData !== undefined;
     const directionValue = custom(event, '_direction', 'direction');
     const clockwise = hasCustomData
-      ? directionValue !== undefined && numberSchema.parse(directionValue) === 0
+      ? directionValue !== undefined && beatSaberNumber(directionValue) === 0
       : random(event, tieIndex, 'direction') < 0.5;
     const ringRotation = custom(event, '_rotation', 'rotation');
-    const rotationStep = ringRotation === undefined ? config.rotationStep : numberSchema.parse(ringRotation);
+    const rotationStep = ringRotation === undefined ? config.rotationStep : beatSaberNumber(ringRotation);
     const nameFilter = custom(event, '_nameFilter', 'nameFilter');
     // (Chroma: a named event turns only the ring system of that name — the others don't move, and
     // don't count it either)
-    if (nameFilter !== undefined && !matchesRingName(config.name, stringSchema.parse(nameFilter))) {
+    if (nameFilter !== undefined && !matchesRingName(config.name, beatSaberString(nameFilter))) {
       this.order++;
       return;
     }
@@ -261,20 +257,20 @@ export class RingTurnModel {
     const customStep = custom(event, '_step', 'step');
     const customProp = custom(event, '_prop', 'prop');
     const customSpeed = custom(event, '_speed', 'speed');
-    if (customStep !== undefined) step = numberSchema.parse(customStep);
-    if (customProp !== undefined) propagationSpeed = numberSchema.parse(customProp);
-    if (customSpeed !== undefined) flexySpeed = numberSchema.parse(customSpeed);
+    if (customStep !== undefined) step = beatSaberNumber(customStep);
+    if (customProp !== undefined) propagationSpeed = beatSaberNumber(customProp);
+    if (customSpeed !== undefined) flexySpeed = beatSaberNumber(customSpeed);
     const stepMultiplier = custom(event, '_stepMult', 'stepMult');
     const propagationMultiplier = custom(event, '_propMult', 'propMult');
     const speedMultiplier = custom(event, '_speedMult', 'speedMult');
-    if (stepMultiplier !== undefined) step *= numberSchema.parse(stepMultiplier);
-    if (propagationMultiplier !== undefined) propagationSpeed *= numberSchema.parse(propagationMultiplier);
-    if (speedMultiplier !== undefined) flexySpeed *= numberSchema.parse(speedMultiplier);
+    if (stepMultiplier !== undefined) step *= beatSaberNumber(stepMultiplier);
+    if (propagationMultiplier !== undefined) propagationSpeed *= beatSaberNumber(propagationMultiplier);
+    if (speedMultiplier !== undefined) flexySpeed *= beatSaberNumber(speedMultiplier);
 
     let multiplier = clockwise ? 1 : -1;
-    const counterSpinEvent = booleanSchema.parse(event.customData?._counterSpin);
+    const counterSpinEvent = beatSaberBoolean(event.customData?._counterSpin);
     if (config.counterSpin && counterSpinEvent) multiplier *= -1;
-    const reset = booleanSchema.parse(event.customData?._reset);
+    const reset = beatSaberBoolean(event.customData?._reset);
     const tick = tickAt((event.songBpmTime * 60) / this.songBpm, this.tick);
     const base = this.firstBefore(tick);
     this.turn(
@@ -314,7 +310,7 @@ export function createRingPositionSampler(events: BasicEvent[], songBpm: number,
   const changes = config.initialPositions.map<TargetChange[]>(() => []);
   events = events.filter((event) => {
     const nameFilter = custom(event, '_nameFilter', 'nameFilter');
-    return nameFilter === undefined || matchesRingName(config.name, stringSchema.parse(nameFilter));
+    return nameFilter === undefined || matchesRingName(config.name, beatSaberString(nameFilter));
   });
   events.forEach((event, index) => {
     const customStep = custom(event, '_step', 'step');
@@ -324,8 +320,8 @@ export function createRingPositionSampler(events: BasicEvent[], songBpm: number,
         ? (index + 1) % 2 === 0
           ? config.maxPositionStep
           : config.minPositionStep
-        : numberSchema.parse(customStep);
-    const speed = customSpeed === undefined ? config.moveSpeed : numberSchema.parse(customSpeed);
+        : beatSaberNumber(customStep);
+    const speed = customSpeed === undefined ? config.moveSpeed : beatSaberNumber(customSpeed);
     const tick = tickAt((event.songBpmTime * 60) / songBpm);
     changes.forEach((ringChanges, ringIndex) => {
       ringChanges.push({

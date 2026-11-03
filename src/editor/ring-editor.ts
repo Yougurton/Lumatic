@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
-import { button, check, holdWhileTyping, scrubStrip, type StripLane, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
+import { actionFor, comboOf } from './hotkeys';
+import { button, check, holdWhileTyping, scrubStrip, shareStripView, speedControl, type StripLane, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { easingPicker } from './easing-picker';
 import { beatDrumStep, numberDrum } from './grids';
 import { fillRingShape, ringSystemName } from './library';
@@ -168,6 +169,14 @@ export class RingEditor {
       this.deletePose();
       return;
     }
+    // (the song's speed: the same keys as on the timeline, − / +)
+    const action = actionFor(comboOf(event) ?? '');
+    if (action === 'faster' || action === 'slower') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.editor.stepRate(action === 'faster');
+      return;
+    }
     if (event.code === 'Space') {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -228,7 +237,7 @@ export class RingEditor {
     // (a drum being turned with the keys or the wheel keeps the focus in its new self)
     const active = document.activeElement;
     const focused = active instanceof HTMLElement && dock.contains(active) ? active.dataset.wheelKey : undefined;
-    dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null, this.stripLane()));
+    dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null, this.stripLane(), false));
     const body = document.createElement('div');
     body.className = 'gls-body ring-body';
     if (isZoom(block)) body.append(this.laneColumn(block), this.zoomColumn(block), this.zoomView(block));
@@ -249,13 +258,16 @@ export class RingEditor {
     const found = this.editor.ringBlocks
       .filter((other) => other !== block && (zoom ? isZoom(other) : isTurn(other)) && overlap(other) > 1e-6)
       .sort((a, b) => overlap(b) - overlap(a))[0];
+    // (the strip zoomed as it was)
     if (found !== undefined) {
+      shareStripView(block.id, found.id);
       this.open(found.id);
       return;
     }
     const zooms = this.editor.zoomInfo;
     const made = zoom ? newZoomBlock(zooms[0], block.start, block.end, zooms.length > 1 ? (zooms[0]?.name ?? '') : '') : newRingBlock(this.editor.ringInfo[0]?.name ?? '', 'event', block.start, block.end);
     this.editor.addRingBlock(made);
+    shareStripView(block.id, made.id);
     this.open(made.id);
   }
 
@@ -280,14 +292,14 @@ export class RingEditor {
       const choices: [string, string][] = zooms.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]);
       if (zooms.length > 1) choices.unshift(['', 'Все системы колец']);
       const current = block.system === '' && zooms.length === 1 ? zooms[0]!.name : block.system;
-      head.append(title, other, name, labeled('Кольца', select(choices, current, (value) => this.change((item) => (item.system = zooms.length === 1 ? '' : value)))), spacer, length, play, done);
+      head.append(title, other, name, labeled('Кольца', select(choices, current, (value) => this.change((item) => (item.system = zooms.length === 1 ? '' : value)))), speedControl(this.editor), spacer, length, play, done);
       return head;
     }
     const systems = this.editor.ringInfo;
     const options: [string, string][] = systems.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]);
     if (systems.length > 1) options.unshift(['', 'Все системы колец']);
     const system = labeled('Кольца', select(options, block.system, (value) => this.change((item) => (item.system = value))));
-    head.append(title, other, name, system, spacer, length, play, done);
+    head.append(title, other, name, system, speedControl(this.editor), spacer, length, play, done);
     return head;
   }
 

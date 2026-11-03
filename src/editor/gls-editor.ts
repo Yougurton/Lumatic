@@ -1,5 +1,6 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
+import { actionFor, comboOf } from './hotkeys';
 import type { Effect } from './effects';
 import { easingPicker } from './easing-picker';
 import { beatDrumStep, beatsLabel, drum, GRIDS, nextGrid, numberDrum } from './grids';
@@ -246,6 +247,14 @@ export class GlsEditor {
       this.deleteEvent();
       return;
     }
+    // (the song's speed: the same keys as on the timeline, − / +)
+    const action = actionFor(comboOf(event) ?? '');
+    if (action === 'faster' || action === 'slower') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.editor.stepRate(action === 'faster');
+      return;
+    }
     if (event.code === 'Space') {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -415,7 +424,7 @@ export class GlsEditor {
     shade.replaceChildren();
     const dialog = document.createElement('div');
     dialog.className = 'gls-dialog';
-    dialog.append(this.header(effect), scrubStrip(this.editor, () => this.effect() ?? null));
+    dialog.append(this.header(effect), scrubStrip(this.editor, () => this.effect() ?? null, null, false));
     const body = document.createElement('div');
     body.className = 'gls-body';
     body.append(this.boxList(effect), this.laneColumn(effect));
@@ -489,7 +498,7 @@ export class GlsEditor {
       this.editor.emit('selection');
       this.editor.setStatus(`Пресет «${preset.name}» сохранён`);
     });
-    head.append(title, name, where, length, layer, play, keep, done);
+    head.append(title, name, where, speedControl(this.editor), length, layer, play, keep, done);
     return head;
   }
 
@@ -1916,7 +1925,43 @@ const stripViews = new Map<string, { from: number; to: number }>();
  * the wheel — a grid step at a time, Ctrl+wheel (or −/+) — zoom, Shift+wheel — along the song. A lane
  * under it (ring poses) can be given.
  */
-export function scrubStrip(editor: Editor, range: () => { id?: string; start: number; end: number } | null, lane: StripLane | null = null) {
+/** The strip's view of one block taken over by another (the poses and the zoom at the same place:
+ *  switching between them keeps the zoom of the strip). */
+export function shareStripView(from: string, to: string) {
+  const view = stripViews.get(from);
+  if (view !== undefined) stripViews.set(to, { ...view });
+  else stripViews.delete(to);
+}
+
+/** The song's speed: a small slider with its % (a double click — the usual), kept up to date. */
+export function speedControl(editor: Editor): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'speed-control';
+  const speed = document.createElement('input');
+  speed.type = 'range';
+  speed.className = 'scrub-speed';
+  speed.min = '0.1';
+  speed.max = '2';
+  speed.step = '0.05';
+  speed.value = String(editor.rate);
+  speed.title = 'Скорость воспроизведения. Двойной клик — обычная';
+  const value = Object.assign(document.createElement('span'), { className: 'scrub-speed-value', textContent: `${String(Math.round(editor.rate * 100))}%` });
+  speed.addEventListener('mousedown', (event) => event.stopPropagation());
+  speed.addEventListener('input', () => editor.setRate(Number(speed.value)));
+  speed.addEventListener('dblclick', () => editor.setRate(1));
+  // (changed elsewhere — the timeline, the − / + keys: shown here too)
+  const sync = () => {
+    if (!wrap.isConnected) return;
+    if (document.activeElement !== speed && Number(speed.value) !== editor.rate) speed.value = String(editor.rate);
+    value.textContent = `${String(Math.round(editor.rate * 100))}%`;
+    requestAnimationFrame(sync);
+  };
+  requestAnimationFrame(sync);
+  wrap.append(speed, value);
+  return wrap;
+}
+
+export function scrubStrip(editor: Editor, range: () => { id?: string; start: number; end: number } | null, lane: StripLane | null = null, withSpeed = true) {
   const SONG = 44;
   const wrap = document.createElement('div');
   wrap.className = 'scrub-wrap';
@@ -1993,20 +2038,9 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
     const block = range();
     if (block?.id !== undefined) stripViews.delete(block.id);
   });
-  // the song's speed (as under the timeline's spectrogram): a double click — the usual
-  const speed = document.createElement('input');
-  speed.type = 'range';
-  speed.className = 'scrub-speed';
-  speed.min = '0.1';
-  speed.max = '2';
-  speed.step = '0.05';
-  speed.value = String(editor.rate);
-  speed.title = 'Скорость воспроизведения. Двойной клик — обычная';
-  const speedValue = Object.assign(document.createElement('span'), { className: 'scrub-speed-value', textContent: `${String(Math.round(editor.rate * 100))}%` });
-  speed.addEventListener('mousedown', (event) => event.stopPropagation());
-  speed.addEventListener('input', () => editor.setRate(Number(speed.value)));
-  speed.addEventListener('dblclick', () => editor.setRate(1));
-  controls.prepend(speed, speedValue);
+  // the song's speed (as under the timeline's spectrogram) — on the strip, unless the window has it
+  // in its own head
+  if (withSpeed) controls.prepend(speedControl(editor));
   wrap.append(controls);
 
   const draw = () => {
@@ -2016,9 +2050,6 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
       return;
     }
     requestAnimationFrame(draw);
-    // (the speed as it is now — changed under the timeline too)
-    if (document.activeElement !== speed && Number(speed.value) !== editor.rate) speed.value = String(editor.rate);
-    speedValue.textContent = `${String(Math.round(editor.rate * 100))}%`;
     const playButton = controls.querySelector<HTMLButtonElement>('button');
     if (playButton !== null) {
       playButton.hidden = !inDialog();
