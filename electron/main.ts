@@ -14,6 +14,9 @@ import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAd
  * folders the user opened.
  */
 
+// (a page that hangs can tell where it's stuck: its JavaScript call stack, into the log)
+app.commandLine.appendSwitch('enable-features', 'DocumentPolicyIncludeJSCallStacksInCrashReports');
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
@@ -112,6 +115,10 @@ function createWindow(reopen?: string) {
   let asking = false;
   window.on('unresponsive', () => {
     log('hang', 'the window stopped answering');
+    // where it's stuck: the page's JavaScript call stack
+    void Promise.resolve(window.webContents.mainFrame.collectJavaScriptCallStack())
+      .then((stack) => log('hang', `stuck at:\n${typeof stack === 'string' && stack !== '' ? stack : '(no call stack given)'}`))
+      .catch((error: unknown) => log('hang', `no call stack: ${String(error)}`));
     if (asking) return;
     asking = true;
     void dialog
@@ -209,7 +216,13 @@ void app.whenReady().then(() => {
     const url = new URL(request.url);
     const file = path.normalize(path.join(distRoot, decodeURIComponent(url.pathname)));
     if (!file.startsWith(distRoot)) return new Response('forbidden', { status: 403 });
-    return net.fetch(pathToFileURL(file).toString());
+    return net.fetch(pathToFileURL(file).toString()).then((response) => {
+      if (!file.endsWith('.html')) return response;
+      // (the page lets a hang's call stack be taken: see 'unresponsive')
+      const headers = new Headers(response.headers);
+      headers.set('Document-Policy', 'include-js-call-stacks-in-crash-reports');
+      return new Response(response.body, { status: response.status, headers });
+    });
   });
 
   ipcMain.handle('open-folder', async () => {

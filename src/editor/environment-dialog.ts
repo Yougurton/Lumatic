@@ -189,22 +189,10 @@ export async function environmentDialog(editor: Editor): Promise<void> {
             wrap.append(label, input);
             return wrap;
           };
-          const geometry = document.createElement('label');
-          geometry.title = 'Кольца строятся из кубов Chroma, у каждого кольца свой трек: позы «Каждое кольцо отдельно» работают у всех игроков и в любой версии игры. Обычные события вращения и зума их не двигают. Нужен Noodle Extensions.';
-          const geometryCheck = document.createElement('input');
-          geometryCheck.type = 'checkbox';
-          geometryCheck.checked = look.geometry === true;
-          geometryCheck.disabled = version !== '3';
-          geometryCheck.addEventListener('change', () => {
-            look.geometry = geometryCheck.checked || undefined;
-            tryOut();
-          });
-          geometry.append(geometryCheck, 'Из геометрии Chroma (Noodle)');
           line.append(
             field('Размер ×', 'size', 'Во сколько раз больше сами кольца'),
             field('Свет толще ×', 'thickness', system.lights.length > 0 ? 'Во сколько раз толще светящиеся трубки колец' : 'У этих колец нет светящихся трубок', system.lights.length > 0),
             field('Свет длиннее ×', 'length', system.lights.length > 0 ? 'Во сколько раз длиннее светящиеся трубки колец' : 'У этих колец нет светящихся трубок', system.lights.length > 0),
-            geometry,
           );
           parts.append(line);
         }

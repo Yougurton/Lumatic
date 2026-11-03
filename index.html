@@ -110,6 +110,20 @@
           background 0.8s ease,
           color 0.8s ease;
       }
+      #grid-badge {
+        flex-wrap: wrap;
+        max-width: 190px;
+      }
+      #grid-badge .gb-speed {
+        flex-basis: 100%;
+        font-size: 15px;
+        font-weight: 700;
+        color: #ffd27a;
+        font-variant-numeric: tabular-nums;
+      }
+      #grid-badge .gb-speed[hidden] {
+        display: none;
+      }
       #grid-badge .gb-label {
         font-size: 11px;
         text-transform: uppercase;
@@ -1310,6 +1324,20 @@
         right: 4px;
         display: flex;
         gap: 2px;
+      }
+      .scrub-zoom {
+        align-items: center;
+      }
+      .scrub-speed {
+        width: 80px;
+        height: 14px;
+      }
+      .scrub-speed-value {
+        min-width: 34px;
+        font-size: 11px;
+        color: #d6d9e4;
+        text-shadow: 0 1px 2px #000;
+        font-variant-numeric: tabular-nums;
       }
       .scrub-zoom button {
         padding: 0 7px;
@@ -2667,6 +2695,23 @@
       .ring-body {
         grid-template-columns: 250px 300px minmax(0, 1fr);
       }
+      /* the poses: the list, the pose, the turn to it, the rings — side by side, each whole */
+      .ring-body.ring-turn {
+        grid-template-columns: 220px minmax(250px, 1fr) minmax(250px, 1fr) minmax(220px, 0.9fr);
+      }
+      .ring-turn .gls-col .gls-field,
+      .ring-turn .gls-col label {
+        margin-bottom: 4px;
+      }
+      .ring-turn .ring-views {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      .ring-turn .ring-views canvas {
+        height: auto;
+        aspect-ratio: 1.25;
+        max-height: 260px;
+      }
       .ring-lane {
         height: 96px;
       }
@@ -3142,7 +3187,7 @@
         <span class="grow"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
         <aside id="side">
           <div id="library"></div>
           <div id="note-panel"></div>

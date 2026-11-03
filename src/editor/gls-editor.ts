@@ -73,7 +73,7 @@ export class GlsEditor {
         this.close();
         return;
       }
-      if (what === 'clips' || what === 'all') this.render();
+      if (what === 'clips' || what === 'all' || what === 'grid') this.render();
     });
   }
 
@@ -1993,6 +1993,20 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
     const block = range();
     if (block?.id !== undefined) stripViews.delete(block.id);
   });
+  // the song's speed (as under the timeline's spectrogram): a double click — the usual
+  const speed = document.createElement('input');
+  speed.type = 'range';
+  speed.className = 'scrub-speed';
+  speed.min = '0.1';
+  speed.max = '2';
+  speed.step = '0.05';
+  speed.value = String(editor.rate);
+  speed.title = 'Скорость воспроизведения. Двойной клик — обычная';
+  const speedValue = Object.assign(document.createElement('span'), { className: 'scrub-speed-value', textContent: `${String(Math.round(editor.rate * 100))}%` });
+  speed.addEventListener('mousedown', (event) => event.stopPropagation());
+  speed.addEventListener('input', () => editor.setRate(Number(speed.value)));
+  speed.addEventListener('dblclick', () => editor.setRate(1));
+  controls.prepend(speed, speedValue);
   wrap.append(controls);
 
   const draw = () => {
@@ -2002,7 +2016,10 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
       return;
     }
     requestAnimationFrame(draw);
-    const playButton = controls.firstElementChild as HTMLButtonElement | null;
+    // (the speed as it is now — changed under the timeline too)
+    if (document.activeElement !== speed && Number(speed.value) !== editor.rate) speed.value = String(editor.rate);
+    speedValue.textContent = `${String(Math.round(editor.rate * 100))}%`;
+    const playButton = controls.querySelector<HTMLButtonElement>('button');
     if (playButton !== null) {
       playButton.hidden = !inDialog();
       playButton.textContent = editor.previewExtra !== null ? '■' : '▶';

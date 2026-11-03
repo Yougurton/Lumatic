@@ -2020,4 +2020,12 @@ export const EN: Record<string, string> = {
   "меняется отдельно": "changes on its own",
   "меняется со всеми копиями": "changes with all its copies",
   "сетка": "grid",
+  "Скорость воспроизведения. Двойной клик — обычная": "Playback speed. Double click — the usual",
+  "⇄ Позы колец": "⇄ Ring poses",
+  "⇄ Зум колец": "⇄ Ring zoom",
+  "К позам колец в этом же месте (нет — будут созданы)": "To the ring poses at the same place (none — they are made)",
+  "К зуму колец в этом же месте (нет — будет создан)": "To the ring zoom at the same place (none — it is made)",
+  "До неё первое кольцо стоит на {0}°, после — на {1}°.": "Before it the first ring stands at {0}°, after it at {1}°.",
+  "Шаг до неё — {0}°, после — {1}°.": "The step before it — {0}°, after it — {1}°.",
+  "Волна идёт от ближних колец к дальним.": "The wave runs from the near rings to the far ones.",
 };

@@ -4,7 +4,7 @@ import { easingPicker } from './easing-picker';
 import { beatDrumStep, numberDrum } from './grids';
 import { fillRingShape, ringSystemName } from './library';
 import { newId } from './model';
-import { absolutePose, dataFirstRing, poseBefore, EASINGS, EVENT_SHAPES, firstRingFromLog, isZoom, newPose, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { absolutePose, dataFirstRing, poseBefore, EASINGS, EVENT_SHAPES, firstRingFromLog, isTurn, isZoom, newPose, newRingBlock, newZoomBlock, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -43,7 +43,6 @@ export class RingEditor {
   private dock: HTMLElement | null = null;
   private blockId = '';
   private poseId: string | null = null;
-  private barDrag: { angles: number[]; last: number | null } | null = null;
   private keyHandler = (event: KeyboardEvent) => this.onKey(event);
   private resizeHandler = () => this.place();
 
@@ -55,7 +54,8 @@ export class RingEditor {
         this.close();
         return;
       }
-      if (what === 'clips' || what === 'all') this.render();
+      // (the grid changed: the drums of beats step by it)
+      if (what === 'clips' || what === 'all' || what === 'grid') this.render();
     });
   }
 
@@ -231,10 +231,32 @@ export class RingEditor {
     dock.replaceChildren(this.header(block), scrubStrip(this.editor, () => this.block() ?? null, this.stripLane()));
     const body = document.createElement('div');
     body.className = 'gls-body ring-body';
-    body.append(this.laneColumn(block), isZoom(block) ? this.zoomColumn(block) : this.poseColumn(block), isZoom(block) ? this.zoomView(block) : this.viewColumn(block));
+    if (isZoom(block)) body.append(this.laneColumn(block), this.zoomColumn(block), this.zoomView(block));
+    else {
+      body.classList.add('ring-turn');
+      body.append(this.laneColumn(block), this.poseColumn(block), this.turnColumn(block), this.viewColumn(block));
+    }
     dock.append(body);
     [...dock.querySelectorAll<HTMLElement>('.gls-col')].forEach((col, index) => (col.scrollTop = scroll[index] ?? 0));
     if (focused !== undefined) dock.querySelector<HTMLElement>(`[data-wheel-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  }
+
+  /** The block of the other kind (poses ↔ zoom) where this one is: the one over it most — or a new one
+   *  at its place and length. */
+  private switchKind(block: RingBlock) {
+    const zoom = !isZoom(block);
+    const overlap = (other: RingBlock) => Math.min(block.end, other.end) - Math.max(block.start, other.start);
+    const found = this.editor.ringBlocks
+      .filter((other) => other !== block && (zoom ? isZoom(other) : isTurn(other)) && overlap(other) > 1e-6)
+      .sort((a, b) => overlap(b) - overlap(a))[0];
+    if (found !== undefined) {
+      this.open(found.id);
+      return;
+    }
+    const zooms = this.editor.zoomInfo;
+    const made = zoom ? newZoomBlock(zooms[0], block.start, block.end, zooms.length > 1 ? (zooms[0]?.name ?? '') : '') : newRingBlock(this.editor.ringInfo[0]?.name ?? '', 'event', block.start, block.end);
+    this.editor.addRingBlock(made);
+    this.open(made.id);
   }
 
   private header(block: RingBlock) {
@@ -251,27 +273,21 @@ export class RingEditor {
     done.classList.add('primary');
     const spacer = document.createElement('span');
     spacer.className = 'gls-dim';
+    // over to the other kind of block at the same place (the zoom of these poses, or the other way)
+    const other = button(isZoom(block) ? '⇄ Позы колец' : '⇄ Зум колец', isZoom(block) ? 'К позам колец в этом же месте (нет — будут созданы)' : 'К зуму колец в этом же месте (нет — будет создан)', () => this.switchKind(block));
     if (isZoom(block)) {
       const zooms = this.editor.zoomInfo;
       const choices: [string, string][] = zooms.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]);
       if (zooms.length > 1) choices.unshift(['', 'Все системы колец']);
       const current = block.system === '' && zooms.length === 1 ? zooms[0]!.name : block.system;
-      head.append(title, name, labeled('Кольца', select(choices, current, (value) => this.change((item) => (item.system = zooms.length === 1 ? '' : value)))), spacer, length, play, done);
+      head.append(title, other, name, labeled('Кольца', select(choices, current, (value) => this.change((item) => (item.system = zooms.length === 1 ? '' : value)))), spacer, length, play, done);
       return head;
     }
     const systems = this.editor.ringInfo;
     const options: [string, string][] = systems.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]);
-    if (block.mode === 'event' && systems.length > 1) options.unshift(['', 'Все системы колец']);
+    if (systems.length > 1) options.unshift(['', 'Все системы колец']);
     const system = labeled('Кольца', select(options, block.system, (value) => this.change((item) => (item.system = value))));
-    const mode = toggle<RingBlock['mode']>([['event', 'Событиями колец'], ['tracks', 'Каждое кольцо отдельно']], block.mode, (value) =>
-      this.change((item) => {
-        item.mode = value;
-        if (value === 'tracks' && item.system === '') item.system = systems[0]?.name ?? '';
-      }),
-    );
-    mode.title = 'Событиями колец — обычные события вращения (Chroma): кольца стоят спиралью. Каждое кольцо отдельно — у каждого кольца свой трек Chroma и AnimateTrack: любая форма';
-    mode.style.marginBottom = '0';
-    head.append(title, name, system, mode, spacer, length, play, done);
+    head.append(title, other, name, system, spacer, length, play, done);
     return head;
   }
 
@@ -378,7 +394,8 @@ export class RingEditor {
     const events = block.mode === 'event';
     col.append(heading('Поза'));
     col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
-    const shapes = SHAPES.filter(([shape]) => !events || EVENT_SHAPES.has(shape));
+    // (ring events set the rings out evenly or as a spiral: those two)
+    const shapes = SHAPES.filter(([shape]) => EVENT_SHAPES.has(shape));
     col.append(toggle(shapes, shapeOf(pose, block), (value) => this.changePose((item) => {
       if (value === 'manual' && item.shape !== 'manual') {
         // (by hand: each ring's own angle, where it ends up)
@@ -388,7 +405,6 @@ export class RingEditor {
       }
       item.shape = value;
     })));
-    if (events && !EVENT_SHAPES.has(pose.shape)) col.append(note('События колец ставят кольца только спиралью — эта форма будет показана как спираль. Для любой формы включите «Каждое кольцо отдельно».'));
     const shape = shapeOf(pose, block);
     if (shape !== 'manual') {
       const relative = pose.relative === true;
@@ -408,7 +424,7 @@ export class RingEditor {
       col.append(labeled(label, numberDrum(`ring-angle:${pose.id}`, pose.angle, (value) => this.changePose((item) => (item.angle = value)), { step: 5, min: -720, max: 720, digits: 2 })));
       if (relative) {
         const base = poseBase(this.editor.ringBlocks, block, pose);
-        col.append(note(`До неё первое кольцо стоит на ${String(round(base))}°, после — на ${String(round(base + pose.angle))}°.${events ? ' В игре поворот прибавляется к тому, где кольца остались, — и после обычных событий вращения тоже.' : ''}`));
+        col.append(note(`До неё первое кольцо стоит на ${String(round(base))}°, после — на ${String(round(base + pose.angle))}°.`));
       }
     }
     if (shape === 'spiral') {
@@ -427,7 +443,7 @@ export class RingEditor {
       col.append(labeled(relativeStep ? 'Прибавить к шагу, °' : 'Шаг от кольца к кольцу, °', numberDrum(`ring-step:${pose.id}`, pose.step, (value) => this.changePose((item) => (item.step = value)), { step: 1, min: -360, max: 360, digits: 2 })));
       if (relativeStep) {
         const before = poseBefore(this.editor.ringBlocks, block, pose).step;
-        col.append(note(`Шаг до неё — ${String(round(before))}°, после — ${String(round(before + pose.step))}°.${events ? ' В игре — к шагу последнего события колец перед ней.' : ''}`));
+        col.append(note(`Шаг до неё — ${String(round(before))}°, после — ${String(round(before + pose.step))}°.`));
       }
     }
     if (shape === 'wave' || shape === 'alternate' || shape === 'random') col.append(labeled(shape === 'alternate' ? 'Каждое второе повёрнуто на, °' : 'Размах, °', numberDrum(`ring-swing:${pose.id}`, pose.step, (value) => this.changePose((item) => (item.step = value)), { step: 1, min: -360, max: 360, digits: 2 })));
@@ -436,40 +452,36 @@ export class RingEditor {
       col.append(labeled('Сдвиг волны, °', numberDrum(`ring-phase:${pose.id}`, pose.phase, (value) => this.changePose((item) => (item.phase = value)), { step: 5, min: -360, max: 360, digits: 2 })));
     }
     if (shape === 'random') col.append(button('🎲 Другой случай', 'Другие случайные углы', () => this.changePose((item) => (item.seed = Math.floor(Math.random() * 1e6)))));
-    if (shape === 'manual') col.append(note('Углы колец задаются справа: тяните столбики (Shift — точнее, по 1°).'));
-    col.append(note('Углы — как кольца видны с платформы: плюс — против часовой стрелки, минус — по часовой.'));
+    col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
+    return col;
+  }
 
+  /** How the rings turn to the picked pose: which way, how long, the wave over them, the motion. */
+  private turnColumn(block: RingBlock) {
+    const col = document.createElement('div');
+    col.className = 'gls-col';
     col.append(heading('Поворот к позе'));
+    const pose = this.pose();
+    if (pose === undefined) return col;
     col.append(wayIcons(pose.way, (value) => this.changePose((item) => (item.way = value))));
     col.append(labeled('Целых оборотов сверху', numberDrum(`ring-loops:${pose.id}`, pose.loops, (value) => this.changePose((item) => (item.loops = Math.max(0, Math.round(value)))), { step: 1, min: 0, max: 32 })));
     col.append(labeled('Время поворота, долей (0 — сразу)', numberDrum(`ring-duration:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 64, beats: true })));
-    if (!events) col.append(labeled('Сглаживание', easingPicker(EASINGS, pose.easing, (value) => this.changePose((item) => (item.easing = value)))));
-    else {
-      // (the game's own closing in, or an easing made of short ring events)
-      const options: [string, string][] = [['', 'Как в игре: плавно с торможением'], ...EASINGS];
-      col.append(
-        labeled(
-          'Движение',
-          easingPicker(options, pose.eventEasing ?? '', (value) =>
-            this.changePose((item) => {
-              if (value === '') delete item.eventEasing;
-              else item.eventEasing = value;
-            }),
-          ),
-        ),
-      );
-      col.append(
-        note(
-          pose.eventEasing === undefined
-            ? 'Событие колец доводит кольца плавно с торможением; время поворота задаёт его скорость.'
-            : 'Поворот собран из коротких событий колец (≈25 в секунду), идущих по выбранной кривой — так кольца пружинят, отскакивают, перелетают. Нужно время поворота больше нуля.',
-        ),
-      );
-    }
     col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberDrum(`ring-delay:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.delay, (value) => this.changePose((item) => (item.delay = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 8, beats: true })));
-    if (pose.delay > 0) col.append(check('От дальних к ближним', pose.reverse, (on) => this.changePose((item) => (item.reverse = on))));
-    if (events && pose.reverse && pose.delay > 0) col.append(note('События колец ведут волну только от ближних колец к дальним.'));
-    col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
+    if (pose.delay > 0) col.append(note('Волна идёт от ближних колец к дальним.'));
+    // (the game's own closing in, or an easing made of short ring events)
+    const options: [string, string][] = [['', 'Как в игре: плавно с торможением'], ...EASINGS];
+    col.append(
+      labeled(
+        'Движение',
+        easingPicker(options, pose.eventEasing ?? '', (value) =>
+          this.changePose((item) => {
+            if (value === '') delete item.eventEasing;
+            else item.eventEasing = value;
+          }),
+        ),
+      ),
+    );
+    void block;
     return col;
   }
 
@@ -488,21 +500,19 @@ export class RingEditor {
     const sketch = document.createElement('canvas');
     sketch.className = 'ring-sketch';
     sketch.title = 'Кольца, как их видно с платформы: ближние крупнее (форма колец условная)';
-    const bars = document.createElement('canvas');
-    bars.className = 'ring-bars';
-    bars.title = block.mode === 'tracks' ? 'Угол каждого кольца: тяните столбики (Shift — по 1°)' : 'Угол каждого кольца (вручную — только «Каждое кольцо отдельно»)';
-    views.append(sketch, bars);
+    views.append(sketch);
     col.append(views);
-    if (block.mode === 'tracks') {
-      col.append(note(`Каждое кольцо получает свой трек Chroma (environment) и поворачивается событиями AnimateTrack. Карта будет рекомендовать Chroma; без неё кольца двигаются только обычными событиями. Обычные события вращения колец добавляются поверх этих поз.`));
-    } else {
-      col.append(note('Поза ставится одним событием вращения колец; редактор сам считает, на сколько повернуть кольца от того места, где их оставили прежние события, — поэтому поза точная, что бы ни было до неё.'));
-    }
     if (pose !== undefined) {
-      // (drawn whenever their size changes — at first they may not have one yet)
-      redrawOnResize(sketch, () => this.drawSketch(sketch, block, pose, system));
-      redrawOnResize(bars, () => this.drawBars(bars, block, pose, system));
-      this.bindBars(bars, block, system);
+      // (drawn whenever its size changes — at first it may not have one yet; something going wrong
+      // in the drawing: logged, the rings drawn plainly instead of nothing)
+      redrawOnResize(sketch, () => {
+        try {
+          this.drawSketch(sketch, block, pose, system);
+        } catch (error) {
+          console.error('[lumatic] ring sketch failed', error);
+          this.drawSketch(sketch, block, pose, system, true);
+        }
+      });
     }
     return col;
   }
@@ -717,10 +727,11 @@ export class RingEditor {
 
   /** The angles the picked pose gives the rings (as they will stand), or the bars being dragged. */
   private angles(block: RingBlock, pose: RingPose, system: RingSystemInfo) {
-    return this.barDrag?.angles ?? poseAngles(absolutePose(pose, poseBefore(this.editor.ringBlocks, block, pose)), system.rings, block.mode);
+    return poseAngles(absolutePose(pose, poseBefore(this.editor.ringBlocks, block, pose)), system.rings, block.mode);
   }
 
-  private drawSketch(canvas: HTMLCanvasElement, block: RingBlock, pose: RingPose, system: RingSystemInfo) {
+  /** `plain`: squares at the pose's angles, nothing more (the fallback when drawing failed). */
+  private drawSketch(canvas: HTMLCanvasElement, block: RingBlock, pose: RingPose, system: RingSystemInfo, plain = false) {
     if (!canvas.isConnected || canvas.clientWidth === 0) return;
     const ratio = window.devicePixelRatio || 1;
     canvas.width = Math.round(canvas.clientWidth * ratio);
@@ -731,12 +742,17 @@ export class RingEditor {
     const height = canvas.clientHeight;
     ctx.fillStyle = '#0c0d11';
     ctx.fillRect(0, 0, width, height);
-    const angles = this.angles(block, pose, system);
+    let angles: readonly number[];
+    try {
+      angles = this.angles(block, pose, system);
+    } catch {
+      angles = Array.from({ length: system.rings }, () => 0);
+    }
     const cx = width / 2;
     const cy = height / 2;
     const near = Math.min(width, height) * 0.46;
     // (the environment's own ring shape — squares when it has none to show)
-    const index = this.editor.preview.ringSystems().findIndex((item) => item.name === system.name);
+    const index = plain ? -1 : this.editor.preview.ringSystems().findIndex((item) => item.name === system.name);
     const shape = index < 0 ? null : this.editor.preview.ringOutline(index);
     // (far rings first: drawn small and dim, the near ones over them)
     for (let i = angles.length - 1; i >= 0; i--) {
@@ -763,100 +779,6 @@ export class RingEditor {
       ctx.stroke();
       ctx.restore();
     }
-  }
-
-  private barGeometry(canvas: HTMLCanvasElement, angles: readonly number[]) {
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    const top = 14;
-    const bottom = height - 16;
-    const extent = Math.max(180, ...angles.map((angle) => Math.ceil(Math.abs(angle) / 90) * 90));
-    const toY = (angle: number) => top + ((extent - angle) / (2 * extent)) * (bottom - top);
-    const toAngle = (y: number) => extent - ((y - top) / (bottom - top)) * 2 * extent;
-    const slot = (width - 40) / Math.max(1, angles.length);
-    return { width, height, top, bottom, extent, toY, toAngle, slot, left: 34, index: (x: number) => Math.floor((x - 34) / slot) };
-  }
-
-  private drawBars(canvas: HTMLCanvasElement, block: RingBlock, pose: RingPose, system: RingSystemInfo) {
-    if (!canvas.isConnected || canvas.clientWidth === 0) return;
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(canvas.clientWidth * ratio);
-    canvas.height = Math.round(canvas.clientHeight * ratio);
-    const ctx = canvas.getContext('2d')!;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    const angles = this.angles(block, pose, system);
-    const g = this.barGeometry(canvas, angles);
-    ctx.fillStyle = '#0c0d11';
-    ctx.fillRect(0, 0, g.width, g.height);
-    ctx.font = '10px system-ui, sans-serif';
-    for (let angle = -g.extent; angle <= g.extent; angle += 90) {
-      const y = g.toY(angle);
-      ctx.fillStyle = angle === 0 ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
-      ctx.fillRect(g.left, Math.round(y), g.width - g.left - 4, 1);
-      ctx.fillStyle = '#7d8394';
-      ctx.fillText(`${String(angle)}°`, 2, y + 3);
-    }
-    const zero = g.toY(0);
-    const editable = block.mode === 'tracks';
-    angles.forEach((angle, i) => {
-      const x = g.left + i * g.slot;
-      const y = g.toY(angle);
-      ctx.fillStyle = editable ? `hsl(${String(285 - i * 3)} 65% 62%)` : 'hsl(285 30% 50%)';
-      ctx.fillRect(x + g.slot * 0.15, Math.min(y, zero), Math.max(1, g.slot * 0.7), Math.max(2, Math.abs(zero - y)));
-      if (g.slot >= 16) {
-        ctx.fillStyle = '#c9cdd8';
-        ctx.fillText(String(i + 1), x + g.slot / 2 - 3, g.height - 4);
-      }
-    });
-    ctx.fillStyle = '#c9cdd8';
-    ctx.fillText(editable ? 'Углы колец (ближние слева) — тяните столбики' : 'Углы колец (ближние слева)', g.left, 10);
-  }
-
-  private bindBars(canvas: HTMLCanvasElement, block: RingBlock, system: RingSystemInfo) {
-    if (block.mode !== 'tracks') return;
-    const local = (event: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
-    };
-    const paint = (event: MouseEvent) => {
-      const drag = this.barDrag;
-      const pose = this.pose();
-      if (drag === null || pose === undefined) return;
-      const { x, y } = local(event);
-      const g = this.barGeometry(canvas, drag.angles);
-      const index = Math.max(0, Math.min(drag.angles.length - 1, g.index(x)));
-      const raw = g.toAngle(y);
-      const angle = event.shiftKey ? Math.round(raw) : Math.round(raw / 5) * 5;
-      // (a quick drag across the bars sets every one it passes)
-      const from = drag.last ?? index;
-      for (let i = Math.min(from, index); i <= Math.max(from, index); i++) drag.angles[i] = angle;
-      drag.last = index;
-      this.drawBars(canvas, block, pose, system);
-      const sketch = canvas.parentElement?.querySelector<HTMLCanvasElement>('.ring-sketch');
-      if (sketch) this.drawSketch(sketch, block, pose, system);
-    };
-    const up = () => {
-      window.removeEventListener('mousemove', paint);
-      const drag = this.barDrag;
-      this.barDrag = null;
-      if (drag === null) return;
-      const angles = drag.angles.map(round);
-      this.changePose((item) => {
-        item.shape = 'manual';
-        item.manual = angles;
-        delete item.relative;
-        delete item.relativeStep;
-      });
-    };
-    canvas.addEventListener('mousedown', (event) => {
-      const pose = this.pose();
-      if (pose === undefined) return;
-      // (starting from what the pose has now: its own shape's angles, not where the rings ended up)
-      this.barDrag = { angles: poseAngles(absolutePose(pose, poseBefore(this.editor.ringBlocks, this.block() ?? block, pose)), system.rings, 'tracks'), last: null };
-      paint(event);
-      window.addEventListener('mousemove', paint);
-      window.addEventListener('mouseup', up, { once: true });
-    });
   }
 }
 

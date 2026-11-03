@@ -56,7 +56,7 @@ import { allObjects, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyO
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
-import { chromaCustomData, cloneRingBlock, fitRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
+import { chromaCustomData, cloneRingBlock, EVENT_SHAPES, fitRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -113,7 +113,7 @@ export interface Brush {
   hsv: boolean;
 }
 
-type Listener = (what: 'all' | 'clips' | 'selection' | 'time' | 'rows' | 'lights') => void;
+type Listener = (what: 'all' | 'clips' | 'selection' | 'time' | 'rows' | 'lights' | 'grid') => void;
 
 /** See `Editor.glsInspect`. */
 export interface GlsInspect {
@@ -251,6 +251,14 @@ export class Editor {
   setStatus(text: string) {
     this.status = text;
     this.emit('time');
+    for (const listen of this.statusListeners) listen(text);
+  }
+
+  private readonly statusListeners: ((text: string) => void)[] = [];
+
+  /** Each status line as it's put up (the app's log keeps them). */
+  onStatus(listen: (text: string) => void) {
+    this.statusListeners.push(listen);
   }
 
   // ----- time ----------------------------------------------------------------------------------
@@ -501,6 +509,21 @@ export class Editor {
     this.undoStack = [];
     this.redoStack = [];
     this.dirty = false;
+    // (ring poses "each ring on its own" and rings built from geometry are gone: such blocks turned
+    // into ring events — their shapes the spiral the events can make)
+    let converted = 0;
+    for (const block of this.project.ringBlocks ?? []) {
+      if (block.mode !== 'tracks') continue;
+      block.mode = 'event';
+      for (const pose of block.poses) if (!EVENT_SHAPES.has(pose.shape)) pose.shape = 'spiral';
+      converted++;
+    }
+    for (const look of Object.values(this.project.environmentMods?.rings ?? {})) {
+      if (look.geometry !== true) continue;
+      delete look.geometry;
+      converted++;
+    }
+    if (converted > 0) this.dirty = true;
     await this.findGeometryRings();
     this.buildRows();
     this.rebuildPreview(true);

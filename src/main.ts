@@ -192,14 +192,27 @@ function showGrid() {
   shownGrid = grid;
   gridValue.textContent = GRIDS.find(([value]) => Math.abs(value - grid) < 1e-9)?.[1] ?? (grid > 0 ? beatsLabel(grid) : tr('нет'));
   if (first) return;
+  // (the drums of beats everywhere step by the grid: drawn again)
+  editor.emit('grid');
   gridBadge.classList.add('changed');
   window.clearTimeout(gridFade);
   gridFade = window.setTimeout(() => gridBadge.classList.remove('changed'), 900);
 }
 
+// the song's speed over the grid, when it isn't the usual
+const speedBadge = byId('speed-badge');
+let shownRate = Number.NaN;
+function showRate() {
+  if (editor.rate === shownRate) return;
+  shownRate = editor.rate;
+  speedBadge.hidden = Math.abs(shownRate - 1) < 1e-6;
+  speedBadge.textContent = `${String(Math.round(shownRate * 100))}%`;
+}
+
 function tick(now: number) {
   countFrame(now);
   showGrid();
+  showRate();
   editor.tickTrial();
   const seconds = editor.clock?.currentTime() ?? 0;
   timeLabel.textContent = tr('{0} · доля {1}', formatTime(seconds), editor.playhead().toFixed(3));
@@ -654,9 +667,30 @@ window.setInterval(() => {
       if (!document.hasFocus()) refocus();
     }, true);
   }
-  // what goes wrong on the page: into the app's log too
+  // what goes wrong on the page: into the app's log too — and what was done just before (keys, buttons,
+  // the status line), so a hang or an error can be traced back
   if (native?.log !== undefined) {
     const write = native.log;
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        const target = event.target as HTMLElement;
+        const typing = target instanceof HTMLInputElement && ['text', 'number', 'search'].includes(target.type);
+        // (what's typed into fields isn't written: only the keys that do something)
+        if (typing && !['Enter', 'Escape', 'Tab'].includes(event.key) && !event.ctrlKey) return;
+        write('key', `${event.ctrlKey ? 'Ctrl+' : ''}${event.shiftKey ? 'Shift+' : ''}${event.altKey ? 'Alt+' : ''}${event.code}${typing ? ` in ${target.className || 'a field'}` : ''}`);
+      },
+      true,
+    );
+    window.addEventListener(
+      'click',
+      (event) => {
+        const button = (event.target as HTMLElement | null)?.closest('button');
+        if (button !== null && button !== undefined) write('click', (button.textContent ?? '').trim().slice(0, 60) || button.title.slice(0, 60) || button.className);
+      },
+      true,
+    );
+    editor.onStatus((text) => write('status', text));
     window.addEventListener('error', (event) => write('error', `${event.message} (${event.filename}:${String(event.lineno)})${event.error instanceof Error && event.error.stack !== undefined ? `\n${event.error.stack}` : ''}`));
     window.addEventListener('unhandledrejection', (event) => write('rejection', event.reason instanceof Error ? (event.reason.stack ?? event.reason.message) : String(event.reason)));
   }
