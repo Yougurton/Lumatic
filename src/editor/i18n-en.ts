@@ -1991,4 +1991,12 @@ export const EN: Record<string, string> = {
   "Журнал": "Log",
   "Открыть папку журнала": "Open the log folder",
   "Ошибки, зависания и падения окна записываются в журнал (по файлу на день, 14 последних) — его можно приложить к рассказу о сбое.": "Errors, hangs and window crashes are written into the log (a file a day, the last 14) — it can be attached when telling about a failure.",
+  "О редакторе": "About",
+  "Версия {0} beta": "Version {0} beta",
+  "Бета-версия: публичного релиза ещё не было.": "A beta: there has been no public release yet.",
+  "Разработчик Lumatic:": "Lumatic is made by:",
+  "его разработчикам: за редактор, на который Lumatic равняется — раскладку, клавиши, работу с Chroma.": "to its developers: for the editor Lumatic looks up to — its layout, its keys, its way with Chroma.",
+  "его разработчикам: за просмотр карт, на котором построен 3D-вид Lumatic, и данные окружений игры.": "to its developers: for the map viewer Lumatic's 3D view is built on, and the game's environment data.",
+  "Спасибо": "Thanks",
+  "Готовые окружения": "Ready-made environments",
 };

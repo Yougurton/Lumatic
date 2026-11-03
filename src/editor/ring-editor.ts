@@ -745,7 +745,8 @@ export class RingEditor {
       ctx.save();
       ctx.translate(cx, cy);
       // (a larger angle turns a ring counterclockwise as the player sees it)
-      ctx.rotate(-((angles[i] ?? 0) * Math.PI) / 180);
+      const angle = angles[i] ?? 0;
+      ctx.rotate(-((Number.isFinite(angle) ? angle : 0) * Math.PI) / 180);
       ctx.strokeStyle = `hsl(${String(285 - i * 3)} 70% ${String(light)}%)`;
       ctx.lineWidth = Math.max(1, 3.2 - i * 0.12);
       if (shape !== null) {

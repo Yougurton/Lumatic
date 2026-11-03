@@ -395,7 +395,15 @@ export class MapView implements RenderView {
     });
     if (points.length < 6) return null;
     let radius = 1e-6;
-    for (let k = 0; k < points.length; k += 2) radius = Math.max(radius, Math.hypot(points[k]!, points[k + 1]!));
+    let finite = true;
+    for (let k = 0; k < points.length; k += 2) {
+      const reach = Math.hypot(points[k]!, points[k + 1]!);
+      if (!Number.isFinite(reach)) finite = false;
+      else radius = Math.max(radius, reach);
+    }
+    // (a ring caught while the environment is still being put together — shrunk to a point, or not
+    // placed yet: no shape to go by)
+    if (!finite || radius < 0.05) return null;
     return { triangles: Float32Array.from(points), radius };
   }
 

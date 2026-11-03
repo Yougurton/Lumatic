@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
 import { oggQualitySlider } from './grids';
@@ -9,7 +10,7 @@ import { CHECK_RULES, CHECK_SOURCES, rulesOf, type CheckRule, type CheckSource }
  * the editor starts again — `restart` is asked to, when it can be done now.
  */
 
-type Section = 'general' | 'view' | 'timeline' | 'sound' | 'checks' | 'saving';
+type Section = 'general' | 'view' | 'timeline' | 'sound' | 'checks' | 'saving' | 'about';
 
 const SECTIONS: [Section, string][] = [
   ['general', 'Язык и вставка'],
@@ -18,6 +19,7 @@ const SECTIONS: [Section, string][] = [
   ['sound', 'Звук'],
   ['checks', 'Проверка карты'],
   ['saving', 'Сохранение'],
+  ['about', 'О редакторе'],
 ];
 
 const GRIDS: [string, number][] = [
@@ -313,6 +315,7 @@ export function settingsDialog(restart: () => void) {
       }
       return out;
     },
+    about: () => [aboutPage()],
     saving: () => [
       row(
         'Автосохранение',
@@ -417,4 +420,42 @@ export function settingsDialog(restart: () => void) {
   shade.addEventListener('mousedown', (event) => {
     if (event.target === shade) done();
   });
+}
+
+/** "About": the editor's name and version (a beta: not released to the public yet), who makes it, and
+ *  whose work it stands on. */
+function aboutPage(): HTMLElement {
+  const page = document.createElement('div');
+  page.className = 'about';
+  const logo = document.createElement('img');
+  logo.className = 'about-logo';
+  logo.src = 'lumatic-wordmark.svg';
+  logo.alt = 'Lumatic';
+  const version = Object.assign(document.createElement('div'), { className: 'about-version', textContent: tr('Версия {0} beta', __APP_VERSION__) });
+  const beta = Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Бета-версия: публичного релиза ещё не было.' });
+  const author = document.createElement('div');
+  author.className = 'about-line';
+  author.append(Object.assign(document.createElement('span'), { className: 'nm-dim', textContent: 'Разработчик Lumatic: ' }), Object.assign(document.createElement('b'), { textContent: 'Yougurton' }));
+  const heading = (text: string) => Object.assign(document.createElement('div'), { className: 'about-heading', textContent: text });
+  const link = (text: string, url: string) => Object.assign(document.createElement('a'), { textContent: text, href: url, target: '_blank', rel: 'noreferrer' });
+  const item = (...parts: (string | HTMLElement)[]) => {
+    const line = document.createElement('li');
+    line.append(...parts);
+    return line;
+  };
+  const thanks = document.createElement('ul');
+  thanks.className = 'about-list';
+  thanks.append(
+    item(link('ChroMapper', 'https://github.com/Caeden117/ChroMapper'), ' — ', 'его разработчикам: за редактор, на который Lumatic равняется — раскладку, клавиши, работу с Chroma.'),
+    item(Object.assign(document.createElement('b'), { textContent: 'ChroViewer' }), ' — ', 'его разработчикам: за просмотр карт, на котором построен 3D-вид Lumatic, и данные окружений игры.'),
+  );
+  const environments = document.createElement('ul');
+  environments.className = 'about-list';
+  environments.append(
+    item(Object.assign(document.createElement('b'), { textContent: 'MadChase' }), ' — ', link('ChaseEnvs', 'https://github.com/MadChase/ChaseEnvs'), ' (MIT)'),
+    item(Object.assign(document.createElement('b'), { textContent: 'Phøenix' }), ' — ', link('BSCEL', 'https://github.com/Phoenix-BS/BSCEL'), ' (MIT)'),
+    item(Object.assign(document.createElement('b'), { textContent: 'Lonely' }), ' — ', link("Lonely's Chroma Environments", 'https://github.com/LonelyCen/Chroma-Environments'), '; ', 'BTS Witch Edit — Fatalution'),
+  );
+  page.append(logo, version, beta, author, heading('Спасибо'), thanks, heading('Готовые окружения'), environments);
+  return page;
 }

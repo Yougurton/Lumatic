@@ -310,12 +310,17 @@ export class Timeline {
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: event.clientX, clientY: event.clientY, altKey: event.altKey, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey }));
   }
 
+  /** The canvas's size, read once a frame (reading it from the page for each of thousands of events
+   *  made the browser work out the layout again and again). */
+  private sizeCache: { width: number; height: number } | null = null;
+  private frameCount = 0;
+
   private get width() {
-    return this.canvas.clientWidth;
+    return this.sizeCache?.width ?? this.canvas.clientWidth;
   }
 
   private get height() {
-    return this.canvas.clientHeight;
+    return this.sizeCache?.height ?? this.canvas.clientHeight;
   }
 
   /** The width time is drawn across (right of the row scrollbar). */
@@ -512,10 +517,25 @@ export class Timeline {
   /** The colours being drawn are the boost's (set while drawing a clip that starts with the boost on). */
   private boosted = false;
 
+  /** The scheme's colours the cached ones were worked out with (changed: the cache starts again). */
+  private cssScheme = '';
+  private cssSchemeChecked = -1;
+
   private colorCss(color: ClipColor, alpha = 1) {
-    // (worked out once per colour: thousands of clips in view ask again and again)
-    const colors = this.editor.preview.colors;
-    const key = `${this.boosted ? 'b' : ''}${color.ref}|${color.rgb?.join(',') ?? ''}|${String(color.brightness)}|${String(alpha)}|${colors.environmentLeft.join(',')}|${colors.environmentRight.join(',')}|${colors.environmentWhite.join(',')}|${colors.environmentLeftBoost.join(',')}|${colors.environmentRightBoost.join(',')}`;
+    // (worked out once per colour: thousands of clips in view ask again and again; the scheme looked
+    // at once a frame, not for every clip)
+    const frame = this.frameCount;
+    if (this.cssSchemeChecked !== frame) {
+      this.cssSchemeChecked = frame;
+      const colors = this.editor.preview.colors;
+      const scheme = `${colors.environmentLeft.join(',')}|${colors.environmentRight.join(',')}|${colors.environmentWhite.join(',')}|${colors.environmentLeftBoost.join(',')}|${colors.environmentRightBoost.join(',')}|${colors.environmentWhiteBoost.join(',')}`;
+      if (scheme !== this.cssScheme) {
+        this.cssScheme = scheme;
+        this.cssCache.clear();
+      }
+    }
+    const rgb = color.rgb;
+    const key = `${this.boosted ? 'b' : ''}${color.ref}|${rgb === undefined ? '' : `${String(rgb[0])},${String(rgb[1])},${String(rgb[2])}`}|${String(color.brightness)}|${String(alpha)}`;
     const known = this.cssCache.get(key);
     if (known !== undefined) return known;
     if (this.cssCache.size > 5000) this.cssCache.clear();
@@ -539,6 +559,17 @@ export class Timeline {
   }
 
   private draw() {
+    this.sizeCache = null;
+    this.sizeCache = { width: this.canvas.clientWidth, height: this.canvas.clientHeight };
+    this.frameCount++;
+    try {
+      this.drawFrame();
+    } finally {
+      this.sizeCache = null;
+    }
+  }
+
+  private drawFrame() {
     const ctx = this.context;
     const width = this.width;
     const height = this.height;
@@ -933,7 +964,51 @@ export class Timeline {
   }
 
   /** An effect: one block — inside it, a sketch of its events (a line per item it goes through). */
+  /** Pictures of effects' events (see drawEffect), by effect. */
+  private readonly effectPictures = new Map<string, { key: string; canvas: HTMLCanvasElement }>();
+
+  /** An effect's events in lanes, one per item: into `ctx` with the effect's left edge at `x` (on
+   *  the timeline, or 0 on a picture of its own; `cull`: only what's in view). */
+  private drawEffectChildren(ctx: CanvasRenderingContext2D, children: readonly LightClip[], x: number, y: number, w: number, h: number, cull: boolean) {
+    const slots = Math.max(1, ...children.map((child) => (child.slot ?? 0) + 1));
+    const laneH = Math.max(1, (h - 4) / slots);
+    // (crowded — the song seen from afar: each lane a plain column per pixel, no gradients)
+    const crowded = w < children.length * 1.5;
+    const lastColumn = new Map<number, number>();
+    const shift = x - this.effectLeft;
+    const width = this.width;
+    for (const child of children) {
+      const cx = this.beatToX(child.start) + shift;
+      const cw = Math.max(1.5, (child.end - child.start) * this.pxPerBeat);
+      if (cull && (cx > width || cx + cw < x)) continue;
+      const slot = child.slot ?? 0;
+      const ly = slot < 0 ? y + 2 : Math.floor(y + 2 + slot * laneH);
+      const lh = slot < 0 ? h - 4 : Math.max(1.5, Math.round(laneH - (laneH > 3 ? 1 : 0)));
+      this.boosted = this.editor.boostAt(child.start);
+      if (crowded && cw < 3) {
+        const column = Math.floor(cx);
+        if (lastColumn.get(ly) === column) continue;
+        lastColumn.set(ly, column);
+        ctx.fillStyle = this.colorCss(child.color, 1);
+        ctx.fillRect(column, ly, 1.5, lh);
+        continue;
+      }
+      if (child.endMode === 'fade') {
+        const gradient = ctx.createLinearGradient(cx, 0, cx + cw, 0);
+        gradient.addColorStop(0, this.colorCss(child.color, 1));
+        gradient.addColorStop(1, this.colorCss(child.color, 0.1));
+        ctx.fillStyle = gradient;
+      } else ctx.fillStyle = this.colorCss(child.color, 1);
+      ctx.fillRect(cx, ly, cw, lh);
+    }
+    this.boosted = false;
+  }
+
+  /** Where the effect being drawn starts on the timeline (its events are placed from there). */
+  private effectLeft = 0;
+
   private drawEffect(shown: ShownClip, x: number, y: number, w: number, h: number, ghost: boolean) {
+    this.effectLeft = x;
     const ctx = this.context;
     const effect = shown.effect!;
     const background = shown.role === 'background';
@@ -959,37 +1034,29 @@ export class Timeline {
     ctx.fillStyle = this.colorCss(effect.params.color, 0.1);
     ctx.fillRect(x, y, w, h);
     const children = ghost ? (this.ghostChildren ?? []) : this.editor.effectChildren(effect.id);
-    const slots = Math.max(1, ...children.map((child) => (child.slot ?? 0) + 1));
-    const laneH = Math.max(1, (h - 4) / slots);
-    // (crowded — the song seen from afar: each lane a plain column per pixel, no gradients)
-    const crowded = w < children.length * 1.5;
-    const lastColumn = new Map<number, number>();
-    for (const child of children) {
-      const cx = this.beatToX(child.start);
-      const cw = Math.max(1.5, (child.end - child.start) * this.pxPerBeat);
-      if (cx > this.width || cx + cw < x) continue;
-      const slot = child.slot ?? 0;
-      const ly = slot < 0 ? y + 2 : Math.floor(y + 2 + slot * laneH);
-      const lh = slot < 0 ? h - 4 : Math.max(1.5, Math.round(laneH - (laneH > 3 ? 1 : 0)));
-      this.boosted = this.editor.boostAt(child.start);
-      if (crowded && cw < 3) {
-        const column = Math.floor(cx);
-        if (lastColumn.get(ly) === column) continue;
-        lastColumn.set(ly, column);
-        ctx.fillStyle = this.colorCss(child.color, 1);
-        ctx.fillRect(column, ly, 1.5, lh);
-        continue;
+    // its events drawn into a picture of its own once, then only placed as the view scrolls (a
+    // vibrato over many lamps is thousands of events: drawn anew each frame, they cost the frame
+    // rate); too wide a picture (zoomed far in) — drawn straight, only what's in view
+    const ratio = window.devicePixelRatio || 1;
+    if (!ghost && w * ratio <= 8192 && h * ratio <= 1024 && children.length > 0) {
+      const key = `${String(this.editor.version)}|${String(this.pxPerBeat)}|${String(w)}|${String(h)}|${this.cssScheme}|${String(ratio)}|${String(children.length)}`;
+      // (one picture for each height it's drawn at: the same effect shows on several rows)
+      const slotKey = `${effect.id}|${String(h)}`;
+      let picture = this.effectPictures.get(slotKey);
+      if (picture === undefined || picture.key !== key) {
+        if (this.effectPictures.size > 400) this.effectPictures.clear();
+        const canvas = picture?.canvas ?? document.createElement('canvas');
+        canvas.width = Math.max(1, Math.ceil(w * ratio));
+        canvas.height = Math.max(1, Math.ceil(h * ratio));
+        const own = canvas.getContext('2d')!;
+        own.setTransform(ratio, 0, 0, ratio, 0, 0);
+        own.clearRect(0, 0, w, h);
+        this.drawEffectChildren(own, children, 0, 0, w, h, false);
+        picture = { key, canvas };
+        this.effectPictures.set(slotKey, picture);
       }
-      const fades = child.endMode === 'fade';
-      if (fades) {
-        const gradient = ctx.createLinearGradient(cx, 0, cx + cw, 0);
-        gradient.addColorStop(0, this.colorCss(child.color, 1));
-        gradient.addColorStop(1, this.colorCss(child.color, 0.1));
-        ctx.fillStyle = gradient;
-      } else ctx.fillStyle = this.colorCss(child.color, 1);
-      ctx.fillRect(cx, ly, cw, lh);
-    }
-    this.boosted = false;
+      ctx.drawImage(picture.canvas, x, y, w, h);
+    } else this.drawEffectChildren(ctx, children, x, y, w, h, true);
     if (shown.partial) {
       ctx.strokeStyle = 'rgba(0,0,0,0.5)';
       ctx.lineWidth = 3;
