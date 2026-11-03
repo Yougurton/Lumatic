@@ -485,7 +485,7 @@ export class GlsEditor {
       const preset = presetFromSelection(this.editor, effect.name || 'GLS-блок');
       this.editor.selection = before;
       if (preset === null) return;
-      addPreset(preset);
+      addPreset(this.editor, preset);
       this.editor.emit('selection');
       this.editor.setStatus(`Пресет «${preset.name}» сохранён`);
     });

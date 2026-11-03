@@ -92,6 +92,12 @@ export interface Effect {
   custom?: boolean;
   /** kind 'gls': its boxes (gls.ts). */
   gls?: GlsData;
+  /** kind 'group': the map's preset it was made from or put in as (its id)… */
+  preset?: string;
+  /** …kept the same as the preset's other copies (changed inside: they all change)… */
+  presetSync?: boolean;
+  /** …and how much longer than the preset it is (stretched on the timeline: its events with it). */
+  presetScale?: number;
 }
 
 /** What making an effect's events needs besides the effect. */

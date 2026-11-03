@@ -90,6 +90,44 @@
         border-color: var(--accent);
       }
       /* (what the editor says: over the 3D view's bottom left, not in the toolbar's way) */
+      #grid-badge {
+        position: absolute;
+        left: 10px;
+        bottom: 30px;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        padding: 2px 10px 4px;
+        border-radius: 8px;
+        background: rgba(10, 11, 15, 0.45);
+        color: #e8ebf2;
+        opacity: 0.38;
+        pointer-events: none;
+        transform-origin: left bottom;
+        transition:
+          opacity 0.8s ease,
+          transform 0.8s ease,
+          background 0.8s ease,
+          color 0.8s ease;
+      }
+      #grid-badge .gb-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      #grid-badge .gb-value {
+        font-size: 30px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+      }
+      #grid-badge.changed {
+        opacity: 1;
+        transform: scale(1.12);
+        background: rgba(60, 110, 255, 0.55);
+        color: #ffffff;
+        transition: none;
+      }
       #status {
         position: absolute;
         left: 8px;
@@ -2439,6 +2477,14 @@
         color: var(--dim);
         font-size: 12px;
       }
+      .pr-more {
+        display: flex;
+        gap: 6px;
+        padding: 0 10px 6px;
+      }
+      .pr-more:not(:has(button:not([hidden]))) {
+        display: none;
+      }
       .about {
         display: grid;
         gap: 10px;
@@ -3096,7 +3142,7 @@
         <span class="grow"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
         <aside id="side">
           <div id="library"></div>
           <div id="note-panel"></div>

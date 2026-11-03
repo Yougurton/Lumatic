@@ -116,6 +116,8 @@ export interface Project {
   bookmarks?: Bookmark[];
   /** The map checker's finds the user chose to ignore (their keys). */
   ignoredIssues?: string[];
+  /** The map's presets (each difficulty's project has the map's, all the same; presets.ts). */
+  presets?: unknown[];
   /** When it was last saved (ms since 1970): an autosave newer than this is offered back. */
   savedAt?: number;
   /** Colours kept for this map (each difficulty's project has the map's, all the same). */

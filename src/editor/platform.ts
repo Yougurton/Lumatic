@@ -44,7 +44,7 @@ interface NativeApi {
   /** A colour picked anywhere on the screen (0…255 each; null: given up). */
   pickScreenColor?(): Promise<[number, number, number] | null>;
   /** The colours saved in another map's projects (its folder picked; null: cancelled). */
-  paletteFromMap?(): Promise<{ name: string; colors: number[][] } | null>;
+  paletteFromMap?(): Promise<{ name: string; colors: number[][]; presets?: unknown[] } | null>;
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;

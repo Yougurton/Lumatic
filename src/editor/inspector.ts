@@ -1,6 +1,7 @@
 import type { Editor } from './editor';
 import { tr } from './i18n';
 import { openColorPick, pickFromScreen } from './color-pick';
+import { setGroupSync } from './presets';
 import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
@@ -294,6 +295,22 @@ export class Inspector {
       const raw = effects.reduce((sum, item) => sum + editor.effectRaw(item.id).length, 0);
       note.textContent = tr('Группа событий: {0} событий света{1}. «Войти» — править их по одному, «Разобрать» — снова отдельные события; тянется и двигается целиком, как эффект.', clips, raw > 0 ? ' ' + tr('и {0} других', raw) : '');
       root.append(note);
+      // a copy of a map's preset: changed with its other copies — or let go of them
+      if (effects.length === 1 && effect.preset !== undefined) {
+        const preset = (editor.mapPresets() as { id: string; name: string }[]).find((item) => item.id === effect.preset);
+        if (preset !== undefined) {
+          const copies = editor.effects.filter((item) => item.preset === effect.preset && item.presetSync === true).length;
+          const synced = effect.presetSync === true;
+          const line = document.createElement('div');
+          line.className = 'ins-note';
+          line.textContent = synced ? tr('Копия пресета «{0}»: меняется вместе с остальными копиями ({1} всего).', preset.name, copies) : tr('Сделана из пресета «{0}», но меняется отдельно.', preset.name);
+          const toggleSync = document.createElement('button');
+          toggleSync.textContent = synced ? tr('Отвязать от пресета') : tr('Снова как пресет');
+          toggleSync.title = synced ? tr('Эта копия будет меняться отдельно; её события останутся как есть') : tr('События станут как в пресете, и копия снова будет меняться вместе с остальными');
+          toggleSync.addEventListener('click', () => setGroupSync(editor, effect, !synced));
+          root.append(line, toggleSync);
+        }
+      }
       return;
     }
 

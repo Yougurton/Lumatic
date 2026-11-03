@@ -7,6 +7,7 @@ import { resolveRgb } from './bake';
 import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
+import { setGroupSync } from './presets';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { classicGroupName, groupHue, lightGroupName } from './names';
 import { tr } from './i18n';
@@ -1473,6 +1474,15 @@ export class Timeline {
         });
       } },
       { label: 'Сохранить в пресеты…', hint: 'и собрать в группу', action: () => window.dispatchEvent(new Event('lumatic-save-preset')) },
+      ...editor
+        .selectedEffects()
+        .filter((effect) => effect.kind === 'group' && effect.preset !== undefined)
+        .slice(0, 1)
+        .map((effect) => ({
+          label: effect.presetSync === true ? 'Отвязать от пресета' : 'Снова как пресет',
+          hint: effect.presetSync === true ? 'меняется отдельно' : 'меняется со всеми копиями',
+          action: () => setGroupSync(editor, effect, effect.presetSync !== true),
+        })),
       null,
       { label: 'Копировать', hint: 'Ctrl+C', action: () => editor.copy() },
       { label: 'Дублировать', hint: 'Ctrl+D', action: () => editor.duplicateSelection() },

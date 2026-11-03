@@ -119,11 +119,9 @@ if (typeof window !== 'undefined') {
   );
 }
 
-/** The step of a drum of beats: quarters — sixths when the grid is in triplets (other values typed in). */
+/** The step of a drum of beats: the grid's (no grid: quarters); other values typed in. */
 export function beatDrumStep(grid: number) {
-  if (grid <= 0) return 1 / 4;
-  const per = Math.round(1 / grid);
-  return Math.abs(1 / grid - per) < 1e-6 && per % 3 === 0 ? 1 / 6 : 1 / 4;
+  return grid > 0 ? Math.max(1 / 64, grid) : 1 / 4;
 }
 
 /**
@@ -158,8 +156,18 @@ export function gridSelect(value: number, change: (value: number) => void, longe
  * A number to pick on a drum: `value` and its neighbours `step` apart on the rim (from `min`, up to
  * `max`); a number can be typed in too (a double click, or digits while it's picked).
  */
-/** Beats as people write them: 3/4, 1 1/2, 0.3 (a fraction when it is one of the grid's). */
-export function beatsLabel(beats: number) {
+/** Beats as people write them: 3/4, 1 1/2, 0.3 (a fraction when it is one of the grid's) —
+ *  `denominator`: in that many parts of a beat, not reduced (eighths: 2/8, 4/8, 1 6/8). */
+export function beatsLabel(beats: number, denominator?: number) {
+  if (denominator !== undefined && denominator > 1) {
+    const parts = Math.round(beats * denominator);
+    if (Math.abs(beats * denominator - parts) < 1e-6) {
+      const whole = Math.floor(parts / denominator);
+      const rest = parts - whole * denominator;
+      if (rest === 0) return String(whole);
+      return `${whole > 0 ? `${String(whole)} ` : ''}${String(rest)}/${String(denominator)}`;
+    }
+  }
   const whole = Math.floor(beats + 1e-9);
   const rest = beats - whole;
   if (rest < 1e-6) return String(whole);
@@ -178,7 +186,10 @@ export function numberDrum(name: string, value: number, change: (value: number) 
   const digits = options.digits ?? (options.beats === true ? 9 : 3);
   const count = Math.max(1, Math.floor((max - min) / step + 1e-6) + 1);
   const valueAt = (index: number) => Math.round((min + index * step) * 10 ** digits) / 10 ** digits;
-  const format = (number: number) => (options.beats === true ? beatsLabel(number) : String(Math.round(number * 10 ** digits) / 10 ** digits).replace('.', ','));
+  // (beats in the grid's parts, not reduced: a step of 1/8 — 2/8, 4/8…)
+  const parts = Math.round(1 / step);
+  const denominator = options.beats === true && step < 1 && Math.abs(1 / step - parts) < 1e-6 ? parts : undefined;
+  const format = (number: number) => (options.beats === true ? beatsLabel(number, denominator) : String(Math.round(number * 10 ** digits) / 10 ** digits).replace('.', ','));
   // (a value off the steps: shown as it is, where it falls)
   const offStep = Math.abs((value - min) / step - Math.round((value - min) / step)) > 1e-6;
   const initial = Math.max(0, Math.min(count - 1, Math.round((value - min) / step)));

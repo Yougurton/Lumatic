@@ -19,6 +19,7 @@ import type { StartMode } from './editor/model';
 import { installTranslation, language, tr } from './editor/i18n';
 import { Clicks } from './editor/clicks';
 import { onSettings, settings } from './editor/settings';
+import { beatsLabel, GRIDS } from './editor/grids';
 import { settingsDialog } from './editor/settings-dialog';
 import { setRingTickRate } from './engine/core/lighting/ring-motion';
 import { NotePanel } from './editor/note-panel';
@@ -179,8 +180,26 @@ function countFrame(now: number) {
   fpsSince = now;
 }
 
+// the grid in big figures in the 3D view's lower left: bright for a moment when it changes, dimmed after
+const gridBadge = byId('grid-badge');
+const gridValue = gridBadge.querySelector<HTMLElement>('.gb-value')!;
+let shownGrid = Number.NaN;
+let gridFade = 0;
+function showGrid() {
+  const grid = editor.snap;
+  if (grid === shownGrid) return;
+  const first = Number.isNaN(shownGrid);
+  shownGrid = grid;
+  gridValue.textContent = GRIDS.find(([value]) => Math.abs(value - grid) < 1e-9)?.[1] ?? (grid > 0 ? beatsLabel(grid) : tr('нет'));
+  if (first) return;
+  gridBadge.classList.add('changed');
+  window.clearTimeout(gridFade);
+  gridFade = window.setTimeout(() => gridBadge.classList.remove('changed'), 900);
+}
+
 function tick(now: number) {
   countFrame(now);
+  showGrid();
   editor.tickTrial();
   const seconds = editor.clock?.currentTime() ?? 0;
   timeLabel.textContent = tr('{0} · доля {1}', formatTime(seconds), editor.playhead().toFixed(3));
@@ -590,6 +609,22 @@ Object.assign(window, {
 window.addEventListener('beforeunload', (event) => {
   if (!isDesktop() && editor.dirty) event.preventDefault();
 });
+
+// a press on the timeline, the 3D view or any other drawing (not on a field): the field typed into
+// before lets go of the keyboard — else Ctrl+Z and the other keys went on to it (several canvases stop
+// the browser moving the focus themselves)
+window.addEventListener(
+  'mousedown',
+  (event) => {
+    const target = event.target as HTMLElement | null;
+    const active = document.activeElement;
+    if (target === null || !(active instanceof HTMLElement) || active === document.body) return;
+    if (target.closest('input, textarea, select, [contenteditable="true"]') !== null || active.contains(target)) return;
+    const editable = active instanceof HTMLInputElement ? !['button', 'checkbox', 'radio', 'range', 'color'].includes(active.type) : active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
+    if (editable) active.blur();
+  },
+  true,
+);
 
 // unsaved changes copied aside every 2 minutes (Lumatic backups/autosave): a hang or a crash loses
 // little — the map offers them back when it's opened next

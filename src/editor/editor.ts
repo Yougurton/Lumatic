@@ -484,13 +484,11 @@ export class Editor {
       this.project = { format: 'lumatic', version: 1, difficulty: file, environment, clips, raw, expanded: [], groups: [], expandedGroups: [], effects: [], ringBlocks: [], bookmarks: fileBookmarks };
     }
     // (the map's colours: kept in every difficulty's project — one made before them takes theirs)
-    if (this.project.palette === undefined) {
+    if (this.project.palette === undefined || this.project.presets === undefined) {
       for (const other of this.difficulties()) {
         const found = other === row ? null : await loadProject(map.folder, difficultyFile(other)).catch(() => null);
-        if (found?.palette !== undefined && found.palette.length > 0) {
-          this.project.palette = structuredClone(found.palette);
-          break;
-        }
+        if (this.project.palette === undefined && found?.palette !== undefined && found.palette.length > 0) this.project.palette = structuredClone(found.palette);
+        if (this.project.presets === undefined && found?.presets !== undefined && found.presets.length > 0) this.project.presets = structuredClone(found.presets);
       }
     }
     this.selection.clear();
@@ -1530,7 +1528,7 @@ export class Editor {
 
   private snapshot() {
     const project = this.project;
-    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {} });
+    return project === null ? '' : JSON.stringify({ clips: project.clips, raw: project.raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null });
   }
 
   /** Call before a change (one undo step). */
@@ -1540,12 +1538,18 @@ export class Editor {
     this.redoStack = [];
   }
 
+  /** A group of events (a copy of a map's preset) changed while gone into: presets.ts keeps its other
+   *  copies the same. */
+  groupEditedHook: ((group: Effect) => void) | null = null;
+
   /** After a change: redraw, preview again. */
   changed(rebuildNow = false) {
     this.version++;
     this.dirty = true;
     this.previewExtra = null;
     this.noteHandEdits();
+    const open = this.openEffect === null ? undefined : this.effectById(this.openEffect);
+    if (open !== undefined && open.kind === 'group' && open.presetSync === true) this.groupEditedHook?.(open);
     this.rebuildPreview(rebuildNow);
     this.emit('clips');
   }
@@ -1580,8 +1584,14 @@ export class Editor {
   private restore(state: string, notify = true) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number> };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null };
     project.bookmarks = data.bookmarks ?? [];
+    // (the map's presets: as they were — the other difficulties' copies too)
+    if (data.presets !== undefined && JSON.stringify(data.presets ?? null) !== JSON.stringify(project.presets ?? null)) {
+      if (data.presets === null) delete project.presets;
+      else this.setMapPresets(data.presets);
+      window.dispatchEvent(new Event('lumatic-presets'));
+    }
     const rowsChanged = JSON.stringify(project.rowOrder ?? []) !== JSON.stringify(data.rowOrder ?? []) || JSON.stringify(project.replacedTypes ?? {}) !== JSON.stringify(data.replacedTypes ?? {}) || JSON.stringify(project.removedTypes ?? {}) !== JSON.stringify(data.removedTypes ?? {});
     project.rowOrder = data.rowOrder ?? [];
     project.replacedTypes = data.replacedTypes ?? {};
@@ -1940,18 +1950,39 @@ export class Editor {
    *  straight away. */
   setPalette(colors: readonly Rgb[]) {
     const project = this.project;
-    const map = this.map;
-    if (project === null || map === null) return;
+    if (project === null) return;
     const list = colors.map((rgb) => [...rgb] as Rgb);
     project.palette = list;
     this.dirty = true;
     this.emit('selection');
+    this.shareWithMap('palette', list);
+  }
+
+  /** The map's presets (presets.ts). */
+  mapPresets(): unknown[] {
+    return this.project?.presets ?? [];
+  }
+
+  /** The map's presets changed: in this project and the other difficulties' ones straight away. */
+  setMapPresets(presets: readonly unknown[]) {
+    const project = this.project;
+    if (project === null) return;
+    project.presets = structuredClone([...presets]);
+    this.dirty = true;
+    this.shareWithMap('presets', project.presets);
+  }
+
+  /** Something the whole map has (its palette, its presets) written into its other difficulties'
+   *  projects too. */
+  private shareWithMap(key: 'palette' | 'presets', value: unknown) {
+    const map = this.map;
+    if (map === null) return;
     const current = this.row === null ? '' : projectFileName(difficultyFile(this.row));
     void (async () => {
       for (const name of map.folder.files.filter((item) => /\.(lumatic|chroeditor)\.json$/iu.test(item) && item !== current)) {
         try {
           const other = JSON.parse(await map.folder.readText(name)) as Record<string, unknown>;
-          other.palette = list;
+          other[key] = value;
           await map.folder.writeText(name, JSON.stringify(other));
         } catch {
           // (not readable: left as it is)
@@ -2399,6 +2430,11 @@ export class Editor {
   resizeEffect(effect: Effect, origin: { start: number; end: number; children: Map<string, { start: number; end: number }> }, start: number, end: number) {
     effect.start = start;
     effect.end = Math.max(start + 1 / 16, end);
+    // (a copy of a preset stretched: as much longer than the preset as it is now)
+    if (effect.preset !== undefined) {
+      const preset = (this.project?.presets ?? []).find((item) => (item as { id?: string }).id === effect.preset) as { length?: number } | undefined;
+      if (preset?.length !== undefined && preset.length > 0) effect.presetScale = (effect.end - effect.start) / preset.length;
+    }
     if (effect.custom === true) {
       const scale = (effect.end - effect.start) / Math.max(1e-6, origin.end - origin.start);
       for (const clip of this.effectChildren(effect.id)) {
