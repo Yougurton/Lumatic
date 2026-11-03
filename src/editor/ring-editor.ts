@@ -68,6 +68,16 @@ export class RingEditor {
     return block?.poses.find((pose) => pose.id === this.poseId);
   }
 
+  /** The pose the rings' pictures show: the picked one, else the last one the song has reached in
+   *  the block (else its first). */
+  private shownPose(block: RingBlock): RingPose | undefined {
+    const picked = this.pose();
+    if (picked !== undefined) return picked;
+    const at = this.editor.playhead() - block.start;
+    const sorted = [...block.poses].sort((a, b) => a.beat - b.beat);
+    return [...sorted].reverse().find((pose) => pose.beat <= at + 1e-6) ?? sorted[0];
+  }
+
   private system(block: RingBlock): RingSystemInfo | undefined {
     return this.editor.ringInfo.find((system) => system.name === block.system) ?? this.editor.ringInfo[0];
   }
@@ -472,7 +482,7 @@ export class RingEditor {
       col.append(note('В этом окружении нет вращающихся колец.'));
       return col;
     }
-    const pose = this.pose();
+    const pose = this.shownPose(block);
     const views = document.createElement('div');
     views.className = 'ring-views';
     const sketch = document.createElement('canvas');
@@ -489,10 +499,9 @@ export class RingEditor {
       col.append(note('Поза ставится одним событием вращения колец; редактор сам считает, на сколько повернуть кольца от того места, где их оставили прежние события, — поэтому поза точная, что бы ни было до неё.'));
     }
     if (pose !== undefined) {
-      requestAnimationFrame(() => {
-        this.drawSketch(sketch, block, pose, system);
-        this.drawBars(bars, block, pose, system);
-      });
+      // (drawn whenever their size changes — at first they may not have one yet)
+      redrawOnResize(sketch, () => this.drawSketch(sketch, block, pose, system));
+      redrawOnResize(bars, () => this.drawBars(bars, block, pose, system));
       this.bindBars(bars, block, system);
     }
     return col;
@@ -526,7 +535,7 @@ export class RingEditor {
     col.className = 'gls-col ring-view';
     col.append(heading('Кольца сбоку'));
     const system = this.zoomSystem(block);
-    const pose = this.pose();
+    const pose = this.shownPose(block);
     if (system === undefined) {
       col.append(note('В этом окружении кольца не приближаются и не отдаляются.'));
       return col;
@@ -538,7 +547,7 @@ export class RingEditor {
     col.append(note('Слева — платформа. Яркие черты — где кольца встанут, бледные — где стояли на прошлой позе (или в начале песни).'));
     if (pose !== undefined) {
       const before = [...block.poses].filter((item) => item.beat < pose.beat).sort((a, b) => b.beat - a.beat)[0];
-      requestAnimationFrame(() => this.drawSide(canvas, system, pose.step, before?.step ?? system.initialStep));
+      redrawOnResize(canvas, () => this.drawSide(canvas, system, pose.step, before?.step ?? system.initialStep));
     }
     return col;
   }
@@ -862,3 +871,20 @@ function note(text: string) {
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
+
+/** A canvas drawn now (next frame) and again whenever its size changes, until it leaves the page. */
+function redrawOnResize(canvas: HTMLCanvasElement, draw: () => void) {
+  requestAnimationFrame(draw);
+  let size = '';
+  const observer = new ResizeObserver(() => {
+    if (!canvas.isConnected) {
+      observer.disconnect();
+      return;
+    }
+    const now = `${String(canvas.clientWidth)}x${String(canvas.clientHeight)}`;
+    if (now === size || canvas.clientWidth === 0) return;
+    size = now;
+    draw();
+  });
+  observer.observe(canvas);
+}

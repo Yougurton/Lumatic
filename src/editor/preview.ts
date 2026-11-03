@@ -91,7 +91,12 @@ export class Preview {
   /** One ring of a ring system seen down the tunnel (see MapView.ringOutline). */
   ringOutline(system = 0) {
     // (kept till the environment changes: the ring editor draws it every frame)
-    if (!this.outlines.has(system)) this.outlines.set(system, this.view.ringOutline(system));
+    // (none found — the environment still loading: asked again next time)
+    if (!this.outlines.has(system)) {
+      const found = this.view.ringOutline(system);
+      if (found === null) return null;
+      this.outlines.set(system, found);
+    }
     return this.outlines.get(system) ?? null;
   }
 

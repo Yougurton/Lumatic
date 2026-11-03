@@ -27,6 +27,8 @@ export interface Settings {
   visionLine: boolean;
   /** The show's lights in the 3D view (off: every lamp a dim white, nothing moving). */
   previewLights: boolean;
+  /** Frames a second shown in the 3D view's corner. */
+  fps: boolean;
   /** How many times a second the game's ring motion ticks (measured: ~30.6; Unity's usual step: 50):
    *  the 3D view's rings and the ring events the editor makes are worked out for it. */
   ringTicks: number;
@@ -89,6 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   distortion: true,
   notes: false,
   previewLights: true,
+  fps: true,
   visionLine: true,
   trackScale: 1.6,
   ringTicks: 30.6,

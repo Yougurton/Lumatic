@@ -165,7 +165,22 @@ function showSelection() {
   }
 }
 
-function tick() {
+// frames a second, counted over the last half second (the 3D view draws once a frame)
+const fpsLabel = byId('fps');
+let fpsFrames = 0;
+let fpsSince = performance.now();
+function countFrame(now: number) {
+  fpsFrames++;
+  if (now - fpsSince < 500) return;
+  const on = settings().fps;
+  fpsLabel.hidden = !on;
+  if (on) fpsLabel.textContent = `${String(Math.round((fpsFrames * 1000) / (now - fpsSince)))} FPS`;
+  fpsFrames = 0;
+  fpsSince = now;
+}
+
+function tick(now: number) {
+  countFrame(now);
   editor.tickTrial();
   const seconds = editor.clock?.currentTime() ?? 0;
   timeLabel.textContent = tr('{0} · доля {1}', formatTime(seconds), editor.playhead().toFixed(3));
@@ -575,6 +590,45 @@ Object.assign(window, {
 window.addEventListener('beforeunload', (event) => {
   if (!isDesktop() && editor.dirty) event.preventDefault();
 });
+
+// unsaved changes copied aside every 2 minutes (Lumatic backups/autosave): a hang or a crash loses
+// little — the map offers them back when it's opened next
+window.setInterval(() => {
+  void editor.autosaveCopy().catch((error: unknown) => console.warn('[lumatic] autosave failed', error));
+}, 120_000);
+
+// the desktop window: the keyboard back after the page's own confirm / alert boxes (Windows leaves
+// the window looking focused while no field takes keys — a grey selection), and on a click into a
+// page that has lost it
+{
+  const native = window.chroeditorNative;
+  if (native?.refocus !== undefined) {
+    const refocus = native.refocus;
+    const confirmBox = window.confirm.bind(window);
+    const alertBox = window.alert.bind(window);
+    window.confirm = (message?: string) => {
+      const answer = confirmBox(message);
+      refocus();
+      return answer;
+    };
+    window.alert = (message?: string) => {
+      alertBox(message);
+      refocus();
+    };
+    window.addEventListener('mousedown', () => {
+      if (!document.hasFocus()) refocus();
+    }, true);
+  }
+  // what goes wrong on the page: into the app's log too
+  if (native?.log !== undefined) {
+    const write = native.log;
+    window.addEventListener('error', (event) => write('error', `${event.message} (${event.filename}:${String(event.lineno)})${event.error instanceof Error && event.error.stack !== undefined ? `\n${event.error.stack}` : ''}`));
+    window.addEventListener('unhandledrejection', (event) => write('rejection', event.reason instanceof Error ? (event.reason.stack ?? event.reason.message) : String(event.reason)));
+  }
+  // started again after a hang or a crash: the map that was open, opened again
+  const reopen = new URLSearchParams(window.location.search).get('reopen');
+  if (reopen !== null && reopen !== '') void openRecentFolder(reopen).then(openFolder);
+}
 
 // the splitter between the 3D view and the timeline (where it is: kept for each side — the notes side
 // gives the 3D view more room at first)

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { backupFile } from './backup';
 import { pickScreenColor } from './eyedropper';
+import { log, logFolder } from './log';
 import { findAdbServices } from './mdns';
 import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAdb, pair, upload, type UploadOptions } from './quest';
 
@@ -65,7 +66,8 @@ async function openFolder(folder: string) {
   return { path: resolved, files: await listFolder(resolved) };
 }
 
-function createWindow() {
+/** `reopen`: a map folder to open again as the page starts (after a restart from a hang). */
+function createWindow(reopen?: string) {
   const window = new BrowserWindow({
     width: 1600,
     height: 960,
@@ -94,6 +96,41 @@ function createWindow() {
     void shell.openExternal(url);
     return { action: 'deny' };
   });
+  // what goes wrong, into the log
+  window.webContents.on('console-message', (details) => {
+    const level = (details as unknown as { level?: string | number }).level;
+    if (level === 'warning' || level === 'error' || level === 2 || level === 3) log(`page ${String(level)}`, `${details.message} (${details.sourceId}:${String(details.lineNumber)})`);
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    log('crash', `the page's process is gone: ${details.reason} (${String(details.exitCode)})`);
+    if (details.reason === 'clean-exit' || window.isDestroyed()) return;
+    void dialog
+      .showMessageBox(window, { type: 'error', title: 'Lumatic', message: say('Окно Lumatic упало.', 'The Lumatic window crashed.'), detail: say('Оно откроется заново с последней картой; несохранённое можно вернуть из автокопии.', 'It opens again with the last map; what was not saved can be brought back from the autosave.'), buttons: ['OK'] })
+      .then(() => restart(window));
+  });
+  // a page that stopped answering: wait for it, or start it again (the last map opened again)
+  let asking = false;
+  window.on('unresponsive', () => {
+    log('hang', 'the window stopped answering');
+    if (asking) return;
+    asking = true;
+    void dialog
+      .showMessageBox(window, {
+        type: 'warning',
+        title: 'Lumatic',
+        message: say('Lumatic не отвечает.', 'Lumatic is not responding.'),
+        detail: say('Можно подождать или перезапустить окно: последняя карта откроется снова, несохранённое можно вернуть из автокопии (раз в 2 минуты). Что случилось — в журнале (Настройки → Журнал).', 'Wait, or restart the window: the last map opens again, what was not saved can be brought back from the autosave (every 2 minutes). What happened is in the log (Settings → Log).'),
+        buttons: [say('Подождать', 'Wait'), say('Перезапустить', 'Restart')],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      })
+      .then(({ response }) => {
+        asking = false;
+        if (response === 1 && !window.isDestroyed()) restart(window);
+      });
+  });
+  window.on('responsive', () => log('hang', 'answering again'));
   // closing with unsaved changes: save them, drop them, or stay (the page says what it has)
   let closing = false;
   window.on('close', (event) => {
@@ -101,11 +138,29 @@ function createWindow() {
     event.preventDefault();
     void (async () => {
       let unsaved: string | null = null;
-      try {
-        unsaved = (await window.webContents.executeJavaScript('window.chroeditorUnsaved ? window.chroeditorUnsaved() : null')) as string | null;
-      } catch {
-        // (a page that can't answer has nothing to lose)
+      // (a page that doesn't answer in a few seconds — hung: asked whether to close it as it is)
+      const answer = await Promise.race([
+        window.webContents.executeJavaScript('window.chroeditorUnsaved ? window.chroeditorUnsaved() : null').then((value: unknown) => ({ value: value as string | null })),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]).catch(() => ({ value: null }));
+      if (answer === null) {
+        log('hang', 'closing: the page did not answer');
+        const { response } = await dialog.showMessageBox(window, {
+          type: 'warning',
+          title: 'Lumatic',
+          message: say('Окно не отвечает. Закрыть его?', 'The window is not responding. Close it?'),
+          detail: say('Несохранённое можно будет вернуть из автокопии при следующем открытии карты.', 'What was not saved can be brought back from the autosave when the map is opened next.'),
+          buttons: [say('Закрыть', 'Close'), say('Отмена', 'Cancel')],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (response === 1) return;
+        closing = true;
+        window.destroy();
+        return;
       }
+      unsaved = answer.value;
       if (unsaved !== null) {
         const { response } = await dialog.showMessageBox(window, {
           type: 'question',
@@ -131,8 +186,22 @@ function createWindow() {
     })();
   });
   const devUrl = process.env.CHROEDITOR_DEV_URL;
-  void window.loadURL(devUrl ?? 'app://local/index.html');
+  const page = new URL(devUrl ?? 'app://local/index.html');
+  if (reopen !== undefined) page.searchParams.set('reopen', reopen);
+  void window.loadURL(page.toString());
 }
+
+/** The window started again (after a hang or a crash), the last map opened again in it. */
+function restart(window: BrowserWindow) {
+  log('restart', 'the window is started again');
+  void readRecent().then((recent) => {
+    if (!window.isDestroyed()) window.destroy();
+    createWindow(recent[0]);
+  });
+}
+
+process.on('uncaughtException', (error) => log('main', error.stack ?? String(error)));
+process.on('unhandledRejection', (error) => log('main', error instanceof Error ? (error.stack ?? error.message) : String(error)));
 
 void app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
@@ -241,6 +310,22 @@ void app.whenReady().then(() => {
   ipcMain.on('set-language', (_event, language: string) => {
     english = language === 'en';
   });
+  // the keyboard back to the page (Windows: after the page's own confirm / alert boxes the window can
+  // look focused while no field takes keys — a grey selection)
+  ipcMain.on('refocus', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window === null || window.isDestroyed()) return;
+    window.blur();
+    window.focus();
+    window.webContents.focus();
+  });
+  // the page's own log lines (an error it caught)
+  ipcMain.on('log', (_event, kind: string, message: string) => log(String(kind).slice(0, 40), String(message).slice(0, 4000)));
+  ipcMain.handle('open-logs', async () => {
+    await fs.mkdir(logFolder(), { recursive: true });
+    return shell.openPath(logFolder());
+  });
+  log('start', `Lumatic ${app.getVersion()}`);
 
   createWindow();
   app.on('activate', () => {

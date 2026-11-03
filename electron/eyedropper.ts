@@ -88,7 +88,11 @@ export async function pickScreenColor(owner: BrowserWindow | null): Promise<[num
         if (done) return;
         done = true;
         if (!win.isDestroyed()) win.destroy();
-        owner?.focus();
+        // (the keyboard back to the editor's page, not only its window)
+        if (owner !== null && !owner.isDestroyed()) {
+          owner.focus();
+          owner.webContents.focus();
+        }
         resolve(value);
       };
       win.webContents.on('page-title-updated', (_event, title) => {

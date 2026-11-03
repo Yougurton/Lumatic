@@ -120,3 +120,47 @@ export function ask(title: string, value = ''): Promise<string | null> {
     });
   });
 }
+
+/** A question with buttons of the editor's own (no system box: those take the keyboard away on
+ *  Windows). Resolves with the button's index, or `cancel` on Escape. */
+export function choose(title: string, text: string, buttons: readonly string[], cancel = buttons.length - 1): Promise<number> {
+  closeMenu();
+  return new Promise((resolve) => {
+    const shade = document.createElement('div');
+    shade.className = 'ce-shade';
+    const box = document.createElement('div');
+    box.className = 'ce-dialog';
+    const label = document.createElement('div');
+    label.className = 'ce-dialog-title';
+    label.textContent = title;
+    const body = document.createElement('div');
+    body.className = 'ce-dialog-text';
+    body.textContent = text;
+    const row = document.createElement('div');
+    row.className = 'ce-dialog-buttons';
+    const finish = (index: number) => {
+      shade.remove();
+      window.removeEventListener('keydown', keys, true);
+      resolve(index);
+    };
+    buttons.forEach((text, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      if (index === 0) button.className = 'primary';
+      button.addEventListener('click', () => finish(index));
+      row.append(button);
+    });
+    const keys = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      finish(cancel);
+    };
+    window.addEventListener('keydown', keys, true);
+    box.append(label, body, row);
+    shade.append(box);
+    document.body.append(shade);
+    (row.firstElementChild as HTMLButtonElement | null)?.focus();
+  });
+}

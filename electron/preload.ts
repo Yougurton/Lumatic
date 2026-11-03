@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   setLanguage: (language: string) => ipcRenderer.send('set-language', language),
   setZoom: (factor: number) => webFrame.setZoomFactor(factor),
   pickScreenColor: () => ipcRenderer.invoke('pick-screen-color'),
+  refocus: () => ipcRenderer.send('refocus'),
+  log: (kind: string, message: string) => ipcRenderer.send('log', kind, message),
+  openLogs: () => ipcRenderer.invoke('open-logs'),
   paletteFromMap: () => ipcRenderer.invoke('palette-from-map'),
   quest: {
     findAdb: (picked?: string) => ipcRenderer.invoke('quest-find-adb', picked),

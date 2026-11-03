@@ -179,6 +179,7 @@ export function settingsDialog(restart: () => void) {
       ),
       check('Платформа игрока', () => settings().platform, (on) => change({ platform: on })),
       check('Искажения экрана (жар и т. п., как в игре)', () => settings().distortion, (on) => change({ distortion: on })),
+      check('Счётчик кадров (FPS) в углу 3D-вида', () => settings().fps, (on) => change({ fps: on })),
       check('Ноты, бомбы и стены карты', () => settings().notes, (on) => change({ notes: on })),
       check('Красная линия видимости на дорожке нот (половина времени подлёта)', () => settings().visionLine, (on) => change({ visionLine: on })),
       row(
@@ -328,6 +329,24 @@ export function settingsDialog(restart: () => void) {
         ),
         'Карта сохраняется сама, если в ней есть несохранённые изменения и не открыто никакое окно.',
       ),
+      row(
+        'Автокопии на случай сбоя',
+        Object.assign(document.createElement('span'), { className: 'nm-dim', textContent: 'каждые 2 минуты' }),
+        'Несохранённые изменения раз в 2 минуты копируются в «Lumatic backups/autosave» (сама карта не меняется; хранятся 10 последних). Если Lumatic закрылся или завис, не сохранив, при следующем открытии карта предложит их вернуть.',
+      ),
+      ...(window.chroeditorNative?.openLogs === undefined
+        ? []
+        : [
+            row(
+              'Журнал',
+              Object.assign(document.createElement('button'), {
+                type: 'button',
+                textContent: 'Открыть папку журнала',
+                onclick: () => void window.chroeditorNative?.openLogs?.(),
+              }),
+              'Ошибки, зависания и падения окна записываются в журнал (по файлу на день, 14 последних) — его можно приложить к рассказу о сбое.',
+            ),
+          ]),
       row(
         'Резервные копии',
         choice<number>(

@@ -965,6 +965,34 @@ export class GlsEditor {
     this.redrawViews();
   }
 
+  /** The middle button held on a canvas of the block's lanes: the view dragged along (`margin`: the
+   *  pixels on the left before its beats start). */
+  private middlePan(canvas: HTMLCanvasElement, margin = 0) {
+    canvas.addEventListener('mousedown', (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const effect = this.effect();
+      if (effect === undefined) return;
+      let last = event.clientX;
+      const move = (next: MouseEvent) => {
+        const current = this.effect();
+        if (current === undefined) return;
+        const { from, to } = this.shown(current);
+        this.panView(current, ((last - next.clientX) / Math.max(1, canvas.clientWidth - margin)) * (to - from));
+        last = next.clientX;
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+    // (no browser autoscroll on a middle click)
+    canvas.addEventListener('auxclick', (event) => event.preventDefault());
+  }
+
   private panView(effect: Effect, beats: number) {
     const { from, to } = this.shown(effect);
     const length = Math.max(0.25, effect.end - effect.start);
@@ -1302,6 +1330,7 @@ export class GlsEditor {
       const zone = this.blockZone(this.laneGeometry(canvas, this.effect() ?? effect), box.blocks ?? [], { x: event.clientX - rect.left, y: event.clientY - rect.top });
       canvas.style.cursor = zone === null ? 'crosshair' : zone.zone === 'move' ? 'grab' : zone.zone === 'start' || zone.zone === 'end' ? 'ew-resize' : 'ns-resize';
     });
+    this.middlePan(canvas);
     // (a lane of another box: that box picked first — and drawn so)
     canvas.addEventListener('mousedown', () => {
       if (this.boxId === box.id) return;
@@ -1545,8 +1574,10 @@ export class GlsEditor {
     const canvas = document.createElement('canvas');
     canvas.className = 'gls-result-canvas';
     wrap.append(canvas);
+    this.middlePan(canvas, 104);
     // a click (and a drag): the song there (the 3D view shows that moment)
     canvas.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
       const seek = (clientX: number) => {
         const current = this.effect() ?? effect;
         const { from, to } = this.shown(current);
@@ -2068,6 +2099,24 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
   canvas.addEventListener('mousedown', (event) => {
     event.preventDefault();
     const rect = canvas.getBoundingClientRect();
+    // the middle button: the view dragged along the song
+    if (event.button === 1) {
+      const view = span();
+      if (view === null) return;
+      const grab = event.clientX;
+      const pan = (next: MouseEvent) => {
+        const shift = ((grab - next.clientX) / Math.max(1, rect.width)) * (view.to - view.from);
+        setView(view.from + shift, view.to + shift);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', pan);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', pan);
+      window.addEventListener('mouseup', up);
+      return;
+    }
+    if (event.button !== 0) return;
     // the lane: what it does with a press (a pose picked, moved, made)
     if (lane !== null && event.clientY - rect.top >= SONG) {
       const drag = lane.press(beatAt(event.clientX), event.clientX - rect.left, place);
@@ -2094,6 +2143,8 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
   });
+  // (no browser autoscroll on a middle click)
+  canvas.addEventListener('auxclick', (event) => event.preventDefault());
   let gridWheel = 0;
   canvas.addEventListener(
     'wheel',

@@ -35,6 +35,12 @@ interface NativeApi {
   setLanguage?(language: string): void;
   /** The whole window's scale. */
   setZoom?(factor: number): void;
+  /** The keyboard back to the page (after a native box took it). */
+  refocus?(): void;
+  /** A line into the app's log. */
+  log?(kind: string, message: string): void;
+  /** The log's folder opened. */
+  openLogs?(): Promise<string>;
   /** A colour picked anywhere on the screen (0…255 each; null: given up). */
   pickScreenColor?(): Promise<[number, number, number] | null>;
   /** The colours saved in another map's projects (its folder picked; null: cancelled). */

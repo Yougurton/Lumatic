@@ -44,6 +44,8 @@ import { findBandFlux } from './audio-tools';
 import { BANDS } from './onsets';
 import { lightGroupName, otherEventName, setEnvironmentTracks } from './names';
 import type { MapFolder } from './platform';
+import { choose } from './menu';
+import { tr } from './i18n';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
@@ -506,6 +508,8 @@ export class Editor {
     this.rebuildPreview(true);
     this.setStatus(`${map.parsed.mapMeta.title} — ${row.label} (${environment})`);
     this.emit('all');
+    // (left unsaved before — a hang, a crash: what was autosaved offered back)
+    void this.offerAutosave(row).catch((error: unknown) => console.error('[lumatic] autosave check failed', error));
   }
 
   private async loadSong() {
@@ -773,11 +777,72 @@ export class Editor {
       if (events.some((event) => event.color !== undefined || event.lightIds !== undefined) || this.ringChroma(true).enhancements.length > 0 || hasMods(mods)) info = suggestChroma(info, file);
       await map.folder.writeText(infoName, info);
     }
+    project.savedAt = Date.now();
     await map.folder.writeText(projectFileName(file), JSON.stringify(project));
     await map.folder.refresh();
     this.dirty = false;
     const counts = `${String(this.objects.notes.length)} нот, ${String(this.objects.bombs.length)} бомб, ${String(this.objects.walls.length)} стен`;
     this.setStatus(lost.length > 0 ? `Сохранено: ${file}, но не записаны ${lost.join('; ')}` : `Сохранено: ${file} (${String(events.length)} событий, ${counts})`);
+  }
+
+  // ----- autosave -------------------------------------------------------------------------------------
+
+  /**
+   * Unsaved changes copied aside (the map itself left as it is): the difficulty as saving would write
+   * it and the project, into "Lumatic backups/autosave" — ten copies a difficulty, the oldest written
+   * over. Nothing when there's nothing unsaved.
+   */
+  async autosaveCopy(): Promise<boolean> {
+    const map = this.map;
+    const row = this.row;
+    const project = this.project;
+    if (map === null || row === null || project === null || !this.dirty) return false;
+    const file = difficultyFile(row);
+    const original = await map.folder.readText(file);
+    const mods = project.environmentMods;
+    const fragment = await this.environmentFragment(mods);
+    const changes = hasMods(mods) || !isEmptyFragment(project.writtenEnvironment) ? { previous: project.writtenEnvironment, next: fragment } : undefined;
+    const difficulty = writeDifficulty(original, this.bake(), this.ringChroma(true), this.bookmarks, changes, this.objects);
+    // (the project as it will be once that is written)
+    const copy = structuredClone(project);
+    if (changes !== undefined) copy.writtenEnvironment = isEmptyFragment(fragment) ? undefined : fragment;
+    const index = await readAutosaveIndex(map.folder, file);
+    const slot = index.next % AUTOSAVE_SLOTS;
+    const savedAt = Date.now();
+    await map.folder.writeText(autosaveName(file, slot), JSON.stringify({ savedAt, file, difficulty, project: copy }));
+    index.entries = [...index.entries.filter((entry) => entry.slot !== slot), { slot, savedAt }];
+    index.next = slot + 1;
+    await map.folder.writeText(autosaveIndexName(file), JSON.stringify(index));
+    return true;
+  }
+
+  /** An autosave of this difficulty newer than what's saved (and not turned down before): offered
+   *  back — written into the map (the files there kept in backups first) and opened again. */
+  private async offerAutosave(row: DifficultyRow) {
+    const map = this.map;
+    const project = this.project;
+    if (map === null || project === null) return;
+    const file = difficultyFile(row);
+    const index = await readAutosaveIndex(map.folder, file);
+    const latest = [...index.entries].sort((a, b) => b.savedAt - a.savedAt)[0];
+    if (latest === undefined || latest.savedAt <= (project.savedAt ?? 0) + 1000 || latest.savedAt <= (index.dismissed ?? 0)) return;
+    const when = new Date(latest.savedAt).toLocaleString();
+    const answer = await choose(tr('Найдена автокопия'), tr('У «{0}» есть автокопия от {1} — новее того, что сохранено (возможно, Lumatic закрылся или завис, не сохранив). Восстановить её? Текущие файлы сначала будут скопированы в «Lumatic backups».', row.label, when), [tr('Восстановить'), tr('Не нужно')]);
+    if (answer !== 0) {
+      index.dismissed = latest.savedAt;
+      await map.folder.writeText(autosaveIndexName(file), JSON.stringify(index)).catch(() => undefined);
+      return;
+    }
+    const saved = JSON.parse(await map.folder.readText(autosaveName(file, latest.slot))) as { difficulty: string; project: Project };
+    await map.folder.backup?.(file, Math.max(5, settings().backups)).catch(() => undefined);
+    await map.folder.backup?.(projectFileName(file), Math.max(5, settings().backups)).catch(() => undefined);
+    await map.folder.writeText(file, saved.difficulty);
+    await map.folder.writeText(projectFileName(file), JSON.stringify({ ...saved.project, savedAt: Date.now() }));
+    const key = row.key;
+    await this.open(map.folder);
+    const again = this.difficulties().find((item) => item.key === key);
+    if (again !== undefined && again !== this.row) await this.openDifficulty(again);
+    this.setStatus(tr('Автокопия от {0} восстановлена', when));
   }
 
   // ----- rows ----------------------------------------------------------------------------------------
@@ -3116,4 +3181,27 @@ function angleOf(dx: number, dy: number) {
 /** The open difficulty's file format, as read when it was opened. */
 function difficultyVersionOf(editor: Editor): '2' | '3' | '4' {
   return editor.fileVersion;
+}
+
+// ----- autosave files ---------------------------------------------------------------------------------
+
+const AUTOSAVE_SLOTS = 10;
+const AUTOSAVE_FOLDER = 'Lumatic backups/autosave';
+const autosaveName = (file: string, slot: number) => `${AUTOSAVE_FOLDER}/${file}.${String(slot)}.json`;
+const autosaveIndexName = (file: string) => `${AUTOSAVE_FOLDER}/${file}.index.json`;
+
+interface AutosaveIndex {
+  next: number;
+  entries: { slot: number; savedAt: number }[];
+  /** The newest one offered back and turned down. */
+  dismissed?: number;
+}
+
+async function readAutosaveIndex(folder: MapFolder, file: string): Promise<AutosaveIndex> {
+  try {
+    const index = JSON.parse(await folder.readText(autosaveIndexName(file))) as AutosaveIndex;
+    return { next: Number(index.next) || 0, entries: Array.isArray(index.entries) ? index.entries : [], ...(index.dismissed === undefined ? {} : { dismissed: index.dismissed }) };
+  } catch {
+    return { next: 0, entries: [] };
+  }
 }
