@@ -2228,12 +2228,15 @@ export class Editor {
       switches = raw.filter((event) => event.type === 5).map((event) => ({ beat: event.beat, on: event.value === 1 })).sort((a, b) => a.beat - b.beat);
       this.boostCache = { version: this.version, raw, count: raw.length, switches };
     }
-    let on = false;
-    for (const item of switches) {
-      if (item.beat > beat + 1e-9) break;
-      on = item.on;
+    // (the last switch at or before the beat — found by halving: asked once per event drawn)
+    let low = 0;
+    let high = switches.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (switches[middle]!.beat <= beat + 1e-9) low = middle + 1;
+      else high = middle;
     }
-    return on;
+    return low > 0 && switches[low - 1]!.on;
   }
 
   private boostCache: { version: number; raw: RawEvent[]; count: number; switches: { beat: number; on: boolean }[] } | null = null;

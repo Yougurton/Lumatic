@@ -887,6 +887,20 @@ export class Timeline {
     const clip = shown.clip;
     const partial = shown.partial;
     const bpm = this.editor.songBpm;
+    // (narrow — the song seen from afar: a plain block, no gradient or outline; thousands of them
+    // drawn fully would take tens of milliseconds a frame)
+    if (w < 8 && !ghost && !this.editor.selection.has(clip.id)) {
+      // (some lights of the group: paler, not striped)
+      ctx.globalAlpha = (shown.role === 'background' ? 0.28 : 1) * (partial ? 0.6 : 1);
+      ctx.fillStyle = this.colorCss(clip.color, clip.startMode === 'fadeIn' ? 0.5 : 1);
+      ctx.fillRect(x, y, w, h);
+      if ((clip.startMode === 'flash' || clip.startMode === 'fade') && w >= 3) {
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillRect(x, y, 1, h);
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
     const gradient = ctx.createLinearGradient(x, 0, x + Math.max(1, w), 0);
     const startColor = this.colorCss(clip.color, 1);
     const endColor = this.colorCss(clip.endColor ?? clip.color, 1);
