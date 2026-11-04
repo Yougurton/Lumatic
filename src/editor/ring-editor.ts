@@ -5,7 +5,7 @@ import { easingPicker } from './easing-picker';
 import { beatDrumStep, numberDrum } from './grids';
 import { fillRingShape, ringSystemName } from './library';
 import { newId } from './model';
-import { absolutePose, dataFirstRing, poseBefore, EASINGS, EVENT_SHAPES, firstRingFromLog, isTurn, isZoom, newPose, newRingBlock, newZoomBlock, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { absolutePose, dataFirstRing, poseBefore, MOTIONS, EVENT_SHAPES, firstRingFromLog, isTurn, isZoom, newPose, newRingBlock, newZoomBlock, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -481,11 +481,19 @@ export class RingEditor {
     col.append(labeled('Волна по кольцам, долей (0 — все разом)', numberDrum(`ring-delay:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.delay, (value) => this.changePose((item) => (item.delay = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 8, beats: true })));
     if (pose.delay > 0) col.append(note('Волна идёт от ближних колец к дальним.'));
     // (the game's own closing in, or an easing made of short ring events)
-    const options: [string, string][] = [['', 'Как в игре: плавно с торможением'], ...EASINGS];
-    col.append(
+    col.append(this.motionPick(pose));
+    void block;
+    return col;
+  }
+
+  /** How a pose's move goes: the game's own (one event: fastest at once, slower every tick of the
+   *  game's — jerky when quick), or along an easing (events leading the rings smoothly). */
+  private motionPick(pose: RingPose) {
+    const wrap = document.createElement('div');
+    wrap.append(
       labeled(
         'Движение',
-        easingPicker(options, pose.eventEasing ?? '', (value) =>
+        easingPicker(MOTIONS(), pose.eventEasing ?? '', (value) =>
           this.changePose((item) => {
             if (value === '') delete item.eventEasing;
             else item.eventEasing = value;
@@ -493,8 +501,20 @@ export class RingEditor {
         ),
       ),
     );
-    void block;
-    return col;
+    const block = this.block();
+    if (block !== undefined && block.poses.length > 1 && block.poses.some((item) => (item.eventEasing ?? '') !== (pose.eventEasing ?? '')))
+      wrap.append(
+        button('Так же у всех поз блока', 'Поставить это движение всем позам этого блока', () =>
+          this.change((item) => {
+            for (const each of item.poses) {
+              if ((pose.eventEasing ?? '') === '') delete each.eventEasing;
+              else each.eventEasing = pose.eventEasing;
+            }
+          }),
+        ),
+      );
+    if ((pose.eventEasing ?? '') === '' && pose.duration > 0) wrap.append(note('Короткие быстрые переходы «как в игре» в игре выглядят рывками: игра двигает кольца ~30 раз в секунду, каждый раз заметно медленнее. Плавнее всего — «Разгон и торможение» или «Мягко (синус)».'));
+    return wrap;
   }
 
   private viewColumn(block: RingBlock) {
@@ -546,7 +566,8 @@ export class RingEditor {
     if (system !== undefined) col.append(note(`В игре: сжато — ${String(round(system.position.minPositionStep))}, в начале — ${String(round(system.initialStep))}, растянуто — ${String(round(system.position.maxPositionStep))}.`));
     col.append(heading('Переход'));
     col.append(labeled('Время перехода, долей (0 — сразу)', numberDrum(`zoom-duration:${pose.id}:${String(beatDrumStep(this.editor.snap))}`, pose.duration, (value) => this.changePose((item) => (item.duration = Math.max(0, value))), { step: beatDrumStep(this.editor.snap), min: 0, max: 64, beats: true })));
-    col.append(note('Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная. Кольца доезжают плавно, с торможением; время перехода задаёт скорость.'));
+    col.append(this.motionPick(pose));
+    col.append(note('Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная.'));
     col.append(button('Удалить позу', 'Delete', () => this.deletePose(), block.poses.length <= 1));
     return col;
   }

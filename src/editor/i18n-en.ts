@@ -2029,4 +2029,9 @@ export const EN: Record<string, string> = {
   "Шаг до неё — {0}°, после — {1}°.": "The step before it — {0}°, after it — {1}°.",
   "Волна идёт от ближних колец к дальним.": "The wave runs from the near rings to the far ones.",
   "Скорость: {0}%": "Speed: {0}%",
+  "Как в игре: одним событием": "As in the game: one event",
+  "Так же у всех поз блока": "Same for all poses of the block",
+  "Поставить это движение всем позам этого блока": "Give this motion to every pose of this block",
+  "Короткие быстрые переходы «как в игре» в игре выглядят рывками: игра двигает кольца ~30 раз в секунду, каждый раз заметно медленнее. Плавнее всего — «Разгон и торможение» или «Мягко (синус)».": "Short quick moves \"as in the game\" look jerky in the game: it moves the rings ~30 times a second, each time noticeably slower. Smoothest: \"Ease in and out\" or \"Soft (sine)\".",
+  "Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная.": "A zoom event sets the spacing outright rather than adding to it, so the pose is always exact.",
 };

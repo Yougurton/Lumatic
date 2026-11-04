@@ -123,6 +123,9 @@ export const isTurn = (block: RingBlock) => block.kind !== 'zoom' && block.kind 
 /** The shapes ring events can make. */
 export const EVENT_SHAPES = new Set<PoseShape>(['same', 'spiral']);
 
+/** The motions of a pose: the game's own (one event), or an easing made of events. */
+export const MOTIONS = (): [string, string][] => [['', 'Как в игре: одним событием'], ...EASINGS];
+
 export const EASINGS: [string, string][] = [
   ['easeLinear', 'Линейно'],
   ['easeInQuad', 'Разгон'],
@@ -291,12 +294,26 @@ export function zoomPositions(system: ZoomSystemInfo, step: number): number[] {
 
 /** The zoom events of zoom blocks (each pose: the spacing, the speed that gets there in its time). */
 export function poseZoomEvents(blocks: readonly RingBlock[], systems: readonly ZoomSystemInfo[], eventType: number, secondsPerBeat: number): (OutEvent & { group: string })[] {
-  return timedPoses(blocks.filter(isZoom)).map(({ block, pose, beat }) => {
+  const out: (OutEvent & { group: string })[] = [];
+  // (the spacing each system has got to, for an eased move to start from)
+  const reached = new Map<string, number>();
+  const startStep = (name: string) => reached.get(name) ?? reached.get('') ?? (systems.find((item) => item.name === name) ?? systems[0])?.initialStep ?? 0;
+  for (const { block, pose, beat } of timedPoses(blocks.filter(isZoom))) {
     const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
-    const speed = ringSpeedFor(turnSeconds);
-    const customData: Record<string, unknown> = { step: round(pose.step), speed: round(speed), ...(block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {}) };
-    return { beat, type: eventType, value: 0, floatValue: 1, customData, group: block.id };
-  });
+    const filter = block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {};
+    const add = (at: number, step: number, speed: number) => out.push({ beat: at, type: eventType, value: 0, floatValue: 1, customData: { step: round(step), speed: round(speed), ...filter }, group: block.id });
+    const from = startStep(block.system);
+    if (block.system === '') reached.clear();
+    reached.set(block.system, pose.step);
+    const easing = pose.eventEasing;
+    if (easing === undefined || easing === '' || turnSeconds < 2 * easedGap(50)) {
+      add(beat, pose.step, ringSpeedFor(turnSeconds));
+      continue;
+    }
+    // (along an easing: events leading the rings smoothly, as for an eased turn)
+    easedEvents(easingFromName(easing), turnSeconds, 50, (k, pieces, aim, closing) => add(Math.round((beat + (pose.duration * k) / pieces) * 100000) / 100000, from + (pose.step - from) * aim, closing));
+  }
+  return out;
 }
 
 const rand = (seed: number, index: number) => {
@@ -521,47 +538,69 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
       for (const each of trackers.values()) each.inserted(index);
     };
     const easing = pose.eventEasing;
-    // the turn along an easing: ring events one after another, each taking the first ring to where the
-    // easing has got (back, for an overshoot or a bounce), the spiral going along too. Never closer
-    // together than the wave takes to pass the first ring (the game counts a turn from where the first
-    // ring is headed, and a turn holds it until its wave has moved on), nor than two ticks — with room
-    // to spare, so they add up the same even if the game's ticks are a little slower
-    const gap = 1.15 * Math.max(0.04, (firstRingTicks(prop) + 1) * tick, 2 * tick);
-    if (easing === undefined || easing === '' || turnSeconds < 2 * gap) {
+    if (easing === undefined || easing === '' || turnSeconds < 2 * easedGap(prop)) {
       add(beat, rotation, step, speed);
       continue;
     }
-    const ease = easingFromName(easing);
-    const pieces = Math.max(2, Math.min(96, Math.floor(turnSeconds / gap)));
-    // The rings glide on, not step by step: each event's ring closes in only part of the way by the
-    // next (KEEP of the distance left), and its angle is set beyond the easing's next point by just
-    // enough that the ring is there when the next event comes — the easing's points met, the motion
-    // between them smooth (closing all the way each time, the rings would jerk on and stand).
-    const interval = turnSeconds / pieces;
-    const keep = EASED_KEEP;
-    const closing = ringSpeedKeeping(interval, keep);
-    const ahead = (from: number, to: number) => (to - keep * from) / (1 - keep);
+    // the turn along an easing: ring events one after another, the first ring led along the easing
+    // (back, for an overshoot or a bounce), the spiral going along too
     const fromStep = ringStepBase(known, system, songBeat);
-    let was = 0;
-    for (let k = 1; k <= pieces; k++) {
-      const reached = ease(k / pieces);
-      const aim = ahead(was, reached);
-      was = reached;
-      const at = Math.round((beat + (pose.duration * (k - 1)) / pieces) * 100000) / 100000;
-      const now = k === 1 ? base : firstAt.at(toSong(at));
+    easedEvents(easingFromName(easing), turnSeconds, prop, (k, pieces, aim, closing) => {
+      const at = Math.round((beat + (pose.duration * k) / pieces) * 100000) / 100000;
+      const now = k === 0 ? base : firstAt.at(toSong(at));
       add(at, round(base + rotation * aim - now), fromStep + (step - fromStep) * aim, closing);
-    }
-    // (at the end: held where the easing ends)
-    const end = Math.round((beat + pose.duration) * 100000) / 100000;
-    add(end, round(base + rotation - firstAt.at(toSong(end))), step, 50);
+    });
   }
   return out;
 }
 
 const round = (value: number) => Math.round(value * 1000) / 1000;
 
-/** How much of the way a ring has still to go when the next event of an eased turn comes. */
-const EASED_KEEP = 0.4;
+/**
+ * A move along an easing, as ring (or zoom) events the game plays smoothly. The game moves a ring a
+ * part of the way left each tick (~30 a second), so one event's ring is fastest at once and slower each
+ * tick — 40…60 % slower at the speeds of short moves: a jerk every tick. Here the ring closes in only a
+ * little each tick (CREEP of the way), led by events every tick or two whose angle is where the easing
+ * is plus how fast it goes there times the ring's lag: the ring then keeps to the easing (its speed
+ * the easing's, a little different from tick to tick), whichever ticks the events fall on. The last
+ * event: where the move ends, a little quicker (what the ring trails behind by closed).
+ * `emit(k, pieces, aim, closing)`: event k of pieces + 1 (at k / pieces of the move), heading for `aim`
+ * (0: where it starts, 1: where it ends; beyond, leading it), at speed `closing`.
+ */
+export function easedEvents(ease: (t: number) => number, seconds: number, prop: number, emit: (k: number, pieces: number, aim: number, closing: number) => void) {
+  const tick = ringTickSeconds();
+  const pieces = Math.max(2, Math.min(128, Math.floor(seconds / easedGap(prop))));
+  const closing = EASED_CREEP / tick;
+  // (the ring's lag: how far behind its angle it trails, in seconds of the angle's moving)
+  const lag = -tick / Math.log(1 - EASED_CREEP);
+  const at = (u: number) => ease(Math.min(1, Math.max(0, u)));
+  const slope = (u: number) => {
+    const h = 0.002;
+    const a = Math.max(0, u - h);
+    const b = Math.min(1, u + h);
+    return (at(b) - at(a)) / (b - a);
+  };
+  for (let k = 0; k < pieces; k++) {
+    // (the angle held till the next event: the easing halfway there — the game starting it a half
+    // tick late on average)
+    const u = (k + 0.5) / pieces + (0.5 * tick) / seconds;
+    emit(k, pieces, at(u) + (slope(u) * lag) / seconds, closing);
+  }
+  // (and then the rest of the way at once, near enough: the ring trails a little behind)
+  emit(pieces, pieces, at(1), Math.max(closing, ringSpeedFor(Math.max(0.15, 0.25 * seconds))));
+}
+
+/** How far apart an eased move's events are (seconds): never two in one tick of the game's — more
+ *  than a tick and a frame apart — nor before the wave of the one before has passed the first ring
+ *  (the game counts a turn from where the first ring is headed, and a turn holds it till then). */
+export function easedGap(prop: number) {
+  const tick = ringTickSeconds();
+  return Math.max(EASED_GAP, (firstRingTicks(prop) + 0.6) * tick);
+}
+
+const EASED_GAP = 0.05;
+/** How much of the way left a ring of an eased move closes in each tick. */
+const EASED_CREEP = 0.12;
 
 /** The `speed` that leaves a ring `keep` of the way to its angle after `seconds`. */
 function ringSpeedKeeping(seconds: number, keep: number) {
