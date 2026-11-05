@@ -1,4 +1,5 @@
 import type { Editor } from './editor';
+import { tr } from './i18n';
 import { actionFor, comboOf } from './hotkeys';
 import { button, check, holdWhileTyping, scrubStrip, shareStripView, speedControl, type StripLane, heading, labeled, numberInput, select, textInput, toggle } from './gls-editor';
 import { easingPicker } from './easing-picker';
@@ -47,7 +48,13 @@ export class RingEditor {
   private keyHandler = (event: KeyboardEvent) => this.onKey(event);
   private resizeHandler = () => this.place();
 
-  constructor(private readonly editor: Editor) {
+  /** In the panel on the right (a pose picked on the timeline): drawn again by it. */
+  private inspected: (() => void) | null = null;
+
+  /** `docked`: the window over the timeline (the editor's one); else the picked pose's settings in
+   *  the panel on the right (see renderInto). */
+  constructor(private readonly editor: Editor, docked = true) {
+    if (!docked) return;
     editor.ringEditorHook = (id) => this.open(id);
     editor.onChange((what) => {
       if (this.dock === null) return;
@@ -220,6 +227,8 @@ export class RingEditor {
 
   /** The song put where the picked pose has been reached (the 3D view shows it). */
   private showPose() {
+    // (in the panel: the song stays where it is)
+    if (this.inspected !== null) return;
     const block = this.block();
     const pose = this.pose();
     if (block === undefined || pose === undefined || this.editor.previewExtra !== null || this.editor.isPlaying()) return;
@@ -228,7 +237,36 @@ export class RingEditor {
 
   // ----- rendering -------------------------------------------------------------------------------------
 
+  /**
+   * A pose's settings in the panel on the right (picked by its mark on the timeline, without opening
+   * its block): where it is, its shape, how the rings get to it. `again`: the panel drawn again.
+   */
+  renderInto(root: HTMLElement, blockId: string, poseId: string, again: () => void) {
+    this.blockId = blockId;
+    this.poseId = poseId;
+    this.inspected = again;
+    const block = this.block();
+    const pose = this.pose();
+    if (block === undefined || pose === undefined) return;
+    const panel = document.createElement('div');
+    panel.className = 'gls-side-panel ring-side';
+    const title = document.createElement('div');
+    title.className = 'gls-side-title';
+    const index = [...block.poses].sort((a, b) => a.beat - b.beat).indexOf(pose) + 1;
+    title.textContent = `${isZoom(block) ? 'Зум колец' : 'Поза колец'} · ${String(index)} — ${tr('доля {0}', round(block.start + pose.beat))}`;
+    panel.append(title);
+    const open = button('Открыть блок', 'Открыть блок поз целиком (двойной клик по блоку)', () => this.editor.ringEditorHook?.(blockId));
+    panel.append(open);
+    if (isZoom(block)) panel.append(this.zoomColumn(block));
+    else panel.append(this.poseColumn(block), this.turnColumn(block));
+    root.append(panel);
+  }
+
   private render() {
+    if (this.inspected !== null) {
+      this.inspected();
+      return;
+    }
     const dock = this.dock;
     const block = this.block();
     if (dock === null || block === undefined) return;

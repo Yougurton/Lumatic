@@ -2035,4 +2035,7 @@ export const EN: Record<string, string> = {
   "Короткие быстрые переходы «как в игре» в игре выглядят рывками: игра двигает кольца ~30 раз в секунду, каждый раз заметно медленнее. Плавнее всего — «Разгон и торможение» или «Мягко (синус)».": "Short quick moves \"as in the game\" look jerky in the game: it moves the rings ~30 times a second, each time noticeably slower. Smoothest: \"Ease in and out\" or \"Soft (sine)\".",
   "Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная.": "A zoom event sets the spacing outright rather than adding to it, so the pose is always exact.",
   "Поза на доле {0}: переход {1} дол.": "Pose at beat {0}: move {1} beats",
+  "Открыть блок": "Open the block",
+  "Открыть блок поз целиком (двойной клик по блоку)": "Open the whole pose block (double click on the block)",
+  "Поза колец": "Ring pose",
 };

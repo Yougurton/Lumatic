@@ -1360,7 +1360,7 @@ export class Timeline {
     const ctx = this.context;
     const cy = top + height / 2;
     const marks = this.poseMarks(type).sort((a, b) => a.beat - b.beat);
-    const dragged = this.drag?.kind === 'pose' ? this.drag.poseId : null;
+    const dragged = this.drag?.kind === 'pose' ? this.drag.poseId : (this.editor.posePick?.poseId ?? null);
     ctx.font = '600 10px system-ui, sans-serif';
     let lastLabel = -Infinity;
     marks.forEach((mark, index) => {
@@ -2378,9 +2378,13 @@ export class Timeline {
       if (mark !== null) {
         // a pose's mark: dragged along — the pose moves (a click alone: the song goes there)
         this.drag = { kind: 'pose', blockId: mark.block.id, poseId: mark.pose.id, origin: mark.beat, to: mark.beat, grab: this.xToBeat(x), moved: false };
+        // (picked: its settings on the right)
+        this.editor.pickPose({ blockId: mark.block.id, poseId: mark.pose.id });
         this.needsDraw = true;
         return;
       }
+      // (a pose was picked: let go)
+      if (this.editor.posePick !== null && event.button === 0) this.editor.pickPose(null);
       const hit = this.hit(x, y);
       const under = this.rowAt(y);
       if (under !== null && isLightRow(under.row)) this.editor.setActiveRow(under.row.key);

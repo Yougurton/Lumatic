@@ -6,6 +6,7 @@ import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
 import { holdWhileTyping } from './gls-editor';
+import { RingEditor } from './ring-editor';
 import { beatDrumStep, gridSelect, numberDrum, wheelSlider } from './grids';
 import { resolveRgb, shiftHue } from './bake';
 import { KIND_NAMES, mixColor, waveLength, waveSteps, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
@@ -75,7 +76,11 @@ function toHex(rgb: Rgb) {
 
 
 export class Inspector {
+  /** The settings of a pose picked on the timeline (the ring editor's, in this panel). */
+  private readonly poses: RingEditor;
+
   constructor(private readonly editor: Editor, private readonly root: HTMLElement) {
+    this.poses = new RingEditor(editor, false);
     editor.onChange((what) => {
       if (what !== 'time') this.render();
     });
@@ -136,6 +141,12 @@ export class Inspector {
     const gls = this.editor.glsInspect;
     if (gls?.render !== undefined) {
       gls.render(root);
+      return;
+    }
+    // a ring or zoom pose picked on the timeline
+    const pick = this.editor.posePick;
+    if (pick !== null && this.editor.ringBlockById(pick.blockId)?.poses.some((pose) => pose.id === pick.poseId) === true) {
+      this.poses.renderInto(root, pick.blockId, pick.poseId, () => this.render());
       return;
     }
     const effects = this.editor.selectedEffects();

@@ -607,14 +607,22 @@ export class Editor {
   bake(): OutEvent[] {
     const project = this.project;
     if (project === null) return [];
-    return this.bakeWith(project.clips, project.raw);
+    // (kept till the show changes: the 3D view, saving and the autosave all want the same — worked out
+    // once, not a fifth of a second again each time on a big map)
+    const cached = this.bakeCache;
+    if (cached !== null && cached.version === this.version && cached.project === project && cached.rings === this.ringInfo && cached.zooms === this.zoomInfo) return cached.events;
+    const events = this.bakeWith(project.clips, project.raw);
+    this.bakeCache = { version: this.version, project, rings: this.ringInfo, zooms: this.zoomInfo, events };
+    return events;
   }
+
+  private bakeCache: { version: number; project: Project; rings: unknown; zooms: unknown; events: OutEvent[] } | null = null;
 
   /** What the 3D view shows: the show, and whatever is being tried out. */
   bakeForPreview(): OutEvent[] {
     const project = this.project;
     const extra = this.previewExtra;
-    if (project === null || extra === null) return this.bake();
+    if (project === null || extra === null) return [...this.bake()];
     return this.bakeWith([...project.clips, ...extra.clips], [...project.raw, ...extra.raw]);
   }
 
@@ -772,13 +780,17 @@ export class Editor {
     const project = this.project;
     if (map === null || row === null || project === null) return;
     const file = difficultyFile(row);
+    // (changed while it's being written: still unsaved after)
+    const version = this.version;
     const original = await map.folder.readText(file);
     const events = this.bake();
+    await breather();
     // the environment's changes: the ones written before out, the ones now in
     const mods = project.environmentMods;
     const fragment = await this.environmentFragment(mods, environment);
     const changes = hasMods(mods) || !isEmptyFragment(project.writtenEnvironment) ? { previous: project.writtenEnvironment, next: fragment } : undefined;
     const text = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks, changes, this.objects);
+    await breather();
     const lost = unsupported(this.objects, difficultyVersion(original));
     if (changes !== undefined) project.writtenEnvironment = isEmptyFragment(fragment) ? undefined : fragment;
     // (a copy of the difficulty as it was, in the map's "Lumatic backups" — when the settings keep any)
@@ -799,9 +811,10 @@ export class Editor {
       await map.folder.writeText(infoName, info);
     }
     project.savedAt = Date.now();
+    await breather();
     await map.folder.writeText(projectFileName(file), JSON.stringify(project));
     await map.folder.refresh();
-    this.dirty = false;
+    if (this.version === version) this.dirty = false;
     const counts = `${String(this.objects.notes.length)} нот, ${String(this.objects.bombs.length)} бомб, ${String(this.objects.walls.length)} стен`;
     this.setStatus(lost.length > 0 ? `Сохранено: ${file}, но не записаны ${lost.join('; ')}` : `Сохранено: ${file} (${String(events.length)} событий, ${counts})`);
   }
@@ -823,14 +836,18 @@ export class Editor {
     const mods = project.environmentMods;
     const fragment = await this.environmentFragment(mods);
     const changes = hasMods(mods) || !isEmptyFragment(project.writtenEnvironment) ? { previous: project.writtenEnvironment, next: fragment } : undefined;
-    const difficulty = writeDifficulty(original, this.bake(), this.ringChroma(true), this.bookmarks, changes, this.objects);
-    // (the project as it will be once that is written)
-    const copy = structuredClone(project);
-    if (changes !== undefined) copy.writtenEnvironment = isEmptyFragment(fragment) ? undefined : fragment;
+    // (in pieces with breaths between: the page keeps answering)
+    const events = this.bake();
+    await breather();
+    const difficulty = writeDifficulty(original, events, this.ringChroma(true), this.bookmarks, changes, this.objects);
+    await breather();
+    // (the project as it will be once that is written — as text at once: no copy of it needed)
+    const projectText = JSON.stringify(changes === undefined ? project : { ...project, writtenEnvironment: isEmptyFragment(fragment) ? undefined : fragment });
+    await breather();
     const index = await readAutosaveIndex(map.folder, file);
     const slot = index.next % AUTOSAVE_SLOTS;
     const savedAt = Date.now();
-    await map.folder.writeText(autosaveName(file, slot), JSON.stringify({ savedAt, file, difficulty, project: copy }));
+    await map.folder.writeText(autosaveName(file, slot), `{"savedAt":${String(savedAt)},"file":${JSON.stringify(file)},"difficulty":${JSON.stringify(difficulty)},"project":${projectText}}`);
     index.entries = [...index.entries.filter((entry) => entry.slot !== slot), { slot, savedAt }];
     index.next = slot + 1;
     await map.folder.writeText(autosaveIndexName(file), JSON.stringify(index));
@@ -1729,6 +1746,7 @@ export class Editor {
   }
 
   select(ids: Iterable<string>, mode: 'replace' | 'add' | 'toggle' | 'remove' = 'replace') {
+    this.posePick = null;
     if (mode === 'replace') this.selection = new Set(ids);
     else for (const id of ids) {
       if (mode === 'remove' || (mode === 'toggle' && this.selection.has(id))) this.selection.delete(id);
@@ -2412,6 +2430,16 @@ export class Editor {
   /** While a GLS block is edited: what the inspector on the right shows instead of the brush — the
    *  picked block (edited as a clip is), or something of its own (a ring turn). */
   glsInspect: GlsInspect | null = null;
+
+  /** A ring or zoom pose picked by its mark on the timeline: its settings in the panel on the right. */
+  posePick: { blockId: string; poseId: string } | null = null;
+
+  /** A pose picked (null: none) — what else was picked let go. */
+  pickPose(pick: { blockId: string; poseId: string } | null) {
+    this.posePick = pick;
+    if (pick !== null) this.selection = new Set();
+    this.emit('selection');
+  }
 
   /** Changes one effect (one undo step) and makes its events anew. */
   updateEffect(id: string, patch: (effect: Effect) => void) {
@@ -3263,6 +3291,11 @@ function difficultyVersionOf(editor: Editor): '2' | '3' | '4' {
 // ----- autosave files ---------------------------------------------------------------------------------
 
 const AUTOSAVE_SLOTS = 10;
+
+/** A breath for the page between two long pieces of work (a frame drawn, the keys and mouse answered). */
+function breather() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 16));
+}
 const AUTOSAVE_FOLDER = 'Lumatic backups/autosave';
 const autosaveName = (file: string, slot: number) => `${AUTOSAVE_FOLDER}/${file}.${String(slot)}.json`;
 const autosaveIndexName = (file: string) => `${AUTOSAVE_FOLDER}/${file}.index.json`;

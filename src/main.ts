@@ -363,8 +363,25 @@ const REOPEN = 'lumatic.reopen';
 }
 byId('app-settings').addEventListener('click', () => settingsDialog(() => void restart()));
 
+// the last moment the hands were on the mouse or the keys: saving waits for a pause in the work
+// (a fifth of a second of a big map's saving, in the middle of a drag, is a freeze)
+let lastInput = 0;
+let buttonsDown = 0;
+for (const name of ['keydown', 'pointerdown', 'pointermove', 'pointerup', 'wheel'] as const)
+  window.addEventListener(
+    name,
+    (event) => {
+      lastInput = performance.now();
+      if (event instanceof PointerEvent) buttonsDown = event.buttons;
+    },
+    { capture: true, passive: true },
+  );
+window.addEventListener('blur', () => (buttonsDown = 0));
+/** Nothing touched for a moment, no button held, the song not playing. */
+const quietNow = () => buttonsDown === 0 && performance.now() - lastInput > 1500 && !editor.isPlaying();
+
 // saved by itself every so many minutes while there are changes (not while a window is open or
-// something is being tried)
+// something is being tried; in a pause of the work)
 {
   let dirtySince: number | null = null;
   let saving = false;
@@ -375,14 +392,14 @@ byId('app-settings').addEventListener('click', () => settingsDialog(() => void r
       return;
     }
     dirtySince ??= Date.now();
-    const busy = saving || document.querySelector('.ce-shade') !== null || editor.previewExtra !== null || editor.isTrying();
+    const busy = saving || !quietNow() || document.querySelector('.ce-shade') !== null || editor.previewExtra !== null || editor.isTrying();
     if (busy || Date.now() - dirtySince < minutes * 60_000) return;
     saving = true;
     void save().finally(() => {
       saving = false;
       dirtySince = null;
     });
-  }, 5000);
+  }, 1000);
 }
 
 // the keys (hotkeys.ts: by their place on the keyboard — with a Russian layout Ctrl+Z is Ctrl+Я; the
@@ -636,10 +653,22 @@ window.addEventListener(
 );
 
 // unsaved changes copied aside every 2 minutes (Lumatic backups/autosave): a hang or a crash loses
-// little — the map offers them back when it's opened next
-window.setInterval(() => {
-  void editor.autosaveCopy().catch((error: unknown) => console.warn('[lumatic] autosave failed', error));
-}, 120_000);
+// little — the map offers them back when it's opened next. In a pause of the work (else at most
+// 3 minutes late: then at once)
+{
+  let lastCopy = performance.now();
+  let copying = false;
+  window.setInterval(() => {
+    const since = performance.now() - lastCopy;
+    if (copying || since < 120_000 || (!quietNow() && since < 300_000)) return;
+    copying = true;
+    lastCopy = performance.now();
+    void editor
+      .autosaveCopy()
+      .catch((error: unknown) => console.warn('[lumatic] autosave failed', error))
+      .finally(() => (copying = false));
+  }, 1000);
+}
 
 // the desktop window: the keyboard back after the page's own confirm / alert boxes (Windows leaves
 // the window looking focused while no field takes keys — a grey selection), and on a click into a
