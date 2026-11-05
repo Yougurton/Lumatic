@@ -85,6 +85,51 @@ export interface RingBlock {
   glitch?: RingGlitch;
   /** A lasers block: what they do (its length decides how long they spin / how many steps). */
   lasers?: LaserMove;
+  /** Moving on all the time, start to end (no poses): turning / twisting, or the zoom. */
+  spin?: RingSpin;
+}
+
+/** Rings kept moving at an even speed from a block's start to its end (sped up and slowed down at
+ *  its ends). */
+export interface RingSpin {
+  /** Turning: degrees a beat (+: the angle grows); twisting: the spiral's step, degrees a beat. */
+  speed: number;
+  twist: number;
+  /** Zoom: on one way (`rate` a beat), or there and back — to `to` and back every `period` beats. */
+  zoom: 'drift' | 'breathe';
+  rate: number;
+  to: number;
+  period: number;
+  /** Beats to get up to speed, and to come to a stop. */
+  rampIn: number;
+  rampOut: number;
+}
+
+export const DEFAULT_SPIN: RingSpin = { speed: 90, twist: 0, zoom: 'breathe', rate: 0.5, to: 3, period: 4, rampIn: 1, rampOut: 1 };
+
+export const isSpin = (block: RingBlock) => block.spin !== undefined;
+
+export function newSpinBlock(system: string, kind: 'rotation' | 'zoom', start: number, end: number): RingBlock {
+  return { id: newId('k'), ...(kind === 'zoom' ? { kind } : {}), name: kind === 'zoom' ? 'Постоянный зум' : 'Постоянное вращение', system, mode: 'event', start, end: Math.max(start + 0.25, end), poses: [], spin: { ...DEFAULT_SPIN } };
+}
+
+/** How far a spin has got after `t` beats of a block `length` long: in beats at full speed (its speed
+ *  eases up over the ramp in, eases down over the ramp out — shortened alike if they don't fit). */
+export function spinPhase(spin: RingSpin, length: number, t: number) {
+  let up = Math.max(0, spin.rampIn);
+  let down = Math.max(0, spin.rampOut);
+  if (up + down > length && up + down > 0) {
+    const scale = length / (up + down);
+    up *= scale;
+    down *= scale;
+  }
+  // (the speed: smoothstep in and out; F — its integral from 0)
+  const F = (x: number) => x ** 3 - x ** 4 / 2;
+  const at = Math.max(0, Math.min(length, t));
+  const steady = length - up - down;
+  if (at <= up) return up > 0 ? up * F(at / up) : 0;
+  if (at <= up + steady) return up / 2 + (at - up);
+  return up / 2 + steady + (down > 0 ? down * (0.5 - F((length - at) / down)) : 0);
 }
 
 /** What making ring poses needs to know about the environment's ring systems. */
@@ -298,12 +343,25 @@ export function poseZoomEvents(blocks: readonly RingBlock[], systems: readonly Z
   // (the spacing each system has got to, for an eased move to start from)
   const reached = new Map<string, number>();
   const startStep = (name: string) => reached.get(name) ?? reached.get('') ?? (systems.find((item) => item.name === name) ?? systems[0])?.initialStep ?? 0;
-  for (const { block, pose, beat } of timedPoses(blocks.filter(isZoom))) {
+  for (const { block, pose, beat } of timedPoses(blocks.filter(isZoom), true)) {
     const turnSeconds = Math.max(0, pose.duration) * secondsPerBeat;
     const filter = block.system !== '' && systems.length > 1 ? { nameFilter: block.system } : {};
     const add = (at: number, step: number, speed: number) => out.push({ beat: at, type: eventType, value: 0, floatValue: 1, customData: { step: round(step), speed: round(speed), ...filter }, group: block.id });
     const from = startStep(block.system);
     if (block.system === '') reached.clear();
+    const spin = block.spin;
+    if (spin !== undefined) {
+      // the spacing moving on and on: one way, or there and back
+      const length = block.end - block.start;
+      const spacing = (t: number) => {
+        const phase = spinPhase(spin, length, t);
+        return spin.zoom === 'drift' ? from + spin.rate * phase : from + ((spin.to - from) * (1 - Math.cos((2 * Math.PI * phase) / Math.max(0.25, spin.period)))) / 2;
+      };
+      reached.set(block.system, spacing(length));
+      if (turnSeconds < 2 * easedGap(50)) continue;
+      easedEvents((u) => spacing(u * length), turnSeconds, 50, (k, pieces, aim, closing) => add(Math.round((beat + (length * k) / pieces) * 100000) / 100000, aim, closing), SPIN_PIECES);
+      continue;
+    }
     reached.set(block.system, pose.step);
     const easing = pose.eventEasing;
     if (easing === undefined || easing === '' || turnSeconds < 2 * easedGap(50)) {
@@ -414,9 +472,16 @@ export function absolutePose(pose: RingPose, before: number | { angle: number; s
 }
 
 /** The poses of blocks in time order (each with its block), only those inside its block. */
-function timedPoses(blocks: readonly RingBlock[]) {
+function timedPoses(blocks: readonly RingBlock[], spins = false) {
   return blocks
-    .flatMap((block) => block.poses.filter((pose) => pose.beat <= block.end - block.start + 1e-6).map((pose) => ({ block, pose, beat: block.start + pose.beat })))
+    .flatMap((block) =>
+      block.spin !== undefined
+        ? // (a spin: one move the length of its block)
+          spins
+          ? [{ block, pose: newPose(0, { duration: block.end - block.start }), beat: block.start }]
+          : []
+        : block.poses.filter((pose) => pose.beat <= block.end - block.start + 1e-6).map((pose) => ({ block, pose, beat: block.start + pose.beat })),
+    )
     .sort((a, b) => a.beat - b.beat);
 }
 
@@ -476,7 +541,8 @@ export function ringBase(events: readonly KnownRingEvent[], system: RingSystemIn
 /** The step from ring to ring the last ring event before `songBeat` set for a system (its custom step,
  *  with its multiplier); 0 when that event had none, or there was none. */
 export function ringStepBase(events: readonly { songBeat: number; customData?: Record<string, unknown> }[], system: RingSystemInfo, songBeat: number) {
-  let step = 0;
+  // (before any ring event: the step the game sets the rings out with)
+  let step = system.rotation.startupRotationStep;
   for (const event of events) {
     if (event.songBeat >= songBeat - 1e-9) break;
     const custom = event.customData;
@@ -503,7 +569,7 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
     if (found === undefined) trackers.set(system, (found = new RingBaseTracker(known, system, secondsPerBeat)));
     return found;
   };
-  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'event'))) {
+  for (const { block, pose, beat } of timedPoses(blocks.filter((item) => isTurn(item) && item.mode === 'event'), true)) {
     const system = systems.find((item) => item.name === block.system) ?? systems[0];
     if (system === undefined) continue;
     const songBeat = toSong(beat);
@@ -537,6 +603,20 @@ export function poseRingEvents(blocks: readonly RingBlock[], others: readonly Ou
       known.splice(index, 0, { songBeat: songAt, customData });
       for (const each of trackers.values()) each.inserted(index);
     };
+    const spin = block.spin;
+    if (spin !== undefined) {
+      // turning (and twisting) on and on: events leading the rings at an even speed
+      const length = block.end - block.start;
+      const total = spinPhase(spin, length, length);
+      if (total <= 1e-9 || turnSeconds < 2 * easedGap(prop)) continue;
+      const fromStep = ringStepBase(known, system, songBeat);
+      easedEvents((u) => spinPhase(spin, length, u * length) / total, turnSeconds, prop, (k, pieces, aim, closing) => {
+        const at = Math.round((beat + (length * k) / pieces) * 100000) / 100000;
+        const now = k === 0 ? base : firstAt.at(toSong(at));
+        add(at, round(base + spin.speed * total * aim - now), fromStep + spin.twist * total * aim, closing);
+      }, SPIN_PIECES);
+      continue;
+    }
     const easing = pose.eventEasing;
     if (easing === undefined || easing === '' || turnSeconds < 2 * easedGap(prop)) {
       add(beat, rotation, step, speed);
@@ -567,9 +647,9 @@ const round = (value: number) => Math.round(value * 1000) / 1000;
  * `emit(k, pieces, aim, closing)`: event k of pieces + 1 (at k / pieces of the move), heading for `aim`
  * (0: where it starts, 1: where it ends; beyond, leading it), at speed `closing`.
  */
-export function easedEvents(ease: (t: number) => number, seconds: number, prop: number, emit: (k: number, pieces: number, aim: number, closing: number) => void) {
+export function easedEvents(ease: (t: number) => number, seconds: number, prop: number, emit: (k: number, pieces: number, aim: number, closing: number) => void, most = 128) {
   const tick = ringTickSeconds();
-  const pieces = Math.max(2, Math.min(128, Math.floor(seconds / easedGap(prop))));
+  const pieces = Math.max(2, Math.min(most, Math.floor(seconds / easedGap(prop))));
   const closing = EASED_CREEP / tick;
   // (the ring's lag: how far behind its angle it trails, in seconds of the angle's moving)
   const lag = -tick / Math.log(1 - EASED_CREEP);
@@ -599,6 +679,8 @@ export function easedGap(prop: number) {
 }
 
 const EASED_GAP = 0.05;
+/** The most events a spin is made of (20 a second: ~2 minutes of spinning). */
+const SPIN_PIECES = 2400;
 /** How much of the way left a ring of an eased move closes in each tick. */
 const EASED_CREEP = 0.12;
 

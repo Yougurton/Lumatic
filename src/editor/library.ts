@@ -7,7 +7,7 @@ import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectK
 import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
-import { newRingBlock, newZoomBlock } from './rings';
+import { newRingBlock, newSpinBlock, newZoomBlock } from './rings';
 
 /**
  * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
@@ -342,6 +342,27 @@ export class Library {
       });
       this.body.append(zoom);
     }
+    // rings kept moving from the start to the stop: turning / twisting, the zoom (settings on the right)
+    const spinButton = (kind: 'rotation' | 'zoom', text: string, title: string) => {
+      const button = document.createElement('button');
+      button.className = 'lib-poses';
+      button.textContent = text;
+      button.title = title;
+      button.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        // (over the picked stretch of the song, else 8 beats from the cursor)
+        const range = editor.songRange;
+        const start = range !== null ? Math.min(range.start, range.end) : editor.snapBeat(editor.playhead());
+        const end = range !== null ? Math.max(range.start, range.end) : start + 8;
+        const system = kind === 'zoom' ? (editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '') : (editor.ringInfo[0]?.name ?? '');
+        editor.addRingBlock(newSpinBlock(system, kind, start, end));
+        editor.emit('selection');
+      });
+      this.body.append(button);
+    };
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0 && this.editor.project !== null) spinButton('rotation', '∞ Постоянное вращение', 'Кольца крутятся (и закручиваются) с постоянной скоростью от начала блока до конца, с разгоном и торможением. Настройки — справа');
+    if (this.tab === 'rings' && this.editor.zoomInfo.length > 0 && this.editor.project !== null) spinButton('zoom', '∞ Постоянный зум', 'Расстояние между кольцами всё время меняется — в одну сторону или туда-обратно — от начала блока до конца. Настройки — справа');
     const tip = document.createElement('div');
     tip.className = 'lib-tip';
     tip.textContent =

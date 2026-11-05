@@ -5,7 +5,8 @@ import { setGroupSync } from './presets';
 import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
-import { holdWhileTyping } from './gls-editor';
+import { holdWhileTyping, labeled, select, toggle } from './gls-editor';
+import { isZoom, type RingBlock, type RingSpin } from './rings';
 import { RingEditor } from './ring-editor';
 import { beatDrumStep, gridSelect, numberDrum, wheelSlider } from './grids';
 import { resolveRgb, shiftHue } from './bake';
@@ -112,6 +113,43 @@ export class Inspector {
     }
   }
 
+  /** A spin block's settings: how fast the rings turn and twist (or how the zoom goes), how they
+   *  speed up and slow down. */
+  private spinPanel(root: HTMLElement, block: RingBlock) {
+    const editor = this.editor;
+    const spin = block.spin!;
+    const zoom = isZoom(block);
+    const change = (patch: (value: RingSpin) => void) => editor.updateRingBlock(block.id, (item) => item.spin !== undefined && patch(item.spin), false);
+    const beats = beatDrumStep(editor.snap);
+    const panel = document.createElement('div');
+    panel.className = 'gls-side-panel pose-side';
+    const title = document.createElement('div');
+    title.className = 'gls-side-title';
+    title.textContent = `${zoom ? 'Постоянный зум' : 'Постоянное вращение'} — ${tr('доли {0}–{1}', round3(block.start), round3(block.end))}`;
+    panel.append(title);
+    const col = document.createElement('div');
+    col.className = 'gls-col';
+    if (zoom) {
+      col.append(toggle<RingSpin['zoom']>([['breathe', 'Туда-обратно'], ['drift', 'В одну сторону']], spin.zoom, (value) => change((item) => (item.zoom = value))));
+      if (spin.zoom === 'drift') col.append(labeled('Расстояние меняется на, за долю', numberDrum(`spin-rate:${block.id}`, spin.rate, (value) => change((item) => (item.rate = value)), { step: 0.05, min: -5, max: 5, digits: 3 })));
+      else {
+        col.append(labeled('До расстояния (и обратно)', numberDrum(`spin-to:${block.id}`, spin.to, (value) => change((item) => (item.to = value)), { step: 0.1, min: -20, max: 40, digits: 2 })));
+        col.append(labeled('Туда и обратно за, долей', numberDrum(`spin-period:${block.id}:${String(beats)}`, spin.period, (value) => change((item) => (item.period = Math.max(beats, value))), { step: beats, min: beats, max: 64, beats: true })));
+      }
+      col.append(note(spin.zoom === 'drift' ? 'Расстояние между кольцами всё время растёт (или уменьшается — с минусом) с начала блока до конца.' : 'Расстояние ходит от того, что было до блока, к заданному и обратно, пока блок не кончится.'));
+    } else {
+      col.append(labeled('Вращение, ° за долю (− — в другую сторону)', numberDrum(`spin-speed:${block.id}`, spin.speed, (value) => change((item) => (item.speed = value)), { step: 5, min: -1440, max: 1440, digits: 2 })));
+      col.append(labeled('Закручивание: шаг спирали растёт на, ° за долю', numberDrum(`spin-twist:${block.id}`, spin.twist, (value) => change((item) => (item.twist = value)), { step: 0.5, min: -90, max: 90, digits: 2 })));
+      const systems = editor.ringInfo;
+      if (systems.length > 1) col.append(labeled('Кольца', select<string>(systems.map((system) => [system.name, `${ringSystemName(system.name)} (${String(system.rings)})`]), block.system, (value) => editor.updateRingBlock(block.id, (item) => (item.system = value), false))));
+    }
+    col.append(labeled('Разгон, долей (0 — сразу)', numberDrum(`spin-in:${block.id}:${String(beats)}`, spin.rampIn, (value) => change((item) => (item.rampIn = Math.max(0, value))), { step: beats, min: 0, max: 32, beats: true })));
+    col.append(labeled('Торможение, долей (0 — сразу)', numberDrum(`spin-out:${block.id}:${String(beats)}`, spin.rampOut, (value) => change((item) => (item.rampOut = Math.max(0, value))), { step: beats, min: 0, max: 32, beats: true })));
+    col.append(note('Длина блока — сколько кольца двигаются: тяните его край на таймлайне. В игре это цепочка коротких событий колец, ~20 в секунду.'));
+    panel.append(col);
+    root.append(panel);
+  }
+
   /** Drawn again, staying scrolled where it was — not while one of its fields is typed in (see
    *  holdWhileTyping). */
   render() {
@@ -147,6 +185,12 @@ export class Inspector {
     const pick = this.editor.posePick;
     if (pick !== null && this.editor.ringBlockById(pick.blockId)?.poses.some((pose) => pose.id === pick.poseId) === true) {
       this.poses.renderInto(root, pick.blockId, pick.poseId, () => this.render());
+      return;
+    }
+    // a block of rings moving on and on: its settings
+    const spinBlock = this.editor.selection.size === 1 ? this.editor.selectedRingBlocks()[0] : undefined;
+    if (spinBlock?.spin !== undefined) {
+      this.spinPanel(root, spinBlock);
       return;
     }
     const effects = this.editor.selectedEffects();
@@ -897,4 +941,10 @@ export class Inspector {
     wrap.append(label, input);
     return wrap;
   }
+}
+
+const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
+function note(text: string) {
+  return Object.assign(document.createElement('div'), { className: 'gls-note', textContent: text });
 }

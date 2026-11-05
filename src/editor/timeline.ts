@@ -1233,6 +1233,42 @@ export class Timeline {
         }
       }
     }
+    if (block.spin !== undefined) {
+      // (on and on: a line with arrows for a turn, a wave for the zoom there and back, a widening
+      // wedge for the zoom one way)
+      const spin = block.spin;
+      ctx.strokeStyle = `hsl(${String(hue)} 75% 72%)`;
+      ctx.fillStyle = `hsl(${String(hue)} 75% 72%)`;
+      ctx.lineWidth = 1.5;
+      if (zoom && spin.zoom === 'breathe') {
+        ctx.beginPath();
+        for (let px = x; px <= x + w; px += 2) {
+          const t = (px - x) / this.pxPerBeat;
+          const py = cy - Math.sin((2 * Math.PI * t) / Math.max(0.25, spin.period)) * r * 0.9;
+          if (px === x) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      } else if (zoom) {
+        const grow = spin.rate >= 0;
+        ctx.beginPath();
+        ctx.moveTo(x, cy - (grow ? 1 : r));
+        ctx.lineTo(x + w, cy - (grow ? r : 1));
+        ctx.moveTo(x, cy + (grow ? 1 : r));
+        ctx.lineTo(x + w, cy + (grow ? r : 1));
+        ctx.stroke();
+      } else {
+        ctx.fillRect(x, cy - 1, w, 2);
+        const back = spin.speed < 0;
+        for (let px = x + 10; px < x + w - 6; px += 26) {
+          ctx.beginPath();
+          ctx.moveTo(px + (back ? 5 : 0), cy - 4);
+          ctx.lineTo(px + (back ? 0 : 5), cy);
+          ctx.lineTo(px + (back ? 5 : 0), cy + 4);
+          ctx.stroke();
+        }
+      }
+    }
     const widest = Math.max(1e-3, ...block.poses.map((pose) => Math.abs(pose.step)));
     for (const pose of block.poses) {
       if (pose.beat > block.end - block.start + 1e-6) continue;
@@ -2458,7 +2494,8 @@ export class Timeline {
       const hit = this.hit(x, y);
       if (hit !== null && 'block' in hit) {
         // (a block made by "Rings in steps": its simple window; others: the pose editor)
-        if (isLasers(hit.block)) laserDialog(this.editor, hit.block.id);
+        if (hit.block.spin !== undefined) this.editor.select([hit.block.id]);
+        else if (isLasers(hit.block)) laserDialog(this.editor, hit.block.id);
         else if (hit.block.steps !== undefined) ringStepsDialog(this.editor, hit.block.id);
         else if (hit.block.glitch !== undefined) ringGlitchDialog(this.editor, hit.block.id);
         else this.editor.ringEditorHook?.(hit.block.id);

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
 import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, MEASURED_RING_TICKS, ringTickSeconds, setRingTickRate, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
-import { dataFirstRing, firstRingFromLog, fitRingBlock, newPose, newRingBlock, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
+import { dataFirstRing, firstRingFromLog, fitRingBlock, newPose, newRingBlock, newSpinBlock, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
 /**
@@ -393,6 +393,28 @@ checks++;
 if (firstRingFromLog(log, names) !== 611 || firstRingFromLog('nothing', names) !== undefined) {
   failures++;
   console.log('log place', firstRingFromLog(log, names));
+}
+
+// spins: the rings turn at an even speed between the ramps, and end turned speed × the beats at full speed
+{
+  const system = systems[0]!;
+  const spin = newSpinBlock(system.name, 'rotation', 4, 12);
+  spin.spin!.speed = 60;
+  spin.spin!.twist = 2;
+  const made = poseRingEvents([spin], [], systems, 8, (beat) => beat, 60 / bpm);
+  const all: BasicEvent[] = made.map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, customData: event.customData as BasicEvent['customData'] }));
+  const at = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed));
+  const rates = [6, 7, 8, 9].map((beat) => (at(beat + 0.5)[0]! - at(beat)[0]!) / 0.5);
+  const turned = at(13)[0]! - at(3.9)[0]!;
+  const twisted = at(13)[1]! - at(13)[0]! - (at(3.9)[1]! - at(3.9)[0]!);
+  check1(rates.every((rate) => Math.abs(rate - 60) < 8) && Math.abs(turned - 60 * 7) < 2 && Math.abs(twisted - 14) < 0.5, 'a spin: even speed, turned and twisted as set', { rates, turned, twisted, events: made.length });
+  const zoomSpin = newSpinBlock('', 'zoom', 4, 12);
+  zoomSpin.spin!.zoom = 'drift';
+  zoomSpin.spin!.rate = 0.25;
+  const zoomMade = poseZoomEvents([zoomSpin], [zoomSystem], 9, 60 / bpm).map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: 9, value: 0, floatValue: 1, customData: event.customData as BasicEvent['customData'] }));
+  const zoomAt = createRingPositionSampler(zoomMade, bpm, zoomSystem.position);
+  const spacing = (beat: number) => zoomAt(beat)[1]! - zoomAt(beat)[0]!;
+  check1(Math.abs(spacing(13) - (3.5 + 0.25 * 7)) < 0.05, 'a zoom spin one way: the spacing grown by rate × beats at full speed', spacing(13));
 }
 
 console.log('checks', checks, 'failures', failures);

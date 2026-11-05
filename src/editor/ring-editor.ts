@@ -104,6 +104,11 @@ export class RingEditor {
   open(id: string) {
     const block = this.editor.ringBlockById(id);
     if (block === undefined) return;
+    // (rings moving on and on: no poses — their settings are in the panel on the right)
+    if (block.spin !== undefined) {
+      this.editor.select([id]);
+      return;
+    }
     this.close();
     this.blockId = id;
     this.poseId = block.poses[0]?.id ?? null;
@@ -249,7 +254,7 @@ export class RingEditor {
     const pose = this.pose();
     if (block === undefined || pose === undefined) return;
     const panel = document.createElement('div');
-    panel.className = 'gls-side-panel ring-side';
+    panel.className = 'gls-side-panel pose-side';
     const title = document.createElement('div');
     title.className = 'gls-side-title';
     const index = [...block.poses].sort((a, b) => a.beat - b.beat).indexOf(pose) + 1;
@@ -294,7 +299,7 @@ export class RingEditor {
     const zoom = !isZoom(block);
     const overlap = (other: RingBlock) => Math.min(block.end, other.end) - Math.max(block.start, other.start);
     const found = this.editor.ringBlocks
-      .filter((other) => other !== block && (zoom ? isZoom(other) : isTurn(other)) && overlap(other) > 1e-6)
+      .filter((other) => other !== block && other.spin === undefined && (zoom ? isZoom(other) : isTurn(other)) && overlap(other) > 1e-6)
       .sort((a, b) => overlap(b) - overlap(a))[0];
     // (the strip zoomed as it was)
     if (found !== undefined) {
