@@ -11,7 +11,7 @@ import { setGroupSync } from './presets';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { classicGroupName, groupHue, lightGroupName } from './names';
 import { tr } from './i18n';
-import { isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
+import { fitRingBlock, isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
 import { NotesLanes } from './notes-timeline';
@@ -98,7 +98,9 @@ type Drag =
   | { kind: 'nav'; part: 'body' | 'left' | 'right'; grabX: number; viewStart: number; pxPerBeat: number }
   | { kind: 'spectro'; grabY: number; height: number }
   | { kind: 'range'; from: number }
-  | { kind: 'bookmark'; id: string; grab: number; origin: number; moved: boolean };
+  | { kind: 'bookmark'; id: string; grab: number; origin: number; moved: boolean }
+  /** A ring or zoom pose's mark on its events' row moved along (the pose with it). */
+  | { kind: 'pose'; blockId: string; poseId: string; origin: number; to: number; grab: number; moved: boolean };
 
 /** The edge between the rows and the spectrogram is grabbed within this many pixels of it. */
 const SPECTRO_GRIP = 4;
@@ -1285,8 +1287,9 @@ export class Timeline {
     const ctx = this.context;
     const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
-    if (row.type === RING_EVENT_TYPE || row.type === ZOOM_EVENT_TYPE || row.type === 12 || row.type === 13) {
-      // (the ring events the ring poses make: hollow — they belong to their blocks)
+    if (row.type === RING_EVENT_TYPE || row.type === ZOOM_EVENT_TYPE) this.drawPoseMarks(row.type, top, height, hue);
+    if (row.type === 12 || row.type === 13) {
+      // (the laser events the lasers blocks make: hollow — they belong to their blocks)
       ctx.strokeStyle = `hsl(${String(hue)} 70% 65%)`;
       ctx.lineWidth = 1.2;
       for (const event of this.editor.poseEvents()) {
@@ -1333,6 +1336,106 @@ export class Timeline {
         ctx.fillText(String(Math.round(mark.speed * 10) / 10), x + 6, top + height / 2 - 3);
       }
     }
+  }
+
+  /** The ring (or zoom) poses on their events' row: a hollow diamond each (they belong to their
+   *  blocks; dragged — the pose moves), its angle or spacing beside it. */
+  private poseMarks(type: number) {
+    const blocks = this.editor.ringBlocks.filter((block) => (type === ZOOM_EVENT_TYPE ? isZoom(block) : isTurn(block)));
+    const drag = this.drag?.kind === 'pose' && this.drag.moved ? this.drag : null;
+    return blocks.flatMap((block) =>
+      block.poses.map((pose) => {
+        const beat = drag !== null && drag.poseId === pose.id ? drag.to : block.start + pose.beat;
+        const relative = pose.relative === true && pose.shape !== 'manual';
+        const label = isZoom(block) ? String(round3(pose.step)) : relative ? `${pose.angle >= 0 ? '+' : '−'}${String(Math.abs(round3(pose.angle)))}°` : `${String(round3(pose.angle))}°`;
+        // (a spiral's step too, where there's room: it's what tells such poses apart)
+        const step = pose.relativeStep === true ? `${pose.step >= 0 ? '+' : '−'}${String(Math.abs(round3(pose.step)))}` : String(round3(pose.step));
+        const full = !isZoom(block) && pose.shape === 'spiral' && (pose.step !== 0 || pose.relativeStep !== true) ? `${label} · ${tr('шаг')} ${step}` : label;
+        return { block, pose, beat, label, full };
+      }),
+    );
+  }
+
+  private drawPoseMarks(type: number, top: number, height: number, hue: number) {
+    const ctx = this.context;
+    const cy = top + height / 2;
+    const marks = this.poseMarks(type).sort((a, b) => a.beat - b.beat);
+    const dragged = this.drag?.kind === 'pose' ? this.drag.poseId : null;
+    ctx.font = '600 10px system-ui, sans-serif';
+    let lastLabel = -Infinity;
+    marks.forEach((mark, index) => {
+      const x = this.beatToX(mark.beat);
+      if (x < -40 || x > this.width + 10) return;
+      const picked = mark.pose.id === dragged;
+      ctx.strokeStyle = picked ? '#ffffff' : `hsl(${String(hue)} 70% 65%)`;
+      ctx.lineWidth = picked ? 2 : 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x, cy - 6);
+      ctx.lineTo(x + 5, cy);
+      ctx.lineTo(x, cy + 6);
+      ctx.lineTo(x - 5, cy);
+      ctx.closePath();
+      ctx.stroke();
+      // (its angle or spacing, where there's room for it)
+      // (up to the next mark: the full label, or the short one, or none)
+      let after = index + 1;
+      while (after < marks.length && marks[after]!.beat <= mark.beat + 1e-9) after++;
+      const next = marks[after];
+      const room = (next === undefined ? Infinity : this.beatToX(next.beat) - x) - 12;
+      const text = ctx.measureText(mark.full).width <= room ? mark.full : ctx.measureText(mark.label).width <= room ? mark.label : null;
+      if (height >= 14 && text !== null && x - lastLabel >= 10) {
+        ctx.fillStyle = `hsl(${String(hue)} 60% 82%)`;
+        ctx.fillText(text, x + 7, cy + 4);
+        lastLabel = x;
+      }
+    });
+  }
+
+  /** The pose mark under the mouse on a ring or zoom events row (within a few pixels). */
+  private poseMarkAt(x: number, y: number) {
+    const item = this.rowAt(y);
+    if (item === null || item.row.kind !== 'raw' || (item.row.type !== RING_EVENT_TYPE && item.row.type !== ZOOM_EVENT_TYPE)) return null;
+    let best: ReturnType<Timeline['poseMarks']>[number] | null = null;
+    let bestD = 7;
+    for (const mark of this.poseMarks(item.row.type)) {
+      const d = Math.abs(this.beatToX(mark.beat) - x);
+      if (d < bestD) {
+        bestD = d;
+        best = mark;
+      }
+    }
+    return best;
+  }
+
+  /** A pose moved to `to` (song beat): its block grows to take it (or starts there, before it); its
+   *  move as long as a beat, shortened to end where the next pose on the row starts — and the pose
+   *  before it, if it would run over it, shortened to end where this one starts. */
+  private dropPose(blockId: string, poseId: string, to: number) {
+    const editor = this.editor;
+    const block = editor.ringBlocks.find((item) => item.id === blockId);
+    const pose = block?.poses.find((item) => item.id === poseId);
+    if (block === undefined || pose === undefined) return;
+    const type = isZoom(block) ? ZOOM_EVENT_TYPE : RING_EVENT_TYPE;
+    // (the poses on the same row that turn the same rings)
+    const sameRings = (other: RingBlock) => other.system === '' || block.system === '' || other.system === block.system;
+    const others = this.poseMarks(type)
+      .filter((mark) => mark.pose.id !== poseId && sameRings(mark.block))
+      .map((mark) => ({ ...mark, beat: mark.block.start + mark.pose.beat }));
+    const next = others.filter((mark) => mark.beat > to + 1e-6).sort((a, b) => a.beat - b.beat)[0];
+    const before = others.filter((mark) => mark.beat < to - 1e-6).sort((a, b) => b.beat - a.beat)[0];
+    editor.checkpoint();
+    if (to < block.start) {
+      const shift = block.start - to;
+      for (const item of block.poses) item.beat = round3(item.beat + shift);
+      block.start = to;
+    }
+    pose.beat = round3(to - block.start);
+    pose.duration = round3(next === undefined ? 1 : Math.max(0, Math.min(1, next.beat - to)));
+    if (before !== undefined && before.beat + before.pose.duration > to + 1e-6) before.pose.duration = round3(Math.max(0, to - before.beat));
+    fitRingBlock(block);
+    if (before !== undefined && before.block !== block) fitRingBlock(before.block);
+    editor.changed();
+    editor.setStatus(tr('Поза на доле {0}: переход {1} дол.', round3(to), pose.duration));
   }
 
   private drawSpectrogram(top: number, height: number) {
@@ -2271,6 +2374,13 @@ export class Timeline {
         this.needsDraw = true;
         return;
       }
+      const mark = event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.metaKey ? this.poseMarkAt(x, y) : null;
+      if (mark !== null) {
+        // a pose's mark: dragged along — the pose moves (a click alone: the song goes there)
+        this.drag = { kind: 'pose', blockId: mark.block.id, poseId: mark.pose.id, origin: mark.beat, to: mark.beat, grab: this.xToBeat(x), moved: false };
+        this.needsDraw = true;
+        return;
+      }
       const hit = this.hit(x, y);
       const under = this.rowAt(y);
       if (under !== null && isLightRow(under.row)) this.editor.setActiveRow(under.row.key);
@@ -2376,6 +2486,7 @@ export class Timeline {
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height) {
           if (this.onSpectroEdge(x, y)) cursor = 'ns-resize';
           else if (y < RULER_H && this.bookmarkAt(x, y) !== null) cursor = 'grab';
+          else if (!this.notesMode && this.poseMarkAt(x, y) !== null) cursor = 'ew-resize';
           else if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
             const bar = this.vbar();
             cursor = (y >= bar.thumbTop && y < bar.thumbTop + GRIP) || (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) ? 'ns-resize' : 'default';
@@ -2398,7 +2509,11 @@ export class Timeline {
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
-      if (drag.kind === 'bookmark') {
+      if (drag.kind === 'pose') {
+        if (Math.abs(beat - drag.grab) * this.pxPerBeat > 3) drag.moved = true;
+        drag.to = Math.max(0, snap(drag.origin + beat - drag.grab));
+        this.needsDraw = true;
+      } else if (drag.kind === 'bookmark') {
         if (Math.abs(beat - drag.grab) * this.pxPerBeat > 3) drag.moved = true;
         const to = event.altKey ? drag.origin + beat - drag.grab : this.editor.snapBeat(drag.origin + beat - drag.grab);
         if (drag.moved) this.editor.updateBookmark(drag.id, (item) => (item.beat = Math.max(0, to)), false);
@@ -2545,6 +2660,12 @@ export class Timeline {
         return;
       }
       if (drag.kind === 'spectro') this.renderHeaders(true);
+      if (drag.kind === 'pose') {
+        if (drag.moved && Math.abs(drag.to - drag.origin) > 1e-6) this.dropPose(drag.blockId, drag.poseId, drag.to);
+        else if (!drag.moved) this.editor.seek(drag.origin);
+        this.needsDraw = true;
+        return;
+      }
       if (drag.kind === 'bookmark' && !drag.moved) {
         // (a click on a flag: the song goes there)
         this.editor.undoDiscard();

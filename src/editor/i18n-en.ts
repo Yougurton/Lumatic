@@ -2034,4 +2034,5 @@ export const EN: Record<string, string> = {
   "Поставить это движение всем позам этого блока": "Give this motion to every pose of this block",
   "Короткие быстрые переходы «как в игре» в игре выглядят рывками: игра двигает кольца ~30 раз в секунду, каждый раз заметно медленнее. Плавнее всего — «Разгон и торможение» или «Мягко (синус)».": "Short quick moves \"as in the game\" look jerky in the game: it moves the rings ~30 times a second, each time noticeably slower. Smoothest: \"Ease in and out\" or \"Soft (sine)\".",
   "Событие зума задаёт расстояние сразу, а не прибавляет его, — поза всегда точная.": "A zoom event sets the spacing outright rather than adding to it, so the pose is always exact.",
+  "Поза на доле {0}: переход {1} дол.": "Pose at beat {0}: move {1} beats",
 };
