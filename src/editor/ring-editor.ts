@@ -55,7 +55,14 @@ export class RingEditor {
    *  the panel on the right (see renderInto). */
   constructor(private readonly editor: Editor, docked = true) {
     if (!docked) return;
-    editor.ringEditorHook = (id) => this.open(id);
+    // (a block "opened": its first pose picked — its settings in the panel on the right; the window
+    // over the timeline is gone)
+    editor.ringEditorHook = (id) => {
+      const block = editor.ringBlockById(id);
+      const pose = block === undefined ? undefined : [...block.poses].sort((a, b) => a.beat - b.beat)[0];
+      if (block !== undefined && pose !== undefined) editor.pickPose({ blockId: block.id, poseId: pose.id });
+      else if (block !== undefined) editor.select([block.id]);
+    };
     editor.onChange((what) => {
       if (this.dock === null) return;
       if (this.block() === undefined) {
@@ -260,8 +267,7 @@ export class RingEditor {
     const index = [...block.poses].sort((a, b) => a.beat - b.beat).indexOf(pose) + 1;
     title.textContent = `${isZoom(block) ? 'Зум колец' : 'Поза колец'} · ${String(index)} — ${tr('доля {0}', round(block.start + pose.beat))}`;
     panel.append(title);
-    const open = button('Открыть блок', 'Открыть блок поз целиком (двойной клик по блоку)', () => this.editor.ringEditorHook?.(blockId));
-    panel.append(open);
+    if (block.poses.length > 1) panel.append(note(tr('Поза из группы «{0}» ({1} поз): группа двигается и тянется целиком.', block.name, block.poses.length)));
     if (isZoom(block)) panel.append(this.zoomColumn(block));
     else panel.append(this.poseColumn(block), this.turnColumn(block));
     root.append(panel);

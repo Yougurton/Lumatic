@@ -6,7 +6,7 @@ import { otherEventName } from './names';
 import { ringSystemName } from './library';
 import { laserDialog } from './laser-dialog';
 import { holdWhileTyping, labeled, select, toggle } from './gls-editor';
-import { isZoom, type RingBlock, type RingSpin } from './rings';
+import { isLasers, isZoom, type RingBlock, type RingSpin } from './rings';
 import { RingEditor } from './ring-editor';
 import { beatDrumStep, gridSelect, numberDrum, wheelSlider } from './grids';
 import { resolveRgb, shiftHue } from './bake';
@@ -114,6 +114,97 @@ export class Inspector {
     }
   }
 
+  /** Which tab the rings' events show: Lumatic's own settings, or Chroma's numbers as they are. */
+  private ringTab: 'lumatic' | 'chroma' | null = null;
+  private ringTabFor = '';
+
+  /**
+   * A ring event picked (one of Lumatic's — a pose, a spin, the lasers' move — or the Chroma / game's
+   * own on a ring row): its settings in two tabs — Lumatic's, and Chroma's numbers written straight
+   * (rotation, step, prop, speed…), Lumatic changing nothing. False: nothing of the kind picked.
+   */
+  private renderRingEvent(root: HTMLElement): boolean {
+    const editor = this.editor;
+    const pick = editor.posePick;
+    const pickedBlock = pick === null ? undefined : editor.ringBlockById(pick.blockId);
+    const pose = pick === null ? undefined : pickedBlock?.poses.find((item) => item.id === pick.poseId);
+    const one = editor.selection.size === 1 ? editor.selectedRingBlocks()[0] : undefined;
+    const block = pose !== undefined ? pickedBlock : one;
+    const raw = (editor.project?.raw ?? []).filter((event) => editor.selection.has(event.id));
+    const rawRing = block === undefined && raw.length > 0 && raw.length === editor.selection.size && raw.every((event) => event.type === raw[0]!.type && (event.type === 8 || event.type === 9));
+    if (block === undefined && !rawRing) return false;
+    // (a new thing picked: its own tab first — Lumatic's for Lumatic's, Chroma's for Chroma's)
+    const key = block?.id ?? raw.map((event) => event.id).join(',');
+    if (key !== this.ringTabFor) {
+      this.ringTabFor = key;
+      this.ringTab = block !== undefined ? 'lumatic' : 'chroma';
+    }
+    const tabs = document.createElement('div');
+    tabs.className = 'ins-buttons ring-tabs';
+    for (const [value, label, hint] of [
+      ['lumatic', 'Lumatic', 'Настройки Lumatic: поза, переход, движение'],
+      ['chroma', 'Chroma', 'Числа события Chroma как есть: поворот, шаг, prop, скорость'],
+    ] as const) {
+      const tab = document.createElement('button');
+      tab.textContent = label;
+      tab.title = hint;
+      tab.classList.toggle('active', this.ringTab === value);
+      tab.addEventListener('click', () => {
+        this.ringTab = value;
+        this.render();
+      });
+      tabs.append(tab);
+    }
+    root.append(tabs);
+    if (this.ringTab === 'lumatic') {
+      if (block === undefined) {
+        // a Chroma (or the game's) event: made one of Lumatic's — a pose and its move
+        root.append(this.note(tr('Это событие Chroma (или самой игры): его числа — на вкладке Chroma. Его можно сделать событием Lumatic — позой с переходом, которую настраивает Lumatic.')));
+        const make = document.createElement('button');
+        make.textContent = tr('Сделать событием Lumatic');
+        make.addEventListener('click', () => editor.rawToRingEvent(raw.map((event) => event.id)));
+        root.append(make);
+        return true;
+      }
+      if (pose !== undefined) this.poses.renderInto(root, block.id, pose.id, () => this.render());
+      else if (block.spin !== undefined) this.spinPanel(root, block);
+      else if (isLasers(block)) {
+        root.append(Object.assign(document.createElement('h3'), { textContent: block.name }));
+        root.append(this.note(tr('Вращающиеся лазеры: доли {0}–{1}. Длина — сколько крутятся (или сколько шагов): тяните конец полосы на таймлайне.', round3(block.start), round3(block.end))));
+        const open = document.createElement('button');
+        open.textContent = tr('✳ Настроить лазеры…');
+        open.addEventListener('click', () => laserDialog(editor, block.id));
+        root.append(open);
+      } else {
+        root.append(Object.assign(document.createElement('h3'), { textContent: block.name }));
+        root.append(this.note(tr('Группа колец ({0} поз): кликните позу в ней на таймлайне — её настройки здесь. Двойной клик по группе — её окно.', block.poses.length)));
+      }
+      return true;
+    }
+    // Chroma's numbers
+    if (block === undefined) {
+      this.renderRaw(raw);
+      return true;
+    }
+    const made = editor.poseEvents().filter((event) => event.group === block.id);
+    root.append(this.note(tr('Lumatic пишет из этого события {0} событий Chroma. Чтобы править их числа напрямую, сделайте их обычными событиями Chroma — настройки Lumatic у них пропадут.', made.length)));
+    const first = made[0];
+    if (first !== undefined) {
+      const list = document.createElement('div');
+      list.className = 'ins-note ring-numbers';
+      list.textContent = made
+        .slice(0, 6)
+        .map((event) => `${String(round3(event.beat))}: ${Object.entries(event.customData ?? {}).map(([name, value]) => `${name} ${String(value)}`).join(', ')}`)
+        .join('\n') + (made.length > 6 ? '\n…' : '');
+      root.append(list);
+    }
+    const convert = document.createElement('button');
+    convert.textContent = tr('Сделать событиями Chroma');
+    convert.addEventListener('click', () => editor.ringBlockToRaw(block.id));
+    root.append(convert);
+    return true;
+  }
+
   /** A spin block's settings: how fast the rings turn and twist (or how the zoom goes), how they
    *  speed up and slow down. */
   private spinPanel(root: HTMLElement, block: RingBlock) {
@@ -182,18 +273,8 @@ export class Inspector {
       gls.render(root);
       return;
     }
-    // a ring or zoom pose picked on the timeline
-    const pick = this.editor.posePick;
-    if (pick !== null && this.editor.ringBlockById(pick.blockId)?.poses.some((pose) => pose.id === pick.poseId) === true) {
-      this.poses.renderInto(root, pick.blockId, pick.poseId, () => this.render());
-      return;
-    }
-    // a block of rings moving on and on: its settings
-    const spinBlock = this.editor.selection.size === 1 ? this.editor.selectedRingBlocks()[0] : undefined;
-    if (spinBlock?.spin !== undefined) {
-      this.spinPanel(root, spinBlock);
-      return;
-    }
+    // the rings' events (a Lumatic event, a spin, the lasers' move, a Chroma one): two tabs
+    if (this.renderRingEvent(root)) return;
     const effects = this.editor.selectedEffects();
     // (while a GLS block is edited with nothing of it picked: the brush its new blocks are drawn with)
     if (gls === null && effects.length > 0 && this.editor.selectedClips().length === 0) {

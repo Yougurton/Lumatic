@@ -11,7 +11,8 @@ import { setGroupSync } from './presets';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
 import { classicGroupName, groupHue, lightGroupName } from './names';
 import { tr } from './i18n';
-import { fitRingBlock, isLasers, isTurn, isZoom, laserBlockMove, newLaserBlock, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock } from './rings';
+import { chromaMoveBeats, fitRingBlock, isBarRing, isLasers, isSingleRing, isTurn, isZoom, laserBlockMove, newLaserBlock, newPose, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock, type RingPose } from './rings';
+import { ringSpeedFor } from '../engine/core/lighting/ring-motion';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
 import { NotesLanes } from './notes-timeline';
@@ -57,7 +58,7 @@ const LIGHT_H = 20;
 const RAW_H = 22;
 const EDGE_PX = 6;
 
-const baseRowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' || row.kind === 'poses' ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
+const baseRowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' || row.kind === 'poses' || (row.kind === 'raw' && (row.type === 8 || row.type === 9 || row.type === 12 || row.type === 13)) ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
 
 /** A colour per user group (from its name). */
 export function customHue(name: string) {
@@ -99,6 +100,9 @@ type Drag =
   | { kind: 'spectro'; grabY: number; height: number }
   | { kind: 'range'; from: number }
   | { kind: 'bookmark'; id: string; grab: number; origin: number; moved: boolean }
+  /** The end of a ring event's bar dragged: its move's length (a pose's time, a spin's or the lasers'
+   *  block's end) — or, a Chroma event's, its speed. */
+  | { kind: 'barEnd'; blockId: string | null; rawId: string | null; origin: number; to: number }
   /** A ring or zoom pose's mark on its events' row moved along (the pose with it). */
   | { kind: 'pose'; blockId: string; poseId: string; origin: number; to: number; grab: number; moved: boolean };
 
@@ -119,6 +123,9 @@ function loadLook(): SpectrogramLook {
 function hzLabel(hz: number) {
   return hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1).replace(/\.0$/u, '')} кГц` : `${String(Math.round(hz))} Гц`;
 }
+
+/** The rows of ring events (the turns, the zoom, the lasers' speeds): Lumatic's events on them too. */
+const isRingRow = (type: number) => type === RING_EVENT_TYPE || type === ZOOM_EVENT_TYPE || type === 12 || type === 13;
 
 /** How far before the song's start the timeline goes (px). */
 const LEAD_PX = 14;
@@ -497,7 +504,26 @@ export class Timeline {
     if (row.kind === 'raw') {
       const events = this.visibleRaw(row.type);
       const found = events.find((event) => Math.abs(this.beatToX(event.beat) - x) <= 6);
-      return found === undefined ? null : { raw: found, row };
+      if (found !== undefined) return { raw: found, row };
+      if (!isRingRow(row.type)) return null;
+      // a ring row's groups (by their box) and spins, lasers' moves (by their bar): moved, stretched
+      const { bars, groups } = this.ringLayout(row.type);
+      for (const block of [...groups].reverse()) {
+        const x0 = this.beatToX(block.start);
+        const x1 = this.beatToX(block.end);
+        if (x < x0 - 2 || x > x1 + 2) continue;
+        const edge = x1 - x0 > EDGE_PX * 3 ? (x - x0 < EDGE_PX ? 'start' : x1 - x < EDGE_PX ? 'end' : null) : x > x1 - EDGE_PX ? 'end' : null;
+        return { block, edge, row };
+      }
+      for (const bar of bars) {
+        if (bar.block === null || isSingleRing(bar.block)) continue;
+        const x0 = this.beatToX(bar.from);
+        const x1 = this.beatToX(bar.to);
+        if (x < x0 - 3 || x > x1 + 3) continue;
+        if (Math.abs(this.barY(top, height, bar.lane, bar.of) - y) > 6 && Math.abs(x - x0) > 4) continue;
+        return { block: bar.block, edge: null, row };
+      }
+      return null;
     }
     const clips = this.clipsOf(row);
     // (the top layer wins; within its height)
@@ -655,11 +681,11 @@ export class Timeline {
       const creating = this.drag?.kind === 'create' && this.drag.moved ? this.drag : null;
       if (creating !== null) {
         const item = this.layout().find((entry) => entry.row.key === creating.row.key);
-        if (item !== undefined && item.row.kind === 'poses') {
+        if (item !== undefined && item.row.kind === 'raw') {
+          // (a Lumatic event being drawn along a ring row: its bar)
           const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
-          ctx.globalAlpha = 0.6;
-          this.drawRingBlock(this.newBlockFor(item.row, a, Math.max(b, a + 1)), item.top, item.height);
-          ctx.globalAlpha = 1;
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.fillRect(this.beatToX(a), item.top + item.height / 2 - 1.5, Math.max(2, (b - a) * this.pxPerBeat), 3);
         } else if (item !== undefined && isLightRow(item.row)) {
           const [a, b] = [Math.min(creating.from, creating.to), Math.max(creating.from, creating.to)];
           const end = Math.max(b, a + Math.max(editor.snap, 0.0625));
@@ -678,6 +704,15 @@ export class Timeline {
             if (ghost !== null) this.drawClip({ clip: ghost, partial: false, level, role: 'own' }, item.top, item.height, true);
           }
         }
+      }
+      if (this.barHint !== null) {
+        // (a Chroma event's speed as its bar is dragged)
+        ctx.font = '600 11px system-ui, sans-serif';
+        const w = ctx.measureText(this.barHint.text).width + 10;
+        ctx.fillStyle = 'rgba(10,11,15,0.88)';
+        ctx.fillRect(this.barHint.x, this.barHint.y - 13, w, 18);
+        ctx.fillStyle = '#ffe9a8';
+        ctx.fillText(this.barHint.text, this.barHint.x + 5, this.barHint.y);
       }
       if (this.drag?.kind === 'box') {
         const { x0, y0, x1, y1 } = this.drag;
@@ -1347,25 +1382,7 @@ export class Timeline {
     const ctx = this.context;
     const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
-    if (row.type === RING_EVENT_TYPE || row.type === ZOOM_EVENT_TYPE) this.drawPoseMarks(row.type, top, height, hue);
-    if (row.type === 12 || row.type === 13) {
-      // (the laser events the lasers blocks make: hollow — they belong to their blocks)
-      ctx.strokeStyle = `hsl(${String(hue)} 70% 65%)`;
-      ctx.lineWidth = 1.2;
-      for (const event of this.editor.poseEvents()) {
-        if (event.type !== row.type) continue;
-        const x = this.beatToX(event.beat);
-        if (x < -10 || x > this.width + 10) continue;
-        const cy = top + height / 2;
-        ctx.beginPath();
-        ctx.moveTo(x, cy - 5);
-        ctx.lineTo(x + 4, cy);
-        ctx.lineTo(x, cy + 5);
-        ctx.lineTo(x - 4, cy);
-        ctx.closePath();
-        ctx.stroke();
-      }
-    }
+    if (isRingRow(row.type)) this.drawRingRow(row.type, top, height, hue);
     // (the boost: on — a filled diamond, off — a hollow one; one that changes nothing, red-rimmed)
     const boost = row.type === 5 ? this.boostStates() : null;
     for (const event of events) {
@@ -1426,10 +1443,160 @@ export class Timeline {
     }
   }
 
-  /** The ring (or zoom) poses on their events' row: a hollow diamond each (they belong to their
-   *  blocks; dragged — the pose moves), its angle or spacing beside it. */
+  /** The ring blocks a row of ring events shows: the turns on the turns' row, the zooms on the zoom's,
+   *  the lasers on their side's (both sides: on both). */
+  private blocksOnRow(type: number) {
+    return this.editor.ringBlocks.filter((block) =>
+      type === RING_EVENT_TYPE ? isTurn(block) : type === ZOOM_EVENT_TYPE ? isZoom(block) : isLasers(block) && (laserBlockMove(block).sides === 'both' || (laserBlockMove(block).sides === 'left') === (type === 12)),
+    );
+  }
+
+  /**
+   * What a ring row draws, laid out: each Lumatic event (one pose) an icon with its move's bar, each
+   * spin and lasers' move a bar, each group a box; the Chroma events with a speed of their own a bar
+   * of how long they take. Bars over each other each a lane of their own — the earlier above —
+   * the icons where they are.
+   */
+  private ringLayout(type: number) {
+    const editor = this.editor;
+    const drag = this.drag?.kind === 'barEnd' ? this.drag : null;
+    type Bar = { id: string; block: RingBlock | null; raw: RawEvent | null; from: number; to: number; lane: number; of: number };
+    const bars: Bar[] = [];
+    const groups: RingBlock[] = [];
+    const rings = editor.ringInfo[0]?.rings ?? 1;
+    for (const block of this.blocksOnRow(type)) {
+      if (isSingleRing(block)) {
+        const pose = block.poses[0]!;
+        const from = block.start + pose.beat;
+        const length = drag?.blockId === block.id ? Math.max(0, drag.to - from) : pose.duration + (isZoom(block) ? 0 : ringDelay(pose, pose.reverse ? 0 : rings - 1, rings));
+        bars.push({ id: block.id, block, raw: null, from, to: from + length, lane: 0, of: 1 });
+      } else if (isBarRing(block)) bars.push({ id: block.id, block, raw: null, from: block.start, to: drag?.blockId === block.id ? Math.max(block.start + 0.25, drag.to) : block.end, lane: 0, of: 1 });
+      else groups.push(block);
+    }
+    // (a Chroma event with a speed of its own: how long it takes to get there)
+    if (type === RING_EVENT_TYPE || type === ZOOM_EVENT_TYPE) {
+      for (const event of this.visibleRaw(type)) {
+        const to = drag?.rawId === event.id ? drag.to : event.beat + chromaMoveBeats(event, 60 / editor.bpmAt(event.beat));
+        if (to - event.beat > 1e-3) bars.push({ id: event.id, block: null, raw: event, from: event.beat, to, lane: 0, of: 1 });
+      }
+    }
+    // lanes: each bar in the first lane free at its start (the earlier ones above), per cluster
+    bars.sort((a, b) => a.from - b.from);
+    let cluster: Bar[] = [];
+    let clusterEnd = -Infinity;
+    const close = () => {
+      const of = Math.max(1, ...cluster.map((bar) => bar.lane + 1));
+      for (const bar of cluster) bar.of = of;
+      cluster = [];
+    };
+    for (const bar of bars) {
+      if (bar.from >= clusterEnd - 1e-6) {
+        close();
+        clusterEnd = -Infinity;
+      }
+      const busy = new Set(cluster.filter((other) => other.to > bar.from + 1e-6).map((other) => other.lane));
+      while (busy.has(bar.lane)) bar.lane++;
+      cluster.push(bar);
+      clusterEnd = Math.max(clusterEnd, bar.to);
+    }
+    close();
+    return { bars, groups };
+  }
+
+  /** A bar's height on its row (lane 0 the top one). */
+  private barY(top: number, height: number, lane: number, of: number) {
+    const middle = top + height / 2;
+    return of <= 1 ? middle : middle + (lane - (of - 1) / 2) * Math.min(5, (height - 6) / of);
+  }
+
+  /** A ring row's Lumatic events: groups as boxes, spins and lasers as bars, poses as icons with bars. */
+  private drawRingRow(type: number, top: number, height: number, hue: number) {
+    const ctx = this.context;
+    const { bars, groups } = this.ringLayout(type);
+    for (const block of groups) this.drawRingBlock(block, top, height);
+    const cy = top + height / 2;
+    for (const bar of bars) {
+      const x0 = this.beatToX(bar.from);
+      const x1 = this.beatToX(bar.to);
+      if (x1 < -10 || x0 > this.width + 10) continue;
+      const y = this.barY(top, height, bar.lane, bar.of);
+      const selected = bar.block !== null ? this.editor.selection.has(bar.block.id) || this.editor.posePick?.blockId === bar.block.id : bar.raw !== null && this.editor.selection.has(bar.raw.id);
+      ctx.fillStyle = selected ? 'rgba(255,255,255,0.75)' : `hsla(${String(hue)} 70% 65% / ${bar.raw !== null ? '0.35' : '0.55'})`;
+      ctx.fillRect(x0, y - 1, Math.max(1, x1 - x0), bar.raw !== null ? 2 : 3);
+      // (its end: a grip to drag)
+      ctx.fillRect(x1 - 1, y - 3, 2, 7);
+      const block = bar.block;
+      if (block === null) continue;
+      if (block.spin !== undefined || isLasers(block)) {
+        // (on and on: arrows along it — the way it turns)
+        const back = block.spin !== undefined ? (isZoom(block) ? block.spin.rate < 0 : block.spin.speed < 0) : laserBlockMove(block).direction === 1;
+        ctx.strokeStyle = selected ? '#ffffff' : `hsl(${String(hue)} 75% 72%)`;
+        ctx.lineWidth = 1.3;
+        for (let px = x0 + 8; px < x1 - 6; px += 22) {
+          ctx.beginPath();
+          ctx.moveTo(px + (back ? 4 : 0), y - 3);
+          ctx.lineTo(px + (back ? 0 : 4), y);
+          ctx.lineTo(px + (back ? 4 : 0), y + 3);
+          ctx.stroke();
+        }
+        ctx.fillStyle = selected ? '#ffffff' : `hsl(${String(hue)} 75% 72%)`;
+        ctx.fillRect(x0 - 1, cy - 6, 2, 12);
+        continue;
+      }
+      this.drawRingIcon(block, block.poses[0]!, x0, cy, hue, selected);
+    }
+    // the poses' labels (their angle or spacing), where there's room
+    this.drawPoseLabels(type, top, height, hue);
+  }
+
+  /** A Lumatic ring event's icon: a ring with its first ring's angle; a zoom's: bars its spacing apart. */
+  private drawRingIcon(block: RingBlock, pose: RingPose, x: number, cy: number, hue: number, selected: boolean) {
+    const ctx = this.context;
+    const r = 6;
+    ctx.fillStyle = '#121318';
+    ctx.strokeStyle = selected ? '#ffffff' : `hsl(${String(hue)} 75% 72%)`;
+    ctx.lineWidth = selected ? 2 : 1.5;
+    if (isZoom(block)) {
+      // (three bars as far apart as its spacing says)
+      const gap = Math.max(1.5, Math.min(3, Math.abs(pose.step) * 0.7 + 1));
+      ctx.fillRect(x - 1.5, cy - r, gap * 2 + 3, 2 * r);
+      ctx.fillStyle = ctx.strokeStyle;
+      for (let k = 0; k < 3; k++) ctx.fillRect(x - 0.5 + k * gap, cy - r + 1, 1.2, 2 * r - 2);
+      return;
+    }
+    ctx.beginPath();
+    ctx.arc(x, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    const angle = ((pose.relative === true ? poseBase(this.editor.ringBlocks, block, pose) + pose.angle : pose.angle) * Math.PI) / 180;
+    ctx.beginPath();
+    ctx.moveTo(x, cy);
+    ctx.lineTo(x - Math.sin(angle) * r, cy - Math.cos(angle) * r);
+    ctx.stroke();
+  }
+
+  /** The end of a bar under the mouse on a ring row (a pose's, a spin's, the lasers', a Chroma event's
+   *  speed). */
+  private barEndAt(x: number, y: number): { blockId: string | null; rawId: string | null; from: number; to: number } | null {
+    const item = this.rowAt(y);
+    if (item === null || item.row.kind !== 'raw' || !isRingRow(item.row.type)) return null;
+    let best: { blockId: string | null; rawId: string | null; from: number; to: number } | null = null;
+    let bestD = 6;
+    for (const bar of this.ringLayout(item.row.type).bars) {
+      const x1 = this.beatToX(bar.to);
+      const d = Math.abs(x1 - x);
+      if (d >= bestD || x1 - this.beatToX(bar.from) < 10) continue;
+      if (Math.abs(this.barY(item.top, item.height, bar.lane, bar.of) - y) > 6) continue;
+      bestD = d;
+      best = { blockId: bar.block?.id ?? null, rawId: bar.raw?.id ?? null, from: bar.from, to: bar.to };
+    }
+    return best;
+  }
+
+  /** The ring (or zoom) poses on their events' row (icons — in a group's box too; dragged, the pose
+   *  moves), with their angle or spacing to label them. */
   private poseMarks(type: number) {
-    const blocks = this.editor.ringBlocks.filter((block) => (type === ZOOM_EVENT_TYPE ? isZoom(block) : isTurn(block)));
+    const blocks = this.editor.ringBlocks.filter((block) => (type === ZOOM_EVENT_TYPE ? isZoom(block) : isTurn(block)) && block.spin === undefined);
     const drag = this.drag?.kind === 'pose' && this.drag.moved ? this.drag : null;
     return blocks.flatMap((block) =>
       block.poses.map((pose) => {
@@ -1444,37 +1611,106 @@ export class Timeline {
     );
   }
 
-  private drawPoseMarks(type: number, top: number, height: number, hue: number) {
+  /** The poses' labels on their row: the angle (and a spiral's step) or the spacing, where there's room
+   *  for it before the next. */
+  private drawPoseLabels(type: number, top: number, height: number, hue: number) {
+    if (type !== RING_EVENT_TYPE && type !== ZOOM_EVENT_TYPE) return;
     const ctx = this.context;
     const cy = top + height / 2;
     const marks = this.poseMarks(type).sort((a, b) => a.beat - b.beat);
-    const dragged = this.drag?.kind === 'pose' ? this.drag.poseId : (this.editor.posePick?.poseId ?? null);
     ctx.font = '600 10px system-ui, sans-serif';
     let lastLabel = -Infinity;
     marks.forEach((mark, index) => {
       const x = this.beatToX(mark.beat);
       if (x < -40 || x > this.width + 10) return;
-      const picked = mark.pose.id === dragged;
-      ctx.strokeStyle = picked ? '#ffffff' : `hsl(${String(hue)} 70% 65%)`;
-      ctx.lineWidth = picked ? 2 : 1.4;
-      ctx.beginPath();
-      ctx.moveTo(x, cy - 6);
-      ctx.lineTo(x + 5, cy);
-      ctx.lineTo(x, cy + 6);
-      ctx.lineTo(x - 5, cy);
-      ctx.closePath();
-      ctx.stroke();
-      // (its angle or spacing, where there's room for it)
-      // (up to the next mark: the full label, or the short one, or none)
       let after = index + 1;
       while (after < marks.length && marks[after]!.beat <= mark.beat + 1e-9) after++;
       const next = marks[after];
-      const room = (next === undefined ? Infinity : this.beatToX(next.beat) - x) - 12;
+      const room = (next === undefined ? Infinity : this.beatToX(next.beat) - x) - 16;
       const text = ctx.measureText(mark.full).width <= room ? mark.full : ctx.measureText(mark.label).width <= room ? mark.label : null;
       if (height >= 14 && text !== null && x - lastLabel >= 10) {
         ctx.fillStyle = `hsl(${String(hue)} 60% 82%)`;
-        ctx.fillText(text, x + 7, cy + 4);
+        ctx.fillText(text, x + 10, cy - 3);
         lastLabel = x;
+      }
+    });
+  }
+
+  /** A marker for the other events (ring turns, zoom, laser speed, the boost, the tempo…) placed by a
+   *  click: the game's own event, no values of Lumatic's or Chroma's. */
+  private placeRaw(type: number, beat: number) {
+    const project = this.editor.project;
+    if (project === null) return;
+    this.editor.checkpoint();
+    const at = this.snapView(beat);
+    // (the boost: switched the other way from how it is just before; a tempo change: the tempo there
+    // to start with — changed on the right)
+    const raw: RawEvent = { id: newId('r'), beat: at, type, value: type === 5 ? (this.editor.boostAt(at - 1e-6) ? 0 : 1) : 0, floatValue: type === BPM_EVENT_TYPE ? this.editor.bpmAt(at) : 1 };
+    project.raw.push(raw);
+    this.editor.select([raw.id]);
+    this.editor.changed();
+  }
+
+  /** A Lumatic event drawn along a ring row (from `a` to `b`): a pose of the rings (like the one before
+   *  it) or of the zoom, its move that long; the lasers spinning that long — picked, its settings on the
+   *  right. */
+  private createRingEvent(type: number, a: number, b: number) {
+    const editor = this.editor;
+    const length = Math.max(editor.snap > 0 ? editor.snap : 0.25, b - a);
+    if (type === 12 || type === 13) {
+      const block = newLaserBlock(a, { ...lastLaserMove(), mode: 'spin', sides: type === 12 ? 'left' : 'right', length });
+      editor.addRingBlock(block);
+      editor.select([block.id]);
+      return;
+    }
+    const zoom = type === ZOOM_EVENT_TYPE;
+    // (like the pose before it on the row, else the usual)
+    const before = editor.ringBlocks
+      .filter((block) => (zoom ? isZoom(block) : isTurn(block)) && block.spin === undefined)
+      .flatMap((block) => block.poses.map((pose) => ({ block, pose, at: block.start + pose.beat })))
+      .filter((entry) => entry.at <= a + 1e-6)
+      .sort((x, y) => y.at - x.at)[0];
+    const system = before?.block.system ?? (zoom ? (editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '') : (editor.ringInfo[0]?.name ?? ''));
+    const pose = before === undefined ? newPose(0, zoom ? { step: Math.round((editor.zoomInfo[0]?.initialStep ?? 2) * 100) / 100, duration: length } : { shape: 'spiral', angle: 0, step: 15, duration: length }) : { ...structuredClone(before.pose), id: newId('p'), beat: 0, duration: length };
+    const block: RingBlock = zoom ? { ...newZoomBlock(editor.zoomInfo[0], a, a + length, system), poses: [pose] } : { ...newRingBlock(system, 'event', a, a + length), poses: [pose] };
+    editor.addRingBlock(block);
+    editor.pickPose({ blockId: block.id, poseId: pose.id });
+  }
+
+  /** A Chroma event's speed as its bar is dragged: shown by the mouse. */
+  private barHint: { x: number; y: number; text: string } | null = null;
+
+  private speedHint(drag: Extract<Drag, { kind: 'barEnd' }>) {
+    const seconds = (drag.to - drag.origin) * (60 / this.editor.bpmAt(drag.origin));
+    const hover = this.hover ?? { x: this.beatToX(drag.to), y: 0 };
+    return { x: hover.x + 12, y: hover.y - 10, text: seconds <= 1e-6 ? tr('скорость: сразу (50)') : tr('скорость {0}', Math.round(ringSpeedFor(seconds) * 1000) / 1000) };
+  }
+
+  /** A bar's end let go: the pose's move (or the spin's, the lasers' block) that long — or a Chroma
+   *  event the speed that gets there in that time. One undo step. */
+  private dropBarEnd(drag: Extract<Drag, { kind: 'barEnd' }>) {
+    const editor = this.editor;
+    const length = Math.max(0, drag.to - drag.origin);
+    if (drag.rawId !== null) {
+      const seconds = length * (60 / editor.bpmAt(drag.origin));
+      editor.updateRaw([drag.rawId], (event) => {
+        event.customData = { ...(event.customData ?? {}), speed: Math.round(ringSpeedFor(seconds) * 1000) / 1000 };
+        delete event.customData._speed;
+      });
+      return;
+    }
+    if (drag.blockId === null) return;
+    editor.updateRingBlock(drag.blockId, (block) => {
+      if (isSingleRing(block)) {
+        const pose = block.poses[0]!;
+        // (the bar shows the wave over the rings too: the move's time is what's left of it)
+        const rings = editor.ringInfo.find((system) => system.name === block.system)?.rings ?? editor.ringInfo[0]?.rings ?? 1;
+        const wave = isZoom(block) ? 0 : ringDelay(pose, pose.reverse ? 0 : rings - 1, rings);
+        pose.duration = round3(Math.max(0, length - wave));
+      } else {
+        block.end = round3(Math.max(block.start + 0.25, drag.origin + length));
+        // (the lasers spinning or swaying: for as long as their block)
+        if (block.lasers !== undefined) block.lasers = { ...block.lasers, length: block.end - block.start };
       }
     });
   }
@@ -1512,7 +1748,11 @@ export class Timeline {
     const next = others.filter((mark) => mark.beat > to + 1e-6).sort((a, b) => a.beat - b.beat)[0];
     const before = others.filter((mark) => mark.beat < to - 1e-6).sort((a, b) => b.beat - a.beat)[0];
     editor.checkpoint();
-    if (to < block.start) {
+    if (isSingleRing(block)) {
+      // (one Lumatic event: the block goes with its pose)
+      block.start = to;
+      pose.beat = 0;
+    } else if (to < block.start) {
       const shift = block.start - to;
       for (const item of block.poses) item.beat = round3(item.beat + shift);
       block.start = to;
@@ -2223,6 +2463,7 @@ export class Timeline {
       item.title = row.ring === 'lasers' ? 'Вращающиеся лазеры: протяните по строке, чтобы сделать блок; двойной клик по блоку — его настройки (крутятся рядом, повороты по шагам). Длина блока — сколько крутятся / сколько шагов' : row.ring === 'zoom' ? 'Зум колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор расстояний между кольцами' : 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
     } else {
       item.textContent = row.label;
+      if (row.kind === 'raw' && isRingRow(row.type)) item.title = tr('Клик — событие самой игры (ромб). Протянуть — событие Lumatic такой длины (поза, зум, лазеры). Конец полосы тянется — длина перехода; у событий Chroma со своей скоростью — скорость.');
     }
     // the lights and subgroups of a user's group, and the top rows of lights: dragged into another order
     const top = editor.focus === null && row.depth === 0 && (row.kind === 'group' || row.kind === 'custom');
@@ -2494,6 +2735,19 @@ export class Timeline {
         this.needsDraw = true;
         return;
       }
+      const end = event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.metaKey ? this.barEndAt(x, y) : null;
+      if (end !== null) {
+        // a ring event's bar by its end: its move made longer or shorter (a Chroma event's: its speed)
+        this.drag = { kind: 'barEnd', blockId: end.blockId, rawId: end.rawId, origin: end.from, to: end.to };
+        if (end.rawId !== null) this.editor.select([end.rawId]);
+        else if (end.blockId !== null) {
+          const block = this.editor.ringBlockById(end.blockId);
+          if (block !== undefined && isSingleRing(block)) this.editor.pickPose({ blockId: block.id, poseId: block.poses[0]!.id });
+          else this.editor.select([end.blockId]);
+        }
+        this.needsDraw = true;
+        return;
+      }
       const mark = event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.metaKey ? this.poseMarkAt(x, y) : null;
       if (mark !== null) {
         // a pose's mark: dragged along — the pose moves (a click alone: the song goes there)
@@ -2520,18 +2774,8 @@ export class Timeline {
           this.drag = { kind: 'box', x0: x, y0: y, x1: x, y1: y, additive: event.shiftKey || event.ctrlKey || event.metaKey };
           return;
         }
-        if (item.row.kind === 'raw') {
-          // a marker for the other events (ring turns, zoom, laser speed…): placed by a click
-          const project = this.editor.project;
-          if (project === null) return;
-          this.editor.checkpoint();
-          const at = this.snapView(beat);
-          // (the boost: switched the other way from how it is just before)
-          // (a tempo change: the tempo there to start with — changed on the right)
-          const raw: RawEvent = { id: newId('r'), beat: at, type: item.row.type, value: item.row.type === 5 ? (this.editor.boostAt(at - 1e-6) ? 0 : 1) : 0, floatValue: item.row.type === BPM_EVENT_TYPE ? this.editor.bpmAt(at) : 1 };
-          project.raw.push(raw);
-          this.editor.selection = new Set([raw.id]);
-          this.editor.changed();
+        if (item.row.kind === 'raw' && !isRingRow(item.row.type)) {
+          this.placeRaw(item.row.type, beat);
           return;
         }
         const from = this.snapView(beat);
@@ -2614,7 +2858,8 @@ export class Timeline {
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height) {
           if (this.onSpectroEdge(x, y)) cursor = 'ns-resize';
           else if (y < RULER_H && this.bookmarkAt(x, y) !== null) cursor = 'grab';
-          else if (!this.notesMode && this.poseMarkAt(x, y) !== null) cursor = 'ew-resize';
+          else if (!this.notesMode && this.barEndAt(x, y) !== null) cursor = 'ew-resize';
+          else if (!this.notesMode && this.poseMarkAt(x, y) !== null) cursor = 'grab';
           else if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
             const bar = this.vbar();
             cursor = (y >= bar.thumbTop && y < bar.thumbTop + GRIP) || (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) ? 'ns-resize' : 'default';
@@ -2637,7 +2882,12 @@ export class Timeline {
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
       const snap = (value: number) => (free ? value : this.snapView(value));
-      if (drag.kind === 'pose') {
+      if (drag.kind === 'barEnd') {
+        // a bar's end: the move's length (no shorter than nothing; a spin's, the lasers' a quarter)
+        drag.to = Math.max(drag.origin, snap(beat));
+        this.barHint = drag.rawId !== null ? this.speedHint(drag) : null;
+        this.needsDraw = true;
+      } else if (drag.kind === 'pose') {
         if (Math.abs(beat - drag.grab) * this.pxPerBeat > 3) drag.moved = true;
         drag.to = Math.max(0, snap(drag.origin + beat - drag.grab));
         this.needsDraw = true;
@@ -2788,6 +3038,12 @@ export class Timeline {
         return;
       }
       if (drag.kind === 'spectro') this.renderHeaders(true);
+      if (drag.kind === 'barEnd') {
+        this.barHint = null;
+        this.dropBarEnd(drag);
+        this.needsDraw = true;
+        return;
+      }
       if (drag.kind === 'pose') {
         if (drag.moved && Math.abs(drag.to - drag.origin) > 1e-6) this.dropPose(drag.blockId, drag.poseId, drag.to);
         else if (!drag.moved) this.editor.seek(drag.origin);
@@ -2803,6 +3059,13 @@ export class Timeline {
         const range = this.editor.songRange;
         if (range !== null && Math.abs(range.end - range.start) * this.pxPerBeat < 3) this.editor.setSongRange(null);
         else if (range !== null) this.editor.setStatus(`Выделено: доли ${String(round3(Math.min(range.start, range.end)))}–${String(round3(Math.max(range.start, range.end)))}. ПКМ по выделению — превью песни, проиграть по кругу`);
+      }
+      if (drag.kind === 'create' && drag.row.kind === 'raw') {
+        // a ring row: a click — the game's own event; drawn along — a Lumatic event that long
+        if (!drag.moved) this.placeRaw(drag.row.type, drag.from);
+        else this.createRingEvent(drag.row.type, Math.min(drag.from, drag.to), Math.max(drag.from, drag.to));
+        this.needsDraw = true;
+        return;
       }
       if (drag.kind === 'create') {
         const row = drag.row;
@@ -2847,6 +3110,7 @@ export class Timeline {
           if (top + height < ys[0]! || top > ys[1]!) continue;
           if (row.kind === 'raw') {
             for (const event of this.visibleRaw(row.type)) if (event.beat >= beats[0]! && event.beat <= beats[1]!) picked.push(event.id);
+            if (isRingRow(row.type)) for (const block of this.blocksOnRow(row.type)) if (block.end > beats[0]! && block.start < beats[1]!) picked.push(block.id);
           } else if (row.kind === 'poses') {
             for (const block of this.blocksOf(row)) if (block.end > beats[0]! && block.start < beats[1]!) picked.push(block.id);
           } else for (const { clip, role } of this.clipsOf(row)) if (role !== 'background' && clip.end > beats[0]! && clip.start < beats[1]!) picked.push(clip.id);

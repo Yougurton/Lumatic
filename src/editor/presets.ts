@@ -1,5 +1,6 @@
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
+import type { RingBlock } from './rings';
 import type { Effect } from './effects';
 import { ask, showMenu } from './menu';
 import { clipLights, cloneClip, findGroup, newId, type LightClip, type LightGroup, type LightRef, type RawEvent } from './model';
@@ -25,6 +26,9 @@ export interface Preset {
   raw: Omit<RawEvent, 'id'>[];
   /** Effects (their settings, the group they ran over by name, their events). */
   effects?: { effect: Omit<Effect, 'id'>; targetName?: string; children: PresetClip[] }[];
+  /** The rings' Lumatic events (poses, spins, the lasers' moves): put in, the poses of each kind and
+   *  rings together become one group. */
+  rings?: Omit<RingBlock, 'id'>[];
 }
 
 const STORE = 'chroeditor.presets.v1';
@@ -53,9 +57,10 @@ export function presetFromSelection(editor: Editor, name: string): Preset | null
   const clips = editor.selectedClips();
   const raw = project.raw.filter((event) => editor.selection.has(event.id));
   const effects = editor.selectedEffects();
-  if (clips.length + raw.length + effects.length === 0) return null;
-  const first = Math.min(...clips.map((clip) => clip.start), ...raw.map((event) => event.beat), ...effects.map((effect) => effect.start));
-  const last = Math.max(...clips.map((clip) => clip.end), ...raw.map((event) => event.beat), ...effects.map((effect) => effect.end));
+  const rings = editor.selectedRingBlocks();
+  if (clips.length + raw.length + effects.length + rings.length === 0) return null;
+  const first = Math.min(...clips.map((clip) => clip.start), ...raw.map((event) => event.beat), ...effects.map((effect) => effect.start), ...rings.map((block) => block.start));
+  const last = Math.max(...clips.map((clip) => clip.end), ...raw.map((event) => event.beat), ...effects.map((effect) => effect.end), ...rings.map((block) => block.end));
   const groups = editor.groups;
   const save = (clip: LightClip): PresetClip => savedClip(editor, clip, first);
   return {
@@ -64,6 +69,7 @@ export function presetFromSelection(editor: Editor, name: string): Preset | null
     length: last - first,
     clips: clips.map(save),
     raw: raw.map(({ id: _id, ...event }) => ({ ...event, beat: event.beat - first })),
+    ...(rings.length === 0 ? {} : { rings: rings.map(({ id: _id, ...block }) => ({ ...structuredClone(block), start: block.start - first, end: block.end - first })) }),
     effects: effects.map((effect) => {
       const { id: _id, ...rest } = structuredClone(effect);
       const targetName = effect.target === undefined ? undefined : findGroup(groups, effect.target)?.group.name;
@@ -178,6 +184,31 @@ export function insertPreset(editor: Editor, preset: Preset, at: number) {
     const copy: RawEvent = { ...structuredClone(event), id: newId('r'), beat: event.beat + at };
     project.raw.push(copy);
     added.push(copy.id);
+  }
+  // the rings' events: the poses of each kind and rings one group (edited pose by pose, moved whole);
+  // spins, the lasers' moves, groups as they were
+  const together = new Map<string, Omit<RingBlock, 'id'>[]>();
+  for (const block of preset.rings ?? []) {
+    const single = block.poses.length >= 1 && block.spin === undefined && block.lasers === undefined && block.steps === undefined && block.glitch === undefined;
+    if (!single) {
+      const copy: RingBlock = { ...structuredClone(block), id: newId('k'), start: block.start + at, end: block.end + at, poses: block.poses.map((pose) => ({ ...structuredClone(pose), id: newId('p') })) };
+      editor.ringBlocks.push(copy);
+      added.push(copy.id);
+      continue;
+    }
+    const key = `${block.kind ?? 'rotation'}|${block.system}`;
+    together.set(key, [...(together.get(key) ?? []), block]);
+  }
+  for (const blocks of together.values()) {
+    const start = Math.min(...blocks.map((block) => block.start)) + at;
+    const end = Math.max(...blocks.map((block) => block.end)) + at;
+    const first = blocks[0]!;
+    const poses = blocks.flatMap((block) => block.poses.map((pose) => ({ ...structuredClone(pose), id: newId('p'), beat: Math.round((block.start + at + pose.beat - start) * 1e6) / 1e6 })));
+    const group: RingBlock = { ...structuredClone(first), id: newId('k'), name: preset.name, start, end, poses, ...(poses.length > 1 ? { group: true } : {}) };
+    delete group.steps;
+    delete group.glitch;
+    editor.ringBlocks.push(group);
+    added.push(group.id);
   }
   // its loose events: one group, named as the preset (the effects stay effects)
   const loose = project.clips.filter((clip) => added.includes(clip.id) && clip.group === undefined);
@@ -294,7 +325,7 @@ export class PresetPanel {
     info.className = 'pr-info';
     const effects = preset.effects?.length ?? 0;
     const copies = this.editor.effects.filter((effect) => effect.preset === preset.id && effect.presetSync === true).length;
-    info.textContent = `${formatBeats(preset.length)} · ${String(preset.clips.length + preset.raw.length)} соб.${effects > 0 ? ` · ${String(effects)} эфф.` : ''}${copies > 0 ? ` · ${String(copies)} ⇄` : ''}`;
+    info.textContent = `${formatBeats(preset.length)} · ${String(preset.clips.length + preset.raw.length + (preset.rings ?? []).length)} соб.${effects > 0 ? ` · ${String(effects)} эфф.` : ''}${copies > 0 ? ` · ${String(copies)} ⇄` : ''}`;
     if (copies > 0) info.title = `Копий на таймлайне, меняющихся вместе: ${String(copies)}`;
     text.append(name, info);
     const insert = document.createElement('button');

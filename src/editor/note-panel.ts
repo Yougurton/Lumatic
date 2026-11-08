@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import type { Editor } from './editor';
 import { objectRightClick } from './object-menu';
 import { ROW_WALL, WALL_SHAPES, wallFootprint, type MapNote } from './notes';
@@ -26,6 +27,29 @@ const DIRS: { dir: number; label: string; key: string }[] = [
   { dir: 1, label: '↓', key: 'S' },
   { dir: 7, label: '↘', key: 'S+D' },
 ];
+
+/** How comfortable each cut direction is for the right hand's next swing (0: awkward, 1: easy): after
+ *  a backhand (a swing up) comes a forehand, after a forehand a backhand (BSMG's swing wheels). The
+ *  left hand: the same mirrored. */
+const FOREHAND: Record<number, number> = { 0: 0.25, 5: 0.08, 3: 0.5, 7: 0.8, 1: 1, 6: 0.95, 2: 0.7, 4: 0.4 };
+const BACKHAND: Record<number, number> = { 0: 1, 5: 0.95, 3: 0.8, 7: 0.7, 1: 0.25, 6: 0.05, 2: 0.35, 4: 0.5 };
+const MIRROR_DIR: Record<number, number> = { 0: 0, 1: 1, 2: 3, 3: 2, 4: 5, 5: 4, 6: 7, 7: 6 };
+
+/** For the tool's hand, how comfortable each direction is after its last note before `beat` (none:
+ *  no note before, or a dot). */
+export function directionComfort(notes: readonly { b: number; c: number; d: number }[], color: number, beat: number): Record<number, number> | null {
+  let last: { b: number; d: number } | undefined;
+  for (const note of notes) if (note.c === color && note.b < beat - 1e-6 && (last === undefined || note.b > last.b)) last = note;
+  if (last === undefined || last.d === 8) return null;
+  const own = (direction: number) => (color === 0 ? MIRROR_DIR[direction]! : direction);
+  const d = own(last.d);
+  // (the last swing: the wheel it sits better on)
+  const wasForehand = (FOREHAND[d] ?? 0) >= (BACKHAND[d] ?? 0);
+  const wheel = wasForehand ? BACKHAND : FOREHAND;
+  const out: Record<number, number> = {};
+  for (let direction = 0; direction < 8; direction++) out[direction] = wheel[own(direction)] ?? 0.5;
+  return out;
+}
 
 /** How far back (beats) the notes before the cursor are looked for. */
 const BACK = 4;
@@ -61,6 +85,17 @@ export class NotePanel {
       this.renderTools();
       this.needsDraw = true;
     });
+    // (the cursor moved: the directions' colours follow the notes before it)
+    let toolsBeat = Number.NaN;
+    const watch = () => {
+      const beat = editor.snapBeat(editor.playhead());
+      if (beat !== toolsBeat && editor.tab === 'notes') {
+        toolsBeat = beat;
+        this.renderTools();
+      }
+      requestAnimationFrame(watch);
+    };
+    requestAnimationFrame(watch);
     this.bind();
     const loop = () => {
       const key = `${String(editor.snapBeat(editor.playhead()))}|${String(editor.noteVersion)}|${String(editor.noteSelection.size)}`;
@@ -140,7 +175,9 @@ export class NotePanel {
     const editor = this.editor;
     const tool = editor.noteTool;
     const scheme = editor.preview.colors;
-    const key = `${tool.kind}|${String(tool.direction)}|${editor.wallKind}|${JSON.stringify(editor.wallStrobe)}|${[...scheme.leftNote, ...scheme.rightNote, ...scheme.obstacle].join(',')}`;
+    // (the directions coloured by how well they follow the hand's last note before the cursor)
+    const comfort = tool.kind === 'red' || tool.kind === 'blue' ? directionComfort(editor.objects.notes, tool.kind === 'red' ? 0 : 1, editor.snapBeat(editor.playhead())) : null;
+    const key = `${tool.kind}|${String(tool.direction)}|${editor.wallKind}|${JSON.stringify(editor.wallStrobe)}|${[...scheme.leftNote, ...scheme.rightNote, ...scheme.obstacle].join(',')}|${JSON.stringify(comfort)}`;
     if (this.tools.dataset.key === key) return;
     this.tools.dataset.key = key;
     const colors = editor.preview.colors;
@@ -176,6 +213,12 @@ export class NotePanel {
       button.title = `Направление ${item.label} (${item.key})`;
       button.classList.toggle('active', tool.direction === item.dir);
       button.disabled = tool.kind === 'bomb' || tool.kind === 'wall';
+      const ease = comfort?.[item.dir];
+      if (ease !== undefined) {
+        // (green: follows the last swing well … red: awkward)
+        button.style.background = `hsl(${String(Math.round(ease * 120))} 65% ${tool.direction === item.dir ? '42%' : '26%'})`;
+        button.title += ' ' + (ease >= 0.75 ? tr('— удобно после прошлой ноты') : ease >= 0.4 ? tr('— можно') : tr('— неудобно после прошлой ноты'));
+      }
       button.addEventListener('click', () => editor.setNoteDirection(item.dir));
       pad.append(button);
     }

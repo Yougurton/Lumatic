@@ -1,4 +1,5 @@
 import { bootstrapBpmEvents, createBpmConverter } from '../engine/core/beatmap/bpm';
+import { ringTickSeconds } from '../engine/core/lighting/ring-motion';
 import { generatePatterns } from './note-generator';
 import type { BeatmapCustomData, BpmEvent } from '../engine/core/beatmap/types';
 import { parseNoodleBeatmap, type NoodleBeatmapData } from '../engine/core/noodle-data';
@@ -57,7 +58,7 @@ import { allObjects, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyO
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
-import { chromaCustomData, cloneRingBlock, EVENT_SHAPES, fitRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
+import { chromaCustomData, chromaMoveBeats, newPose, newRingBlock, newZoomBlock, cloneRingBlock, EVENT_SHAPES, fitRingBlock, isLasers, isTurn, laserBlockMove, TRACK_PREFIX, poseRingEvents, poseZoomEvents, type ZoomSystemInfo, ringAnimations, ringEnhancements, type RingAnimation, type RingBlock, type RingEnhancement, type RingSystemInfo } from './rings';
 
 /**
  * The editor's state and everything that changes it: the open map and difficulty, the project
@@ -649,6 +650,29 @@ export class Editor {
       delete look.geometry;
       converted++;
     }
+    // (ring pose blocks are gone: each pose a Lumatic event of its own on its row — the groups only
+    // what "rings in steps" and the glitch made, and copies of presets)
+    const split: RingBlock[] = [];
+    for (const block of this.project.ringBlocks ?? []) {
+      if (isLasers(block) || block.spin !== undefined || block.steps !== undefined || block.glitch !== undefined || block.poses.length === 0 || block.group === true) {
+        split.push(block);
+        continue;
+      }
+      const length = block.end - block.start;
+      const poses = [...block.poses].filter((pose) => pose.beat <= length + 1e-6).sort((a, b) => a.beat - b.beat);
+      if (poses.length === 1 && poses[0]!.beat === 0) {
+        split.push(block);
+        continue;
+      }
+      poses.forEach((pose, index) => {
+        const start = Math.round((block.start + pose.beat) * 1e6) / 1e6;
+        const one: RingBlock = { ...block, id: index === 0 ? block.id : newId('k'), start, end: start + Math.max(0.25, pose.duration), poses: [{ ...pose, beat: 0 }] };
+        fitRingBlock(one);
+        split.push(one);
+      });
+      converted++;
+    }
+    this.project.ringBlocks = split;
     if (converted > 0) this.dirty = true;
     // the tempo changes: events of their own on the timeline (from the file when the project has none)
     if (!this.project.raw.some((event) => event.type === BPM_EVENT_TYPE)) {
@@ -778,9 +802,17 @@ export class Editor {
   poseEvents() {
     const project = this.project;
     if (project === null) return [];
+    // (kept till something changes: the timeline asks for them every frame, a few times — and a spin
+    // makes thousands)
+    const cached = this.poseCache;
+    if (cached !== null && cached.version === this.version && cached.project === project && cached.rings === this.ringInfo && cached.zooms === this.zoomInfo) return cached.events;
     const rings = rawEvents(project.raw).filter((event) => event.type === RING_EVENT_TYPE).sort((a, b) => a.beat - b.beat);
-    return [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm), ...this.laserBlockEvents()];
+    const events = [...poseRingEvents(this.ringBlocks, rings, this.ringInfo, RING_EVENT_TYPE, this.toSong, 60 / this.songBpm), ...poseZoomEvents(this.ringBlocks, this.zoomInfo, ZOOM_EVENT_TYPE, 60 / this.songBpm), ...this.laserBlockEvents()];
+    this.poseCache = { version: this.version, project, rings: this.ringInfo, zooms: this.zoomInfo, events };
+    return events;
   }
+
+  private poseCache: { version: number; project: Project; rings: unknown; zooms: unknown; events: (OutEvent & { group: string })[] } | null = null;
 
   /** The laser speed events of the lasers blocks (as long as each block is now). */
   laserBlockEvents(): (OutEvent & { group: string })[] {
@@ -1091,9 +1123,7 @@ export class Editor {
       return at < 0 ? Number.POSITIVE_INFINITY : at;
     };
     tops.map((top, index) => ({ top, index })).sort((a, b) => rank(a.top.key) - rank(b.top.key) || a.index - b.index).forEach(({ top }) => top.push());
-    if (this.ringInfo.length > 0 || this.ringBlocks.some(isTurn)) rows.push({ kind: 'poses', key: 'poses', label: 'Позы колец', depth: 0, ring: 'rotation' });
-    if (this.zoomInfo.length > 0 || this.ringBlocks.some((block) => block.kind === 'zoom')) rows.push({ kind: 'poses', key: 'zoomposes', label: 'Зум колец', depth: 0, ring: 'zoom' });
-    if (this.lightInfo.some((light) => light.moving) || this.ringBlocks.some(isLasers)) rows.push({ kind: 'poses', key: 'laserposes', label: 'Лазеры', depth: 0, ring: 'lasers' });
+    // (the ring poses, the zoom's, the lasers' moves: on the rows of their events — no rows of their own)
     const rawTypes = [...new Set(project.raw.map((event) => event.type))].sort((a, b) => a - b);
     for (const type of [8, 9, 12, 13, 5, BPM_EVENT_TYPE]) if (!rawTypes.includes(type)) rawTypes.push(type);
     for (const type of rawTypes.sort((a, b) => a - b)) rows.push({ kind: 'raw', key: `r${String(type)}`, type, label: otherEventName(type), depth: 0 });
@@ -2581,7 +2611,12 @@ export class Editor {
   /** A pose picked (null: none) — what else was picked let go. */
   pickPose(pick: { blockId: string; poseId: string } | null) {
     this.posePick = pick;
-    if (pick !== null) this.selection = new Set();
+    // (a Lumatic event on its own: its block picked too — moved, copied, deleted as one; a pose in a
+    // group: only it, the group stays)
+    if (pick !== null) {
+      const block = this.ringBlockById(pick.blockId);
+      this.selection = new Set(block !== undefined && block.poses.length === 1 && block.steps === undefined && block.glitch === undefined ? [block.id] : []);
+    }
     this.emit('selection');
   }
 
@@ -3199,6 +3234,63 @@ export class Editor {
   }
 
   /** Puts objects in (one undo step); they become the selection. */
+  /** A Lumatic ring event (a pose, a spin, the lasers' move) turned into the Chroma events it writes —
+   *  their numbers then edited as they are (one undo step). */
+  ringBlockToRaw(blockId: string) {
+    const project = this.project;
+    if (project === null) return;
+    const made = this.poseEvents().filter((event) => event.group === blockId);
+    this.checkpoint();
+    const raw: RawEvent[] = made.map(({ group: _group, ...event }) => ({ id: newId('r'), beat: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, ...(event.customData === undefined ? {} : { customData: structuredClone(event.customData) }) }));
+    project.raw.push(...raw);
+    project.ringBlocks = this.ringBlocks.filter((block) => block.id !== blockId);
+    this.posePick = null;
+    this.selection = new Set(raw.map((event) => event.id));
+    this.changed();
+  }
+
+  /** Chroma's (or the game's) ring and zoom events made Lumatic's: each a pose with its move — its
+   *  turn from where the first ring was (by its rotation and direction), its step, its speed's time,
+   *  its wave's (one undo step). */
+  rawToRingEvent(ids: readonly string[]) {
+    const project = this.project;
+    if (project === null) return;
+    const events = project.raw.filter((event) => ids.includes(event.id) && (event.type === RING_EVENT_TYPE || event.type === ZOOM_EVENT_TYPE));
+    if (events.length === 0) return;
+    this.checkpoint();
+    const made: RingBlock[] = [];
+    for (const event of events) {
+      const data = (event.customData ?? {}) as Record<string, unknown>;
+      const get = (key: string) => (typeof data[key] === 'number' ? (data[key] as number) : typeof data[`_${key}`] === 'number' ? (data[`_${key}`] as number) : undefined);
+      const secondsPerBeat = 60 / this.bpmAt(event.beat);
+      const duration = Math.round(chromaMoveBeats(event, secondsPerBeat) * 1000) / 1000;
+      const filter = data.nameFilter ?? data._nameFilter;
+      if (event.type === ZOOM_EVENT_TYPE) {
+        const zoom = this.zoomInfo.find((system) => system.name === filter) ?? this.zoomInfo[0];
+        const block = newZoomBlock(zoom, event.beat, event.beat + Math.max(0.25, duration), typeof filter === 'string' ? filter : '');
+        block.poses = [newPose(0, { step: get('step') ?? zoom?.initialStep ?? 2, duration })];
+        made.push(block);
+        continue;
+      }
+      const system = this.ringInfo.find((item) => item.name === filter) ?? this.ringInfo[0];
+      const rings = system?.rings ?? 1;
+      const turned = (get('rotation') ?? system?.rotation.rotation ?? 90) * (get('direction') === 1 ? -1 : 1);
+      const prop = get('prop') ?? system?.rotation.propagationSpeed ?? 1;
+      // (the wave: `prop` rings a tick — the pose's wave the time it takes over all of them)
+      const delay = prop >= rings ? 0 : Math.round(((rings / Math.max(0.01, prop)) * ringTickSeconds()) / secondsPerBeat * 1000) / 1000;
+      const block = newRingBlock(typeof filter === 'string' && this.ringInfo.length > 1 ? filter : (system?.name ?? ''), 'event', event.beat, event.beat + Math.max(0.25, duration));
+      block.poses = [newPose(0, { shape: 'spiral', relative: true, angle: turned, step: get('step') ?? system?.rotation.step ?? 0, duration, delay })];
+      fitRingBlock(block);
+      made.push(block);
+    }
+    project.raw = project.raw.filter((event) => !events.includes(event));
+    project.ringBlocks = [...this.ringBlocks, ...made];
+    const first = made[0]!;
+    this.selection = new Set(made.map((block) => block.id));
+    this.posePick = made.length === 1 ? { blockId: first.id, poseId: first.poses[0]!.id } : null;
+    this.changed();
+  }
+
   /** The notes the generator made last (so "another" puts its next pattern in their place). */
   private generated: { beat: number; red: number; blue: number; index: number; ids: string[] } | null = null;
 

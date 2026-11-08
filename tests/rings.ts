@@ -88,8 +88,9 @@ for (let round = 0; round < 40; round++) {
   const sampler = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed));
   for (const pose of block.poses) {
     const at = block.start + pose.beat;
-    // (just before the next ring event, the pose has settled)
-    const next = Math.min(...all.filter((event) => event.songBpmTime > at + 1e-6).map((event) => event.songBpmTime), at + 4);
+    // (just before the next ring event, the pose has settled — the pose's own event perhaps a few
+    // hundredths of a second late: kept clear of a show's event at its very moment)
+    const next = Math.min(...all.filter((event) => event.songBpmTime > at + 0.15).map((event) => event.songBpmTime), at + 4);
     const angles = sampler(next - 0.01);
     const step = pose.shape === 'spiral' ? pose.step : 0;
     for (let i = 0; i < system.rings; i += 7) {
@@ -415,6 +416,21 @@ if (firstRingFromLog(log, names) !== 611 || firstRingFromLog('nothing', names) !
   const zoomAt = createRingPositionSampler(zoomMade, bpm, zoomSystem.position);
   const spacing = (beat: number) => zoomAt(beat)[1]! - zoomAt(beat)[0]!;
   check1(Math.abs(spacing(13) - (3.5 + 0.25 * 7)) < 0.05, 'a zoom spin one way: the spacing grown by rate × beats at full speed', spacing(13));
+}
+
+// two spins back to back, a pose after them: it lands on its angle (no turn lost to two events at once)
+{
+  const system = systems[0]!;
+  const one = newSpinBlock(system.name, 'rotation', 4, 12);
+  one.spin = { ...one.spin!, speed: 90, twist: 3, rampIn: 0, rampOut: 0 };
+  const two = newSpinBlock(system.name, 'rotation', 12, 20);
+  two.spin = { ...two.spin!, speed: -90, twist: -3, rampIn: 0, rampOut: 0 };
+  const after: RingBlock = { id: 'after', name: 'after', system: system.name, mode: 'event', start: 20.25, end: 22, poses: [newPose(0, { shape: 'spiral', angle: 0, step: -2, duration: 0.75 })] };
+  const made = poseRingEvents([one, two, after], [], systems, 8, (beat) => beat, 60 / bpm);
+  const all: BasicEvent[] = made.map((event) => ({ jsonTime: event.beat, songBpmTime: event.beat, type: event.type, value: event.value, floatValue: event.floatValue, customData: event.customData as BasicEvent['customData'] }));
+  const sampler = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed));
+  const first = sampler(23)[0]!;
+  check1(Math.abs((((first % 360) + 540) % 360) - 180) < 0.5, 'spins back to back, then a pose: on its angle', first);
 }
 
 console.log('checks', checks, 'failures', failures);

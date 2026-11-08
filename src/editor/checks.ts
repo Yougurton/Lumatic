@@ -38,7 +38,7 @@ export const CHECK_RULES: CheckRule[] = [
   { id: 'preSwing', name: 'Pre-swing path', source: 'BL · SS', group: 'notes', about: 'Нота стоит в pre-swing (замахе) сабли другого цвета' },
   { id: 'postSwing', name: 'Hitbox abuse', source: 'BSMG · SS', group: 'notes', about: 'Сразу после удара в его follow-through стоит нота другого цвета' },
   { id: 'doubleDirectional', name: 'Double directional (DD)', source: 'BSMG · SS', group: 'notes', about: 'Две ноты одного цвета подряд в одну сторону без bomb reset: ближе 1,5 доли — ошибка, дальше — предупреждение' },
-  { id: 'visionBlock', name: 'Vision block (VB)', source: 'BSMG · BL', group: 'notes', about: 'Face note (средний ряд, центр) закрывает следующие ноты позади неё' },
+  { id: 'visionBlock', name: 'Vision block (VB)', source: 'BSMG · BL', group: 'notes', about: 'Нота в центре среднего ряда закрывает свою половину сетки (левая — левую, правая — правую) на половину прыжка' },
   { id: 'angleOffset', name: 'Angle offset', source: 'SS', group: 'notes', about: 'У arrow-нот angle offset должен быть 0, у dot-нот — кратен 45°' },
   { id: 'sliderSpacing', name: 'Неровный slider', source: 'BL', group: 'notes', about: 'В slider из 3+ нот промежутки между нотами разные' },
   { id: 'fastStream', name: 'EBPM выше 350', source: 'SS', group: 'notes', about: 'Удары одной рукой быстрее 350 EBPM дольше 8 долей (или быстрее 425)' },
@@ -326,18 +326,18 @@ export function checkMap(input: CheckInput): MapIssue[] {
       const face = notes[i]!;
       if (face.y !== 1 || (face.x !== 1 && face.x !== 2)) continue;
       const t = sec(face.b);
-      // (BSMG: nothing in that half of the grid for the half jump; BL: 250/500 ms, outer columns free)
-      const bsmg = bsmgOn && !bl;
-      const window = bsmg ? sec(face.b + (input.halfJump ?? 1)) - t : 0.5;
+      // (BSMG's rule of thumb: a face note on the left of the middle hides the whole left half of the
+      // grid for the half jump — the right one the right half)
+      const window = Math.max(0.25, sec(face.b + (input.halfJump ?? 1)) - t);
       for (let j = i + 1; j < notes.length; j++) {
         const hidden = notes[j]!;
         const dt = sec(hidden.b) - t;
         if (dt > window) break;
         if (dt < 0.005) continue;
-        if (bsmg ? hidden.x < 2 !== face.x < 2 : Math.abs(hidden.x - face.x) > 1 || hidden.x === 0 || hidden.x === 3) continue;
+        if (hidden.x < 2 !== face.x < 2) continue;
         // (the same hand's slider goes on with the same swing)
         if (hidden.c === face.c && dt < 0.09) continue;
-        add('visionBlock', 'warn', hidden.b, [face.id, hidden.id], `Vision block: face note закрывает ноту через ${ms(dt)} (BL: от 250 мс, если она предсказуема, иначе от 500 мс)`);
+        add('visionBlock', 'warn', hidden.b, [face.id, hidden.id], `Vision block: нота в центре закрывает свою половину сетки на половину прыжка — нота через ${ms(dt)}`);
         break;
       }
     }

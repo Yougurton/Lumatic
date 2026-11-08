@@ -31,7 +31,10 @@
       #app {
         display: grid;
         grid-template-rows: auto minmax(160px, 44%) 6px 1fr;
+        /* (as wide as the window, whatever was drawn at a bigger size: a full screen and back) */
+        grid-template-columns: minmax(0, 1fr);
         height: 100%;
+        width: 100%;
       }
       #toolbar {
         display: flex;
