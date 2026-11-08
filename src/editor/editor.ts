@@ -1,4 +1,5 @@
-import { createBpmConverter } from '../engine/core/beatmap/bpm';
+import { bootstrapBpmEvents, createBpmConverter } from '../engine/core/beatmap/bpm';
+import { generatePatterns } from './note-generator';
 import type { BeatmapCustomData, BpmEvent } from '../engine/core/beatmap/types';
 import { parseNoodleBeatmap, type NoodleBeatmapData } from '../engine/core/noodle-data';
 import { EMPTY_CHROMA_ENVIRONMENT, parseV2ChromaEnvironment, parseV3ChromaEnvironment, type ChromaEnvironmentData } from '../engine/core/chroma-environment';
@@ -6,7 +7,7 @@ import { createAudioClock, createSilentClock, type SongClock } from '../engine/c
 import type { DifficultyRow } from '../engine/mapfile/viewer-types';
 import { bakeLights, rawEvents, type OutEvent, type SchemeColors } from './bake';
 import { importEvents } from './import';
-import { difficultyFile, difficultyVersion, loadMap, loadProject, projectFileName, readBookmarks, requirementsOf, setRequirements, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
+import { difficultyFile, difficultyVersion, loadMap, loadProject, projectFileName, readBookmarks, readBpmChanges, requirementsOf, setRequirements, suggestChroma, writeDifficulty, type LoadedMap } from './map-io';
 import { EMPTY_FRAGMENT, fragmentRequirements, geometrySystems, hasMods, isEmptyFragment, loadPreset, modsFragment, ringSystemParts, type EnvironmentFragment, type EnvironmentMods } from './environment-mods';
 import { setInfoEnvironment } from './map-settings';
 import { loadEnvironmentData } from '../engine/renderer/environment/environment-worker-client';
@@ -208,7 +209,8 @@ export class Editor {
   /** Grows with every change to the objects. */
   noteVersion = 0;
   /** What the notes side places: a red or blue note, a bomb, a wall; the arrows' direction. */
-  noteTool: { kind: 'red' | 'blue' | 'bomb' | 'wall'; direction: number } = { kind: 'red', direction: 1 };
+  /** What a click on the notes' wall puts in (`angle`: a dot note's turn, degrees — F again turns it). */
+  noteTool: { kind: 'red' | 'blue' | 'bomb' | 'wall'; direction: number; angle?: number } = { kind: 'red', direction: 1 };
   /** How the notes side's 3D view shows the notes: on the editor's track, or as in the game. */
   noteView: 'track' | 'game' = 'track';
   /** Makes the grid finer or coarser (set by the app). */
@@ -333,6 +335,130 @@ export class Editor {
     this.clock.seek(Math.max(0, Math.min(this.duration, this.beatToSeconds(beat))));
     this.emit('time');
   }
+
+  // ----- the tempo changes -----------------------------------------------------------------------------
+
+  /** The tempo changes (BPM_EVENT_TYPE events: their beat, the BPM from there) as the timing goes by. */
+  private timingKey = '';
+
+  /**
+   * The song's timing from its tempo changes, again when they changed. `ask`: a change made by hand —
+   * with things after it, the question whether they keep their beats (they move in time: the default)
+   * or their place in the song (their beats worked out again).
+   */
+  private syncTiming(ask: boolean) {
+    const project = this.project;
+    if (project === null) return;
+    const changes = project.raw
+      .filter((event) => event.type === BPM_EVENT_TYPE && event.floatValue > 0)
+      .map((event) => ({ jsonTime: event.beat, songBpmTime: 0, bpm: event.floatValue }))
+      .sort((a, b) => a.jsonTime - b.jsonTime);
+    const key = JSON.stringify(changes.map((change) => [change.jsonTime, change.bpm]));
+    if (key === this.timingKey) return;
+    const before = { events: this.bpmEvents, toSong: this.toSong };
+    const had = this.timingKey;
+    this.timingKey = key;
+    this.bpmEvents = bootstrapBpmEvents(changes, this.songBpm);
+    this.toSong = createBpmConverter(this.bpmEvents, this.songBpm);
+    this.preview.setTiming(this.songBpm, this.bpmEvents, this.row?.colorScheme);
+    if (!ask || had === '') return;
+    // (where the timing first differs: what's after it is what moves)
+    const from = firstTimingChange(before.events, this.bpmEvents, this.songBpm);
+    if (from === null || !this.hasAfter(from)) return;
+    const oldToSong = before.toSong;
+    void choose(tr('Смена темпа'), tr('После доли {0} уже есть события. Что с ними сделать?', Math.round(from * 1000) / 1000), [tr('Оставить на своих долях (сдвинутся по времени)'), tr('Оставить на своих местах в песне (доли пересчитаются)')]).then((answer) => {
+      if (answer !== 1) return;
+      this.retime(oldToSong, from);
+    });
+  }
+
+  /** The tempo at a beat (BPM). */
+  bpmAt(beat: number) {
+    let bpm = this.songBpm;
+    for (const event of this.bpmEvents) {
+      if (event.jsonTime > beat + 1e-9) break;
+      bpm = event.bpm;
+    }
+    return bpm;
+  }
+
+  /** Anything of the show or the notes after this beat (the tempo changes themselves aside). */
+  private hasAfter(beat: number) {
+    const project = this.project;
+    if (project === null) return false;
+    const after = (value: number) => value > beat + 1e-6;
+    return (
+      project.clips.some((clip) => after(clip.end)) ||
+      project.raw.some((event) => event.type !== BPM_EVENT_TYPE && after(event.beat)) ||
+      (project.ringBlocks ?? []).some((block) => after(block.end)) ||
+      allObjects(this.objects).some(({ item }) => after((item as { b: number }).b))
+    );
+  }
+
+  /**
+   * Everything after `from` kept where it was in the song (in seconds) though the tempo changed: its
+   * beats worked out again under the new timing (`oldToSong`: the timing before). Part of the change
+   * made by hand (no undo step of its own); the notes too.
+   */
+  private retime(oldToSong: (beat: number) => number, from: number) {
+    const project = this.project;
+    if (project === null) return;
+    const newToSong = this.toSong;
+    // (the new timing turned round: a song beat → its beat in the file, by halving)
+    const back = (song: number) => {
+      let low = 0;
+      let high = Math.max(1, song) * 4 + 1000;
+      for (let k = 0; k < 60; k++) {
+        const middle = (low + high) / 2;
+        if (newToSong(middle) < song) low = middle;
+        else high = middle;
+      }
+      return Math.round(((low + high) / 2) * 1e6) / 1e6;
+    };
+    const map = (beat: number) => (beat > from + 1e-6 ? back(oldToSong(beat)) : beat);
+    for (const clip of project.clips) {
+      const start = map(clip.start);
+      const end = map(clip.end);
+      clip.start = start;
+      clip.end = Math.max(start, end);
+    }
+    for (const event of project.raw) if (event.type !== BPM_EVENT_TYPE) event.beat = map(event.beat);
+    for (const effect of project.effects ?? []) {
+      effect.start = map(effect.start);
+      effect.end = Math.max(effect.start, map(effect.end));
+    }
+    for (const block of project.ringBlocks ?? []) {
+      const start = block.start;
+      const newStart = map(start);
+      for (const pose of block.poses) {
+        const at = map(start + pose.beat);
+        pose.duration = Math.max(0, map(start + pose.beat + pose.duration) - at);
+        pose.beat = Math.max(0, at - newStart);
+      }
+      block.end = Math.max(newStart + 0.25, map(block.end));
+      block.start = newStart;
+    }
+    for (const bookmark of project.bookmarks ?? []) bookmark.beat = map(bookmark.beat);
+    for (const { item } of allObjects(this.objects)) {
+      const object = item as { b: number; tb?: number; d?: number };
+      const b = object.b;
+      object.b = map(b);
+      if (typeof object.tb === 'number') object.tb = map(object.tb);
+      // (a wall's length: to where its end was)
+      if ('w' in object && typeof object.d === 'number') object.d = Math.max(0, map(b + object.d) - object.b);
+    }
+    for (const effect of project.effects ?? []) if (effect.custom !== true) this.regenerate(effect);
+    this.noteVersion++;
+    this.version++;
+    this.dirty = true;
+    this.rebuildPreview(true);
+    this.emit('clips');
+    this.setStatus(tr('События после доли {0} оставлены на своих местах в песне', Math.round(from * 1000) / 1000));
+  }
+
+  /** The grid the timeline puts events on when it isn't the chosen one (seen from far: a coarser one,
+   *  the one whose lines show); null: the chosen one. */
+  viewSnap: number | null = null;
 
   snapBeat(beat: number) {
     return this.snap <= 0 ? beat : Math.round(beat / this.snap) * this.snap;
@@ -524,6 +650,12 @@ export class Editor {
       converted++;
     }
     if (converted > 0) this.dirty = true;
+    // the tempo changes: events of their own on the timeline (from the file when the project has none)
+    if (!this.project.raw.some((event) => event.type === BPM_EVENT_TYPE)) {
+      for (const change of readBpmChanges(fileText)) this.project.raw.push({ id: newId('r'), beat: change.beat, type: BPM_EVENT_TYPE, value: 0, floatValue: change.bpm });
+    }
+    this.timingKey = '';
+    this.syncTiming(false);
     await this.findGeometryRings();
     this.buildRows();
     this.rebuildPreview(true);
@@ -568,6 +700,14 @@ export class Editor {
       void computeSpectrogram(buffer).then((spectrogram) => {
         if (this.map !== map) return;
         this.spectrogram = spectrogram;
+        // (the effects following the sound: made now that it's heard)
+        const sounding = (this.project?.effects ?? []).filter((effect) => effect.kind === 'sound');
+        if (sounding.length > 0) {
+          for (const effect of sounding) this.regenerate(effect);
+          this.version++;
+          this.rebuildPreview(true);
+          this.emit('clips');
+        }
         this.emit('time');
       });
     }
@@ -955,7 +1095,7 @@ export class Editor {
     if (this.zoomInfo.length > 0 || this.ringBlocks.some((block) => block.kind === 'zoom')) rows.push({ kind: 'poses', key: 'zoomposes', label: 'Зум колец', depth: 0, ring: 'zoom' });
     if (this.lightInfo.some((light) => light.moving) || this.ringBlocks.some(isLasers)) rows.push({ kind: 'poses', key: 'laserposes', label: 'Лазеры', depth: 0, ring: 'lasers' });
     const rawTypes = [...new Set(project.raw.map((event) => event.type))].sort((a, b) => a - b);
-    for (const type of [8, 9, 12, 13, 5]) if (!rawTypes.includes(type)) rawTypes.push(type);
+    for (const type of [8, 9, 12, 13, 5, BPM_EVENT_TYPE]) if (!rawTypes.includes(type)) rawTypes.push(type);
     for (const type of rawTypes.sort((a, b) => a - b)) rows.push({ kind: 'raw', key: `r${String(type)}`, type, label: otherEventName(type), depth: 0 });
     this.rows = rows;
   }
@@ -1590,6 +1730,7 @@ export class Editor {
 
   /** After a change: redraw, preview again. */
   changed(rebuildNow = false) {
+    this.syncTiming(true);
     this.version++;
     this.dirty = true;
     this.previewExtra = null;
@@ -1644,6 +1785,7 @@ export class Editor {
     project.removedTypes = data.removedTypes ?? {};
     project.clips = data.clips;
     project.raw = data.raw;
+    this.syncTiming(false);
     project.effects = data.effects ?? [];
     // (the events their settings make: made again — they aren't in the snapshot)
     for (const effect of project.effects) if (effect.custom !== true) this.regenerate(effect);
@@ -2332,6 +2474,8 @@ export class Editor {
       secondsPerBeat: 60 / this.songBpm,
       ringCount: (name) => (name === '' ? Math.max(1, ...systems.map((system) => system.rings)) : (systems.find((system) => system.name === name)?.rings ?? 1)),
       itemsOf: (target) => this.effectItemsOf(target),
+      ...(this.spectrogram === null ? {} : { sound: this.spectrogram }),
+      beatToSeconds: (beat) => this.beatToSeconds(beat),
     };
   }
 
@@ -3055,6 +3199,39 @@ export class Editor {
   }
 
   /** Puts objects in (one undo step); they become the selection. */
+  /** The notes the generator made last (so "another" puts its next pattern in their place). */
+  private generated: { beat: number; red: number; blue: number; index: number; ids: string[] } | null = null;
+
+  /**
+   * So many red and blue notes made up at the cursor's beat (note-generator): fitting the notes before
+   * them, the notes of those colours there put aside. `another`: the next pattern in place of the one
+   * made last (the same undo step).
+   */
+  generateNotes(red: number, blue: number, another: boolean) {
+    const beat = this.snapBeat(this.playhead());
+    const last = this.generated;
+    const again = another && last !== null && Math.abs(last.beat - beat) < 1e-6 && last.red === red && last.blue === blue && last.ids.some((id) => this.objectById(id) !== undefined);
+    const madeBefore = new Set(again ? last.ids : []);
+    const notes = this.objects.notes.filter((note) => !madeBefore.has(note.id));
+    const patterns = generatePatterns({ beat, red, blue, notes, bombs: this.objects.bombs });
+    if (patterns.length === 0) {
+      this.setStatus(tr('Нет подходящего паттерна на доле {0}', Math.round(beat * 1000) / 1000));
+      return;
+    }
+    const index = again ? (last.index + 1) % patterns.length : 0;
+    if (!again) this.noteCheckpoint();
+    // (the notes of the colours made, at the beat — and the pattern made before — out)
+    const making = new Set<number>([...(red > 0 ? [0] : []), ...(blue > 0 ? [1] : [])]);
+    const out = new Set([...madeBefore, ...this.objects.notes.filter((note) => Math.abs(note.b - beat) < 1e-6 && making.has(note.c)).map((note) => note.id)]);
+    this.removeObjects(out);
+    const made = patterns[index]!.map((item) => ({ id: newId('n'), b: beat, x: item.x, y: item.y, c: item.c, d: item.d, a: 0 }));
+    this.objects.notes.push(...made);
+    this.noteSelection = new Set(made.map((note) => note.id));
+    this.generated = { beat, red, blue, index, ids: made.map((note) => note.id) };
+    this.notesChanged();
+    this.setStatus(tr('Ноты на доле {0}: вариант {1} из {2}', Math.round(beat * 1000) / 1000, index + 1, patterns.length));
+  }
+
   addObjects(items: { kind: ObjectKind; item: MapObjects[ObjectKind][number] }[], select = true) {
     if (items.length === 0) return;
     this.noteCheckpoint();
@@ -3140,8 +3317,22 @@ export class Editor {
 
   /** The arrows' direction for new notes — and the selected notes' too. */
   setNoteDirection(direction: number) {
-    this.noteTool = { ...this.noteTool, kind: this.noteTool.kind === 'bomb' || this.noteTool.kind === 'wall' ? 'red' : this.noteTool.kind, direction };
     const notes = this.objects.notes.filter((note) => this.noteSelection.has(note.id));
+    // a dot again: the dot turned an eighth on (the picked dots, else the tool's)
+    if (direction === 8 && (notes.length > 0 ? notes.every((note) => note.d === 8) : this.noteTool.direction === 8 && this.noteTool.kind !== 'bomb' && this.noteTool.kind !== 'wall')) {
+      if (notes.length > 0) {
+        this.updateObjects(notes.map((note) => note.id), (kind, item) => {
+          if (kind === 'notes') (item as { a: number }).a = ((((item as { a: number }).a ?? 0) + 45) % 360 + 360) % 360;
+        });
+        this.setStatus(tr('Точка повёрнута на {0}°', (((notes[0]!.a ?? 0) % 360) + 360) % 360));
+      } else {
+        this.noteTool = { ...this.noteTool, angle: ((this.noteTool.angle ?? 0) + 45) % 360 };
+        this.setStatus(tr('Точка повёрнута на {0}°', this.noteTool.angle ?? 0));
+        this.emit('selection');
+      }
+      return;
+    }
+    this.noteTool = { ...this.noteTool, kind: this.noteTool.kind === 'bomb' || this.noteTool.kind === 'wall' ? 'red' : this.noteTool.kind, direction, ...(direction === 8 ? { angle: 0 } : {}) };
     if (notes.length > 0) this.updateObjects(notes.map((note) => note.id), (kind, item) => {
       if (kind === 'notes') (item as { d: number }).d = direction;
     });
@@ -3222,7 +3413,8 @@ export class Editor {
           this.shownNotes = key;
           this.preview.setObjects(show ? engineObjects(this.objects, this.toSong) : null);
         }
-        this.preview.setEvents(settings().previewLights && !this.staticLights ? this.previewEvents() : this.dimLights());
+        // (the tempo changes aren't lights: the view has the timing on its own)
+        this.preview.setEvents(settings().previewLights && !this.staticLights ? this.previewEvents().filter((event) => event.type !== BPM_EVENT_TYPE) : this.dimLights());
       } catch (error) {
         console.error('[chroeditor] preview rebuild failed', error);
       }
@@ -3314,4 +3506,21 @@ async function readAutosaveIndex(folder: MapFolder, file: string): Promise<Autos
   } catch {
     return { next: 0, entries: [] };
   }
+}
+
+/** The event type the timeline keeps the tempo changes as (v2 maps' own; v3: written as bpmEvents). */
+export const BPM_EVENT_TYPE = 100;
+
+/** The first beat where two timings part (null: the same throughout). */
+function firstTimingChange(a: readonly { jsonTime: number; bpm: number }[], b: readonly { jsonTime: number; bpm: number }[], songBpm: number): number | null {
+  const toSongA = createBpmConverter(a as never, songBpm);
+  const toSongB = createBpmConverter(b as never, songBpm);
+  const beats = [...new Set([0, ...a.map((event) => event.jsonTime), ...b.map((event) => event.jsonTime)])].sort((x, y) => x - y);
+  for (let i = 0; i < beats.length; i++) {
+    const at = beats[i]!;
+    const next = beats[i + 1] ?? at + 1;
+    // (the same pace there: the same right after it)
+    if (Math.abs(toSongA(next) - toSongB(next)) > 1e-6 || Math.abs(toSongA(at) - toSongB(at)) > 1e-6) return at;
+  }
+  return null;
 }

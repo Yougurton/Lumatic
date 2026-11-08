@@ -30,7 +30,7 @@ const OTHER_NAMES: Record<number, string> = {
   41: 'Спец. 41',
   42: 'Спец. 42',
   43: 'Спец. 43',
-  100: 'BPM',
+  100: 'Смена BPM',
 };
 
 /** The environment's own names for its light groups (as its data has them), said in Russian. */

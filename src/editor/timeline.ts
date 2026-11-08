@@ -4,7 +4,7 @@ import { ringStepsDialog } from './ring-steps-dialog';
 import { laserDialog, lastLaserMove } from './laser-dialog';
 import { ringGlitchDialog } from './ring-glitch-dialog';
 import { resolveRgb } from './bake';
-import { isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
+import { BPM_EVENT_TYPE, isLightRow, RING_EVENT_TYPE, ZOOM_EVENT_TYPE, type Editor, type Row, type ShownClip, type SortKey } from './editor';
 import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { setGroupSync } from './presets';
@@ -637,6 +637,7 @@ export class Timeline {
       }
       // grid
       this.drawGrid(first, last, this.rowsTop, this.rowsBottom);
+      this.drawBoostLines(first, last, this.rowsTop, this.rowsBottom);
       // clips and events
       for (const { row, top, height: h } of this.layout()) {
         if (top + h < this.rowsTop || top > this.rowsBottom) continue;
@@ -765,14 +766,37 @@ export class Timeline {
     return 128;
   }
 
+  /**
+   * The grid events go to on the timeline: the chosen one — or, seen from so far that its lines would
+   * be closer than 8 px, the finest of a beat, 2, 4 (a bar), 8… that isn't: what's seen is what's hit.
+   */
+  gridStep(): number {
+    const snap = this.editor.snap;
+    if (snap <= 0) return 0;
+    if (snap * this.pxPerBeat >= 8) return snap;
+    for (const step of [1, 2, 4, 8, 16, 32, 64, 128, 256]) if (step >= snap && step * this.pxPerBeat >= 8) return step;
+    return 512;
+  }
+
+  /** A beat on the timeline's grid (see gridStep). */
+  private snapView(beat: number) {
+    const step = this.gridStep();
+    return step <= 0 ? beat : Math.round(beat / step) * step;
+  }
+
   private drawGrid(first: number, last: number, top: number, bottom: number) {
     const ctx = this.context;
     const snap = this.editor.snap;
-    if (snap > 0 && snap * this.pxPerBeat >= 8) {
+    const step = this.gridStep();
+    // (the grid in use when it isn't the chosen one: shown by the grid's own badge)
+    this.editor.viewSnap = step > 0 && Math.abs(step - snap) > 1e-9 ? step : null;
+    if (step > 0 && step < 1) {
       ctx.fillStyle = 'rgba(255,255,255,0.03)';
-      for (let beat = Math.floor(first / snap) * snap; beat <= last; beat += snap) ctx.fillRect(this.beatToX(beat), top, 1, bottom - top);
+      for (let beat = Math.floor(first / step) * step; beat <= last; beat += step) ctx.fillRect(this.beatToX(beat), top, 1, bottom - top);
     }
-    for (let beat = first; beat <= last; beat++) {
+    // the beats (every so many of them, seen from far) and the bars brighter
+    const every = Math.max(1, step);
+    for (let beat = Math.floor(first / every) * every; beat <= last; beat += every) {
       ctx.fillStyle = beat % 4 === 0 ? 'rgba(255,255,255,0.13)' : 'rgba(255,255,255,0.06)';
       ctx.fillRect(this.beatToX(beat), top, 1, bottom - top);
     }
@@ -1342,18 +1366,46 @@ export class Timeline {
         ctx.stroke();
       }
     }
+    // (the boost: on — a filled diamond, off — a hollow one; one that changes nothing, red-rimmed)
+    const boost = row.type === 5 ? this.boostStates() : null;
     for (const event of events) {
       const x = this.beatToX(event.beat);
       if (x < -10 || x > this.width + 10) continue;
       const selected = this.editor.selection.has(event.id);
-      ctx.fillStyle = selected ? '#ffffff' : `hsl(${String(hue)} 70% 60%)`;
+      const color = selected ? '#ffffff' : `hsl(${String(hue)} 70% 60%)`;
       const cy = top + height / 2;
       ctx.beginPath();
       ctx.moveTo(x, cy - 6);
       ctx.lineTo(x + 5, cy);
       ctx.lineTo(x, cy + 6);
       ctx.lineTo(x - 5, cy);
-      ctx.fill();
+      ctx.closePath();
+      const state = boost?.get(event.id);
+      if (state !== undefined && !state.on) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+      if (state?.idle === true) {
+        ctx.strokeStyle = '#ff5a5a';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(x, cy, 8, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    // the tempo changes: the BPM beside each
+    if (row.type === BPM_EVENT_TYPE) {
+      ctx.font = '600 10px system-ui, sans-serif';
+      ctx.fillStyle = '#e8ffe8';
+      for (const event of events) {
+        const x = this.beatToX(event.beat);
+        if (x < -40 || x > this.width + 10) continue;
+        ctx.fillText(`${String(Math.round(event.floatValue * 100) / 100)} BPM`, x + 7, top + height / 2 + 4);
+      }
     }
     // the lasers' speed: its number beside each speed event (where there's room for it)
     if (row.type === 12 || row.type === 13) {
@@ -1472,6 +1524,38 @@ export class Timeline {
     if (before !== undefined && before.block !== block) fitRingBlock(before.block);
     editor.changed();
     editor.setStatus(tr('Поза на доле {0}: переход {1} дол.', round3(to), pose.duration));
+  }
+
+  /** Each boost event: on or off, and whether it changes nothing (the boost already so before it). */
+  private boostStates() {
+    const events = (this.editor.project?.raw ?? []).filter((event) => event.type === 5).sort((a, b) => a.beat - b.beat);
+    const out = new Map<string, { on: boolean; idle: boolean }>();
+    let on = false;
+    for (const event of events) {
+      const next = event.value === 1;
+      out.set(event.id, { on: next, idle: next === on });
+      on = next;
+    }
+    return out;
+  }
+
+  /** A thin line down the timeline where the boost goes on or off. */
+  private drawBoostLines(first: number, last: number, top: number, bottom: number) {
+    const ctx = this.context;
+    const states = this.boostStates();
+    for (const event of this.editor.project?.raw ?? []) {
+      if (event.type !== 5 || event.beat < first - 1 || event.beat > last + 1) continue;
+      const state = states.get(event.id);
+      if (state === undefined || state.idle) continue;
+      ctx.fillStyle = state.on ? 'rgba(255,205,80,0.45)' : 'rgba(255,205,80,0.22)';
+      ctx.fillRect(Math.round(this.beatToX(event.beat)), top, 1, bottom - top);
+    }
+    // (and where the tempo changes)
+    ctx.fillStyle = 'rgba(120,255,160,0.4)';
+    for (const event of this.editor.project?.raw ?? []) {
+      if (event.type !== BPM_EVENT_TYPE || event.beat < first - 1 || event.beat > last + 1) continue;
+      ctx.fillRect(Math.round(this.beatToX(event.beat)), top, 1, bottom - top);
+    }
   }
 
   private drawSpectrogram(top: number, height: number) {
@@ -1649,7 +1733,7 @@ export class Timeline {
     const editor = this.editor;
     const info = editor.clipboardInfo();
     if (info === null) return;
-    const at = editor.snapBeat(Math.max(0, this.xToBeat(x)));
+    const at = this.snapView(Math.max(0, this.xToBeat(x)));
     const row = this.rowAt(y)?.row ?? null;
     const target = row !== null && (isLightRow(row) || row.kind === 'raw') ? row : null;
     const at3 = String(Math.round(at * 1000) / 1000);
@@ -2371,7 +2455,7 @@ export class Timeline {
       }
       if (onSong && event.shiftKey && event.button === 0) {
         // Shift + drag over the ruler or the spectrogram: a stretch of the song
-        const from = this.editor.snapBeat(Math.max(0, beat));
+        const from = this.snapView(Math.max(0, beat));
         this.drag = { kind: 'range', from };
         this.editor.setSongRange({ start: from, end: from });
         return;
@@ -2441,13 +2525,16 @@ export class Timeline {
           const project = this.editor.project;
           if (project === null) return;
           this.editor.checkpoint();
-          const raw: RawEvent = { id: newId('r'), beat: this.editor.snapBeat(beat), type: item.row.type, value: item.row.type === 5 ? 1 : 0, floatValue: 1 };
+          const at = this.snapView(beat);
+          // (the boost: switched the other way from how it is just before)
+          // (a tempo change: the tempo there to start with — changed on the right)
+          const raw: RawEvent = { id: newId('r'), beat: at, type: item.row.type, value: item.row.type === 5 ? (this.editor.boostAt(at - 1e-6) ? 0 : 1) : 0, floatValue: item.row.type === BPM_EVENT_TYPE ? this.editor.bpmAt(at) : 1 };
           project.raw.push(raw);
           this.editor.selection = new Set([raw.id]);
           this.editor.changed();
           return;
         }
-        const from = this.editor.snapBeat(beat);
+        const from = this.snapView(beat);
         this.drag = { kind: 'create', row: item.row, from, to: from, x0: x, moved: false };
         this.needsDraw = true;
         return;
@@ -2549,17 +2636,17 @@ export class Timeline {
       }
       const beat = this.xToBeat(x);
       const free = event.altKey && drag.kind !== 'move';
-      const snap = (value: number) => (free ? value : this.editor.snapBeat(value));
+      const snap = (value: number) => (free ? value : this.snapView(value));
       if (drag.kind === 'pose') {
         if (Math.abs(beat - drag.grab) * this.pxPerBeat > 3) drag.moved = true;
         drag.to = Math.max(0, snap(drag.origin + beat - drag.grab));
         this.needsDraw = true;
       } else if (drag.kind === 'bookmark') {
         if (Math.abs(beat - drag.grab) * this.pxPerBeat > 3) drag.moved = true;
-        const to = event.altKey ? drag.origin + beat - drag.grab : this.editor.snapBeat(drag.origin + beat - drag.grab);
+        const to = event.altKey ? drag.origin + beat - drag.grab : this.snapView(drag.origin + beat - drag.grab);
         if (drag.moved) this.editor.updateBookmark(drag.id, (item) => (item.beat = Math.max(0, to)), false);
       } else if (drag.kind === 'range') {
-        this.editor.setSongRange({ start: drag.from, end: event.altKey ? Math.max(0, beat) : this.editor.snapBeat(Math.max(0, beat)) });
+        this.editor.setSongRange({ start: drag.from, end: event.altKey ? Math.max(0, beat) : this.snapView(Math.max(0, beat)) });
       } else if (drag.kind === 'spectro') {
         const height = Math.round(drag.height - (y - drag.grabY));
         this.setLook({ height: height < 16 ? 0 : Math.min(this.height - NAV_H - RULER_H - 60, height) });
@@ -2697,7 +2784,7 @@ export class Timeline {
       if (drag === null) return;
       if (drag.kind === 'swipe') {
         // (a click: the song goes there; a swipe: it lands on the grid)
-        this.editor.seek(Math.max(0, this.editor.snapBeat(drag.moved ? this.editor.playhead() : drag.clickBeat)));
+        this.editor.seek(Math.max(0, this.snapView(drag.moved ? this.editor.playhead() : drag.clickBeat)));
         return;
       }
       if (drag.kind === 'spectro') this.renderHeaders(true);

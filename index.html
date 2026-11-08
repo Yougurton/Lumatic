@@ -451,6 +451,22 @@
         height: 21px;
         font-size: 12px;
       }
+      .np-generator {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+        font-size: 11px;
+      }
+      .np-generator input {
+        width: 40px;
+        background: #121318;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 2px 4px;
+      }
       .np-side {
         display: flex;
         flex-direction: column;
@@ -2325,6 +2341,14 @@
         display: flex;
         gap: 3px;
         margin-top: 4px;
+      }
+      .ins-hue-invert {
+        margin-top: 6px;
+        width: 100%;
+      }
+      .ins-hue-invert.active {
+        border-color: var(--accent, #7aa2ff);
+        color: #fff;
       }
       .ins-hue-preview span {
         flex: 1;

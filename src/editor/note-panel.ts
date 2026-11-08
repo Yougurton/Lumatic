@@ -222,8 +222,46 @@ export class NotePanel {
     } else {
       side.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'W/A/S/D, F — точка; две сразу — диагональ. У выделенных нот меняется тоже.' }));
     }
-    this.tools.replaceChildren(row, Object.assign(document.createElement('div'), { className: 'np-row' }));
-    this.tools.lastElementChild!.append(pad, side);
+    this.tools.replaceChildren(row, Object.assign(document.createElement('div'), { className: 'np-row' }), this.generatorRow());
+    this.tools.lastElementChild!.previousElementSibling!.append(pad, side);
+  }
+
+  /** How many notes of each hand the generator makes at the cursor's beat. */
+  private generateRed = 1;
+  private generateBlue = 1;
+
+  /** The note generator: so many red and blue notes at the cursor, made to fit what's before them —
+   *  "another" for the next pattern in their place. */
+  private generatorRow() {
+    const editor = this.editor;
+    const box = document.createElement('div');
+    box.className = 'np-generator';
+    const count = (value: number, color: string, set: (next: number) => void) => {
+      const input = Object.assign(document.createElement('input'), { type: 'number', min: '0', max: '4', step: '1', value: String(value) });
+      input.style.borderColor = color;
+      input.title = 'Сколько нот этой руки (0–4)';
+      input.addEventListener('change', () => set(Math.max(0, Math.min(4, Math.round(Number(input.value) || 0)))));
+      return input;
+    };
+    const css = (rgb: readonly number[]) => `rgb(${rgb.slice(0, 3).map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})`;
+    const make = document.createElement('button');
+    make.type = 'button';
+    make.textContent = '🎲 Сгенерировать';
+    make.title = 'Ноты на доле курсора по парности и правилам: каждая рука — в другую сторону от своей прошлой ноты, на своей стороне, без перекрёстков и закрытого обзора';
+    make.addEventListener('click', () => editor.generateNotes(this.generateRed, this.generateBlue, false));
+    const other = document.createElement('button');
+    other.type = 'button';
+    other.textContent = '↻ Другой';
+    other.title = 'Другой подходящий паттерн на их месте';
+    other.addEventListener('click', () => editor.generateNotes(this.generateRed, this.generateBlue, true));
+    box.append(
+      Object.assign(document.createElement('span'), { className: 'nm-dim', textContent: 'Генератор:' }),
+      count(this.generateRed, css(editor.preview.colors.leftNote), (next) => (this.generateRed = next)),
+      count(this.generateBlue, css(editor.preview.colors.rightNote), (next) => (this.generateBlue = next)),
+      make,
+      other,
+    );
+    return box;
   }
 
   private resize() {

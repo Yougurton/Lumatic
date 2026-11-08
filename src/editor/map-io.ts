@@ -155,10 +155,20 @@ export function writeDifficulty(
   if (bookmarks !== undefined && version !== '4') writeBookmarks(root, bookmarks, version === '2');
   if (rings !== undefined && version !== '4') writeRingChroma(root, rings.enhancements, rings.animations, version === '2');
   const sorted = [...events].sort((a, b) => a.beat - b.beat);
+  // (the tempo changes: v2's own events of type 100; v3's bpmEvents)
+  const tempo = sorted.filter((event) => event.type === 100 && (event.floatValue ?? 0) > 0);
   if (version === '2') {
     root._events = sorted.map(v2Event);
+    // (the old way of writing them, read in as these events: not twice)
+    const custom = root._customData as Record<string, unknown> | undefined;
+    if (custom !== undefined && tempo.length > 0) {
+      delete custom._BPMChanges;
+      delete custom._bpmChanges;
+      if (Object.keys(custom).length === 0) delete root._customData;
+    }
   } else if (version === '3') {
-    root.basicBeatmapEvents = sorted.filter((event) => event.type !== 5).map(v3Event);
+    root.bpmEvents = tempo.map((event) => ({ b: event.beat, m: event.floatValue }));
+    root.basicBeatmapEvents = sorted.filter((event) => event.type !== 5 && event.type !== 100).map(v3Event);
     root.colorBoostBeatmapEvents = sorted.filter((event) => event.type === 5).map((event) => ({ b: event.beat, o: event.value === 1 }));
   } else {
     throw new Error('v4 maps can be opened, but saving them is not supported yet');
@@ -335,4 +345,21 @@ export function transformProjectBeats(project: Project, beat: (b: number) => num
     .map((block) => ({ ...block, start: beat(block.start), end: beat(block.end), poses: block.poses.map((pose) => ({ ...pose, beat: length(pose.beat), duration: length(pose.duration), delay: length(pose.delay) })) }))
     .filter((block) => block.end > 0);
   return copy;
+}
+
+/** The tempo changes written in a difficulty: v3's bpmEvents, v2's events of type 100 (or its
+ *  _BPMChanges). */
+export function readBpmChanges(text: string): { beat: number; bpm: number }[] {
+  if (text === '') return [];
+  try {
+    const root = JSON.parse(text) as Record<string, unknown>;
+    const list = (value: unknown) => (Array.isArray(value) ? (value as Record<string, unknown>[]) : []);
+    const v3 = list(root.bpmEvents).map((event) => ({ beat: Number(event.b ?? 0), bpm: Number(event.m ?? 0) }));
+    const v2 = list(root._events).filter((event) => event._type === 100).map((event) => ({ beat: Number(event._time ?? 0), bpm: Number(event._floatValue ?? 0) }));
+    const custom = (root._customData ?? {}) as Record<string, unknown>;
+    const old = list(custom._BPMChanges ?? custom._bpmChanges).map((event) => ({ beat: Number(event._time ?? 0), bpm: Number(event._BPM ?? event._bpm ?? 0) }));
+    return [...v3, ...v2, ...(v2.length === 0 ? old : [])].filter((change) => Number.isFinite(change.beat) && change.bpm > 0).sort((a, b) => a.beat - b.beat);
+  } catch {
+    return [];
+  }
 }

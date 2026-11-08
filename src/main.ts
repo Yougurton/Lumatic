@@ -185,13 +185,20 @@ const gridBadge = byId('grid-badge');
 const gridValue = gridBadge.querySelector<HTMLElement>('.gb-value')!;
 let shownGrid = Number.NaN;
 let gridFade = 0;
+let shownView: number | null = null;
 function showGrid() {
   const grid = editor.snap;
-  if (grid === shownGrid) return;
+  const view = editor.viewSnap;
+  if (grid === shownGrid && view === shownView) return;
   const first = Number.isNaN(shownGrid);
+  const changed = grid !== shownGrid;
   shownGrid = grid;
-  gridValue.textContent = GRIDS.find(([value]) => Math.abs(value - grid) < 1e-9)?.[1] ?? (grid > 0 ? beatsLabel(grid) : tr('нет'));
-  if (first) return;
+  shownView = view;
+  const name = (value: number) => GRIDS.find(([known]) => Math.abs(known - value) < 1e-9)?.[1] ?? (value > 0 ? beatsLabel(value) : tr('нет'));
+  // (the timeline seen from far: events go on the grid that shows there)
+  gridValue.textContent = view === null ? name(grid) : `${name(grid)} → ${name(view)}`;
+  gridBadge.title = view === null ? '' : tr('Таймлайн отдалён: события ставятся и двигаются по видимой сетке ({0})', name(view));
+  if (first || !changed) return;
   // (the drums of beats everywhere step by the grid: drawn again)
   editor.emit('grid');
   gridBadge.classList.add('changed');

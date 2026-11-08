@@ -1,3 +1,4 @@
+import { BPM_EVENT_TYPE } from './editor';
 import type { Editor } from './editor';
 import type { MapIssue } from './checks';
 import { DIR_ANGLE, MIRROR_DIR, objectSpan, strobeWalls, wallFootprint, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
@@ -157,6 +158,18 @@ export class NotesLanes {
     // (the middle: between the left hand's columns and the right hand's)
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(0, this.laneTop(2) - 1, host.width, 1);
+    // the tempo changes (set on the lights' timeline): a line down the lanes, the BPM at its top
+    ctx.font = '600 10px system-ui, sans-serif';
+    for (const event of editor.project?.raw ?? []) {
+      if (event.type !== BPM_EVENT_TYPE) continue;
+      const x = Math.round(host.beatToX(event.beat));
+      if (x < host.left - 60 || x > host.width + 10) continue;
+      ctx.fillStyle = 'rgba(120,255,160,0.55)';
+      ctx.fillRect(x, this.laneTop(0), 1, this.laneTop(3) + h - this.laneTop(0));
+      ctx.fillStyle = '#b8ffd0';
+      ctx.fillText(`${String(Math.round(event.floatValue * 100) / 100)} BPM`, x + 4, this.laneTop(0) + 11);
+    }
+    void noteColor;
   }
 
   /** The objects over the lanes (and the grid drawn between). */

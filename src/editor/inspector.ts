@@ -1,4 +1,4 @@
-import type { Editor } from './editor';
+import { BPM_EVENT_TYPE, type Editor } from './editor';
 import { tr } from './i18n';
 import { openColorPick, pickFromScreen } from './color-pick';
 import { setGroupSync } from './presets';
@@ -10,6 +10,7 @@ import { isZoom, type RingBlock, type RingSpin } from './rings';
 import { RingEditor } from './ring-editor';
 import { beatDrumStep, gridSelect, numberDrum, wheelSlider } from './grids';
 import { resolveRgb, shiftHue } from './bake';
+import type { SoundMode } from './sound-effect';
 import { KIND_NAMES, mixColor, waveLength, waveSteps, type Direction, type Effect, type EffectParams, type FireShape, type StrobePattern } from './effects';
 import { findGroup, groupLights, type ClipColor, type EndMode, type LightClip, type RawEvent, type Rgb, type StartMode } from './model';
 
@@ -380,7 +381,7 @@ export class Inspector {
     }
     // the colour(s)
     root.append(this.section('Цвет', this.colorPicker(p.color, (color) => change((params) => (params.color = color)), effect.start)));
-    const secondLabel = effect.kind === 'strobe' ? ' Чередовать со вторым цветом' : effect.kind === 'twinkle' ? ' Случайные цвета до второго' : effect.kind === 'fire' ? ' Пламя колеблется до второго цвета' : ' Градиент по элементам';
+    const secondLabel = effect.kind === 'strobe' ? ' Чередовать со вторым цветом' : effect.kind === 'twinkle' ? ' Случайные цвета до второго' : effect.kind === 'fire' ? ' Пламя колеблется до второго цвета' : effect.kind === 'sound' ? ' Второй цвет (громко или по элементам)' : ' Градиент по элементам';
     const second = this.check(secondLabel, p.color2 !== null, (on) => change((params) => (params.color2 = on ? { ...params.color, ref: params.color.ref === 'left' ? 'right' : 'left', rgb: undefined } : null)));
     root.append(second);
     if (p.color2 !== null) {
@@ -490,6 +491,40 @@ export class Inspector {
         reroll.addEventListener('click', () => change((params) => (params.seed = Math.floor(Math.random() * 1e6))));
         root.append(reroll);
       }
+    }
+    if (effect.kind === 'sound') {
+      // following the song: what it shows, how loud counts, which frequencies, how it settles
+      const modes: [SoundMode, string, string][] = [
+        ['eq', 'Эквалайзер', 'Первые лампы — низкие частоты, последние — высокие; яркость — их громкость'],
+        ['meter', 'Индикатор', 'Чем громче, тем больше ламп горит'],
+        ['level', 'По громкости', 'Все лампы — по громкости (с задержкой — волна)'],
+      ];
+      const mode = p.soundMode ?? 'eq';
+      root.append(this.section('По звуку', this.buttons(modes, mode, (value) => change((params) => (params.soundMode = value)))));
+      if (p.color2 !== null) {
+        const by: ['level' | 'item', string, string][] = [
+          ['level', 'По громкости', 'Тихо — первый цвет, громко — второй'],
+          ['item', 'По элементам', 'Первые лампы — первый цвет, последние — второй'],
+        ];
+        root.append(this.section('Второй цвет', this.buttons(by, p.soundColorBy ?? 'level', (value) => change((params) => (params.soundColorBy = value)))));
+      }
+      root.append(this.slider('Чувствительность', p.gain ?? 1, 0.25, 4, 0.05, (value) => change((params) => (params.gain = value))));
+      root.append(this.drumField('Частоты от, Гц', p.lowHz ?? 40, 10, { min: 20 }, (value) => change((params) => (params.lowHz = Math.max(20, Math.min((params.highHz ?? 12000) - 10, value))))));
+      root.append(this.drumField('Частоты до, Гц', p.highHz ?? 12000, 100, { min: 100 }, (value) => change((params) => (params.highHz = Math.max((params.lowHz ?? 40) + 10, Math.min(16000, value))))));
+      root.append(this.section('Точка каждые, долей', gridSelect(p.soundStep ?? 1 / 8, (value) => change((params) => (params.soundStep = value)), [8, 16])));
+      root.append(this.drumField('Затухает за, долей', p.release ?? 0.5, 0.125, { min: 0 }, (value) => change((params) => (params.release = Math.max(0, value)))));
+      if (mode === 'level') root.append(this.drumField('Следующая лампа позже на, долей (волна)', p.soundDelay ?? 0, 1 / 16, { min: 0 }, (value) => change((params) => (params.soundDelay = Math.max(0, value)))));
+      if (mode === 'meter') {
+        const falling = (p.peakFall ?? 0) > 0;
+        root.append(this.check(' Падающая верхняя лампа', falling, (on) => change((params) => (params.peakFall = on ? 2 : 0))));
+        if (falling) {
+          root.append(this.drumField('Падает до низа за, долей', p.peakFall ?? 2, 0.25, { min: 0.25 }, (value) => change((params) => (params.peakFall = Math.max(0.25, value)))));
+          const own = p.peakColor != null;
+          root.append(this.check(' Своим цветом', own, (on) => change((params) => (params.peakColor = on ? { ref: 'white', brightness: params.color.brightness } : null))));
+          if (own) root.append(this.section('Цвет верхней лампы', this.colorPicker(p.peakColor!, (color) => change((params) => (params.peakColor = color)), effect.start)));
+        }
+      }
+      root.append(this.note(this.editor.spectrogram === null ? tr('Песня ещё разбирается — эффект появится, как только будет готова её спектрограмма.') : tr('Громкость считается по самой песне: громкие места эффекта — полная яркость, тихие — темнота; чувствительность больше — ярче.')));
     }
     if (effect.kind === 'twinkle') {
       root.append(this.slider('Доля ламп за раз', p.density, 0.05, 1, 0.05, (value) => change((params) => (params.density = value))));
@@ -604,6 +639,12 @@ export class Inspector {
     const pickDirection = (value: 'random' | '0' | '1') => set('direction', value === 'random' ? undefined : Number(value));
     const note = (text: string) => this.root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: text }));
 
+    if (type === BPM_EVENT_TYPE) {
+      // a tempo change: the BPM from here on
+      this.root.append(this.numberField('BPM с этого места', first.floatValue, 1, (value) => editor.updateRaw(ids, (event) => (event.floatValue = Math.min(2000, Math.max(1, Math.round(value * 1000) / 1000))))));
+      note(tr('Песня в начале — {0} BPM. Сетка, время и спектрограмма идут по новому темпу с этой доли; в файл пишется как bpmEvents (v3) или событие 100 (v2).', Math.round(editor.songBpm * 1000) / 1000));
+      return;
+    }
     if (type === 12 || type === 13) {
       // laser speed: how fast, which way, from where (Chroma: lockRotation, speed, direction)
       const speed = typeof get('speed') === 'number' ? (get('speed') as number) : typeof get('preciseSpeed') === 'number' ? (get('preciseSpeed') as number) : first.value;
@@ -724,7 +765,7 @@ export class Inspector {
       preview.replaceChildren(
         ...Array.from({ length: count }, (_, k) => {
           const base = mixColor(p.color, p.color2, count <= 1 ? 0 : k / (count - 1), p.hsv, scheme);
-          const rgb = shiftHue(resolveRgb(base, scheme), shift + step * k);
+          const rgb = shiftHue(resolveRgb(base, scheme), shift + step * (p.hueInvert === true ? count - 1 - k : k));
           const swatch = document.createElement('span');
           swatch.style.background = toHex(rgb);
           return swatch;
@@ -773,6 +814,19 @@ export class Inspector {
       slider('Каждому следующему, °', step, -60, 60, hues(-60, 60), (value) => (step = value), (value) => change((params) => (params.hueStep = value))),
       preview,
     );
+    // (the base colour on the first item, or on the last)
+    const invert = document.createElement('button');
+    invert.type = 'button';
+    invert.className = `ins-hue-invert${p.hueInvert === true ? ' active' : ''}`;
+    invert.textContent = p.hueInvert === true ? '⇄ Исходный цвет — в конце' : '⇄ Исходный цвет — в начале';
+    invert.title = 'Перевернуть сдвиг: исходный цвет у последнего элемента (вспышки), а не у первого';
+    invert.addEventListener('click', () =>
+      change((params) => {
+        if (params.hueInvert === true) delete params.hueInvert;
+        else params.hueInvert = true;
+      }),
+    );
+    box.append(invert);
     drawPreview();
     return box;
   }

@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import {
   AmbientLight,
   BoxGeometry,
@@ -59,6 +60,8 @@ const BEHIND_M = 2.4;
 const LANE = 0.6;
 const WIDTH = LANE * 4;
 const NOTE = 0.5;
+/** The notes (and bombs, chains' links) drawn this much of their size: room between them to see by. */
+const NOTE_SCALE = 0.82;
 /** The beats shown ahead of the cursor and behind it. */
 let AHEAD = TRACK_M / METRES_PER_BEAT;
 let BEHIND = BEHIND_M / METRES_PER_BEAT;
@@ -316,12 +319,12 @@ export class NoteTrack {
     const z = (beat: number) => -beat * METRES_PER_BEAT;
     const matrix = new Matrix4();
     const quaternion = new Quaternion();
-    const one = new Vector3(1, 1, 1);
+    const one = new Vector3(NOTE_SCALE, NOTE_SCALE, NOTE_SCALE);
     const position = new Vector3();
     const axis = new Vector3(0, 0, 1);
-    const highlight = new Color(1, 0.88, 0.35);
+    // (picked: its own colour kept — a little lighter — and an outline round it; hovered: lighter)
     const lit = (color: Color, id: string) => {
-      if (picked.has(id)) color.lerp(highlight, 0.6);
+      if (picked.has(id)) color.lerp(new Color(1, 1, 1), 0.15);
       else if (this.hovered === id) color.lerp(new Color(1, 1, 1), 0.35);
       return color;
     };
@@ -441,11 +444,14 @@ export class NoteTrack {
       this.extras.add(mesh);
     }
     const outline: number[] = [];
-    const box = new EdgesGeometry(new BoxGeometry(NOTE + 0.07, NOTE + 0.07, NOTE + 0.07));
-    const corners = box.getAttribute('position');
-    for (const { kind, note } of heads) {
-      if (!picked.has(note.id) || kind !== 'notes') continue;
-      for (let i = 0; i < corners.count; i++) outline.push(corners.getX(i) + colX(note.x), corners.getY(i) + rowY(note.y), corners.getZ(i) + z(note.b));
+    // (two outlines a little apart: seen well whatever the note's colour)
+    for (const grow of [0.06, 0.1]) {
+      const size = NOTE * NOTE_SCALE + grow;
+      const corners = new EdgesGeometry(new BoxGeometry(size, size, size)).getAttribute('position');
+      for (const { kind, note } of heads) {
+        if (!picked.has(note.id) || kind !== 'notes') continue;
+        for (let i = 0; i < corners.count; i++) outline.push(corners.getX(i) + colX(note.x), corners.getY(i) + rowY(note.y), corners.getZ(i) + z(note.b));
+      }
     }
     if (outline.length > 0) {
       const geometry = new BufferGeometry();
@@ -834,9 +840,36 @@ export class NoteTrack {
         return;
       }
       if (event.button !== 0) return;
+      if (event.altKey) {
+        // Alt+click on a note (a bomb) further along: brought to where the cursor is
+        const far = this.objectAt(event.clientX, event.clientY);
+        if (far === null || (far.kind !== 'notes' && far.kind !== 'bombs')) return;
+        const beat = editor.snapBeat(editor.playhead());
+        editor.updateObjects([far.id], (_kind, item) => {
+          (item as { b: number }).b = beat;
+        });
+        editor.setStatus(tr('Нота перенесена на долю {0}', Math.round(beat * 1000) / 1000));
+        return;
+      }
       // (Shift / Ctrl: what's under the mouse, even behind the wall — as in ChroMapper)
       const adding = event.shiftKey || event.ctrlKey || event.metaKey;
       const hit = cell !== null && !adding ? this.cellObject(cell) : this.objectAt(event.clientX, event.clientY);
+      // a note of another colour or direction than the tool's, clicked: made the tool's note
+      const tool = editor.noteTool;
+      if (hit !== null && hit.kind === 'notes' && !adding && (tool.kind === 'red' || tool.kind === 'blue')) {
+        const note = editor.objectById(hit.id)?.item as MapNote | undefined;
+        const color = tool.kind === 'red' ? 0 : 1;
+        const angle = tool.direction === 8 ? (tool.angle ?? 0) : 0;
+        if (note !== undefined && (note.d !== tool.direction || note.c !== color || (tool.direction === 8 && note.a !== angle))) {
+          editor.updateObjects([hit.id], (_kind, item) => {
+            const target = item as MapNote;
+            target.d = tool.direction;
+            target.c = color;
+            target.a = angle;
+          });
+          return;
+        }
+      }
       if (hit === null && cell !== null && !adding) {
         this.drag = { kind: 'place', x: event.clientX, y: event.clientY, col: cell.col, row: cell.row };
         return;
@@ -904,7 +937,8 @@ export class NoteTrack {
       } else if (tool.kind === 'bomb') editor.addObjects([{ kind: 'bombs', item: { id: newId('n'), b: beat, x: drag.col, y: drag.row } }], false);
       else {
         if (dir !== null) editor.noteTool = { ...tool, direction: dir };
-        editor.addObjects([{ kind: 'notes', item: { id: newId('n'), b: beat, x: drag.col, y: drag.row, c: tool.kind === 'red' ? 0 : 1, d: dir ?? tool.direction, a: 0 } }], false);
+        const direction = dir ?? tool.direction;
+        editor.addObjects([{ kind: 'notes', item: { id: newId('n'), b: beat, x: drag.col, y: drag.row, c: tool.kind === 'red' ? 0 : 1, d: direction, a: direction === 8 ? (tool.angle ?? 0) : 0 } }], false);
       }
     });
     canvas.addEventListener(

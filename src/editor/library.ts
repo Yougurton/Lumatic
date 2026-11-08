@@ -7,6 +7,7 @@ import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectK
 import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
+import type { SoundSource } from './sound-effect';
 import { newRingBlock, newSpinBlock, newZoomBlock } from './rings';
 
 /**
@@ -51,7 +52,35 @@ const EFFECTS: EffectCard[] = [
   { name: 'Вибрато', hint: 'Свет ровно качается — тише и обратно, как вибрато в музыке; лампы чуть вразнобой', kind: 'fire', length: 4, params: () => ({ shape: 'steady', wobble: 'vibrato', tremor: 0.6, rate: 0.5, vibratoLag: 0.15, vibratoIn: 1, vibratoOut: 1, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
   { name: 'Разгорается', hint: 'Медленно нарастает, дрожа, как разгорающийся огонь', kind: 'fire', length: 8, params: () => ({ shape: 'rise', floor: 0.1, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'stay' }) },
   { name: 'Догорает', hint: 'Медленно затухает, дрожа, как догорающий огонь', kind: 'fire', length: 8, params: () => ({ shape: 'fall', floor: 0, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
+  { name: 'Эквалайзер', hint: 'По звуку песни: первые лампы — низкие частоты, последние — высокие; яркость — их громкость', kind: 'sound', length: 4, params: ({ other }) => ({ soundMode: 'eq', soundStep: 1 / 16, release: 0.4, gain: 1, lowHz: 40, highHz: 12000, color2: other, soundColorBy: 'level', startMode: 'on', endMode: 'off' }) },
+  { name: 'Индикатор громкости', hint: 'По звуку песни: чем громче, тем больше ламп горит; верхняя медленно опускается', kind: 'sound', length: 4, params: ({ other }) => ({ soundMode: 'meter', soundStep: 1 / 16, release: 0.3, peakFall: 2, gain: 1, lowHz: 40, highHz: 12000, color2: other, soundColorBy: 'item', startMode: 'on', endMode: 'off' }) },
+  { name: 'Свет по громкости', hint: 'По звуку песни: все лампы светят ярче, когда громче', kind: 'sound', length: 4, params: () => ({ soundMode: 'level', soundStep: 1 / 16, release: 0.5, gain: 1, lowHz: 40, highHz: 12000, soundDelay: 0, startMode: 'on', endMode: 'off' }) },
+  { name: 'Волна под звук', hint: 'По звуку песни: яркость по громкости, на следующие лампы — с задержкой', kind: 'sound', length: 4, params: () => ({ soundMode: 'level', soundStep: 1 / 16, release: 0.5, gain: 1, lowHz: 40, highHz: 12000, soundDelay: 0.125, startMode: 'on', endMode: 'off' }) },
 ];
+
+/** A made-up song for the sketches of the effects by sound: a kick on the beats, a hat between them,
+ *  a swell in the middle. */
+let sketchSound: SoundSource | null = null;
+function fakeSound(): SoundSource {
+  if (sketchSound !== null) return sketchSound;
+  const bands = 32;
+  const frames = 600;
+  const secondsPerFrame = 0.02;
+  const values = new Uint8Array(frames * bands);
+  for (let f = 0; f < frames; f++) {
+    const t = f * secondsPerFrame;
+    const kick = Math.exp(-((t % 0.5) / 0.08));
+    const hat = Math.exp(-(((t + 0.25) % 0.5) / 0.04));
+    const swell = 0.5 + 0.5 * Math.sin(t * 1.7);
+    for (let b = 0; b < bands; b++) {
+      const u = b / (bands - 1);
+      const level = kick * Math.max(0, 1 - u * 3) + swell * Math.exp(-(((u - 0.5) / 0.18) ** 2)) * 0.8 + hat * Math.max(0, u * 1.4 - 0.4);
+      values[f * bands + b] = Math.round(Math.min(1, 0.08 + level) * 255);
+    }
+  }
+  sketchSound = { secondsPerFrame, frames, bands, values, lowHz: 30, highHz: 16000 };
+  return sketchSound;
+}
 
 interface RingCard {
   name: string;
@@ -94,7 +123,7 @@ function drawEffectSketch(canvas: HTMLCanvasElement, card: EffectCard, colors: S
     params: { color: main, color2: null, hsv: false, startMode: 'flash', endMode: 'fade', fadeIn: 0.25, pulse: 1, repeats: 1, direction: 'forward', rate: 0.25, duty: 0.5, pattern: 'all', density: 0.3, seed: 7, ...card.params({ main, other }) },
   };
   const items: EffectItem[] = Array.from({ length: 8 }, (_, id) => ({ kind: 'light', type: 0, id }));
-  const clips: LightClip[] = generateEffect(effect, items, colors);
+  const clips: LightClip[] = generateEffect(effect, items, colors, card.kind === 'sound' ? { secondsPerBeat: 0.5, ringCount: () => 1, sound: fakeSound() } : undefined);
   const time = t ?? card.length * 0.45;
   const gap = width / 8;
   for (let i = 0; i < 8; i++) {
