@@ -25,6 +25,7 @@ import { setRingTickRate } from './engine/core/lighting/ring-motion';
 import { NotePanel } from './editor/note-panel';
 import { NoteInspector } from './editor/note-inspector';
 import { FlyCamera } from './editor/fly-camera';
+import { SmoothScroll } from './editor/smooth-scroll';
 import { NoteTrack, TRACK_POSE } from './editor/note-track';
 import { mirrorObjects } from './editor/notes-timeline';
 import { setSettings } from './editor/settings';
@@ -85,6 +86,8 @@ byId('view-notes').addEventListener('click', () => setSettings({ notes: !setting
 byId('view-reset').addEventListener('click', () => fly.reset());
 fly.onChange(syncViewTools);
 const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
+// (the game's view of the notes side: the wheel takes the song on or back smoothly)
+new SmoothScroll(editor, byId<HTMLCanvasElement>('preview'), () => editor.tab === 'notes' && editor.noteView === 'game' && editor.project !== null);
 /** The notes side's 3D view: the editor's track (the camera behind its wall) or the game's view.
  *  `keep`: the camera stays where it is (switching between the track and the game's view). */
 function applyNoteView(keep = false) {
@@ -105,7 +108,7 @@ editor.stepSnap = (finer) => stepGrid(finer);
 syncViewTools();
 
 // for tests and the console
-(window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, library, audio: { findBpm, encodeOgg } };
+(window as unknown as { chroeditor: unknown }).chroeditor = { editor, timeline, preview, presets, library, noteTrack, audio: { findBpm, encodeOgg } };
 
 const status = byId('status');
 const timeLabel = byId('time');
@@ -441,6 +444,8 @@ const ACTIONS_RUN: Record<string, () => void> = {
   zoomIn: () => timeline.zoom(1.5),
   zoomOut: () => timeline.zoom(1 / 1.5),
   fit: () => timeline.fit(),
+  loop: () => editor.toggleLoop(),
+  precision: () => editor.togglePrecision(),
   rowsUp: () => timeline.scrollRows(-60),
   rowsDown: () => timeline.scrollRows(60),
   bookmark: () => void timeline.addBookmarkHere(),

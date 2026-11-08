@@ -205,7 +205,8 @@ export function selectByDialog(editor: Editor) {
     <label>Цвет <select data-id="color"><option value="any">любой</option><option value="left">левый</option><option value="right">правый</option><option value="white">белый</option><option value="custom">свой (Chroma)</option></select></label>
     <div class="adjust-head">Строки <button type="button" data-id="all">все</button> <button type="button" data-id="none">ни одной</button></div>
     <div class="adjust-rows" data-id="rows"></div>
-    <label class="adjust-check"><input type="checkbox" data-id="effects" checked> И события эффектов</label>
+    <label class="adjust-check"><input type="checkbox" data-id="effects" checked> И эффекты (выделяются целиком)</label>
+    <label class="adjust-check"><input type="checkbox" data-id="other"> И события колец, лазеров, буста</label>
     <label class="adjust-check"><input type="checkbox" data-id="add"> Добавить к выделенному</label>
     <div class="nm-dim" data-id="count"></div>
     <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="select">Выделить</button></div>`;
@@ -231,13 +232,14 @@ export function selectByDialog(editor: Editor) {
     from: Number(el<HTMLInputElement>('from').value) || 0,
     to: Number(el<HTMLInputElement>('to').value) || 0,
     effects: el<HTMLInputElement>('effects').checked,
+    other: el<HTMLInputElement>('other').checked,
   });
   function count() {
-    const found = criteria().rows.length === 0 && checks.every((item) => !item.check.checked) ? [] : editor.clipsMatching(criteria());
+    const found = criteria().rows.length === 0 && checks.every((item) => !item.check.checked) && !criteria().other ? [] : editor.clipsMatching(checks.every((item) => !item.check.checked) ? { ...criteria(), rows: ['-'] } : criteria());
     el('count').textContent = `Подходит событий: ${String(found.length)}`;
     return found;
   }
-  for (const id of ['from', 'to', 'color', 'effects']) el(id).addEventListener('input', count);
+  for (const id of ['from', 'to', 'color', 'effects', 'other']) el(id).addEventListener('input', count);
   el('all').addEventListener('click', () => {
     for (const item of checks) item.check.checked = true;
     count();

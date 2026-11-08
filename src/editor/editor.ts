@@ -54,7 +54,7 @@ import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
 import { checkMap, type MapIssue } from './checks';
 import { jumpOf } from './jump';
-import { allObjects, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
+import { allObjects, objectSpan, usesNoodlePlaces, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
@@ -214,6 +214,15 @@ export class Editor {
   noteTool: { kind: 'red' | 'blue' | 'bomb' | 'wall'; direction: number; angle?: number } = { kind: 'red', direction: 1 };
   /** How the notes side's 3D view shows the notes: on the editor's track, or as in the game. */
   noteView: 'track' | 'game' = 'track';
+  /** The 3D track's free grid: a cell in quarters, notes, bombs and walls anywhere on it and around it
+   *  (Noodle Extensions' coordinates). */
+  precision = false;
+
+  togglePrecision() {
+    this.precision = !this.precision;
+    this.setStatus(this.precision ? tr('Свободная сетка: клетка на четверти, ноты и стены ставятся куда угодно (Noodle Extensions). Q — обычная') : tr('Обычная сетка 4×3'));
+    this.emit('selection');
+  }
   /** Makes the grid finer or coarser (set by the app). */
   stepSnap: ((finer: boolean) => void) | null = null;
   /** The grid's row new notes and bombs go into from the timeline (0 bottom … 2 top). */
@@ -972,7 +981,8 @@ export class Editor {
     if (infoName !== undefined) {
       let info = await map.folder.readText(infoName);
       // (the mods the environment's changes need: required; the ones they needed before and put in, out)
-      const need = fragmentRequirements(mods);
+      // (objects placed freely on the grid: Noodle Extensions)
+      const need = [...new Set([...fragmentRequirements(mods), ...(usesNoodlePlaces(this.objects) ? ['Noodle Extensions'] : [])])];
       const added = project.addedRequirements ?? [];
       if (need.length > 0 || added.length > 0) {
         const had = requirementsOf(info, file);
@@ -2366,17 +2376,45 @@ export class Editor {
   }
 
   /** The clips that match: of these rows (keys; none: any), this colour, within these beats. */
-  clipsMatching(criteria: { rows: string[]; color: ClipColor['ref'] | 'any'; from: number; to: number; effects: boolean }): string[] {
+  /**
+   * "Select by…": the light events of these rows, of this colour, within these beats. An effect's own
+   * events stay inside it: the effect is picked instead, as the timeline shows it (`effects`). `other`:
+   * the ring, laser and boost events within the beats too.
+   */
+  clipsMatching(criteria: { rows: string[]; color: ClipColor['ref'] | 'any'; from: number; to: number; effects: boolean; other?: boolean }): string[] {
     const project = this.project;
     if (project === null) return [];
     const rows = this.rows.filter((row) => isLightRow(row) && (criteria.rows.length === 0 || criteria.rows.includes(row.key)));
     const shown = new Set(rows.flatMap((row) => this.rowClips(row).filter((item) => item.role === 'own').map((item) => item.clip.id)));
-    const hidden = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
-    return project.clips
-      .filter((clip) => (criteria.rows.length === 0 || shown.has(clip.id)) && clip.end > criteria.from && clip.start < criteria.to)
-      .filter((clip) => criteria.color === 'any' || clip.color.ref === criteria.color)
-      .filter((clip) => clip.group === undefined || (criteria.effects && !hidden.has(clip.group)) || clip.group === this.openEffect)
-      .map((clip) => clip.id);
+    const closed = new Set(this.effects.filter((effect) => effect.id !== this.openEffect).map((effect) => effect.id));
+    const inRows = new Set(rows.flatMap((row) => this.rowClips(row).map((item) => item.clip.id)));
+    const rowKeys = new Set(rows.map((row) => row.key));
+    const effectInRows = new Map<string, boolean>();
+    const effectPicked = (effect: string, clip: string) => {
+      if (criteria.rows.length === 0 || inRows.has(clip)) return true;
+      if (!effectInRows.has(effect)) effectInRows.set(effect, rowKeys.has(this.ownRowOf(effect)?.key ?? ''));
+      return effectInRows.get(effect)!;
+    };
+    const out = new Set<string>();
+    for (const clip of project.clips) {
+      if (clip.end <= criteria.from || clip.start >= criteria.to) continue;
+      if (criteria.color !== 'any' && clip.color.ref !== criteria.color) continue;
+      if (clip.group !== undefined && closed.has(clip.group)) {
+        // (an effect's event: the effect picked — when one of its events is in a picked row)
+        if (criteria.effects && effectPicked(clip.group, clip.id)) out.add(clip.group);
+        continue;
+      }
+      if (criteria.rows.length === 0 || shown.has(clip.id)) out.add(clip.id);
+    }
+    if (criteria.effects) {
+      // (effects with no events of their own here — sound, rings: by their stretch)
+      for (const effect of this.effects) if (effect.id !== this.openEffect && effect.end > criteria.from && effect.start < criteria.to && this.effectChildren(effect.id).length === 0 && criteria.rows.length === 0) out.add(effect.id);
+    }
+    if (criteria.other === true) {
+      for (const event of project.raw) if (event.group === undefined && event.type !== BPM_EVENT_TYPE && event.beat >= criteria.from && event.beat < criteria.to) out.add(event.id);
+      for (const block of this.ringBlocks) if (block.end > criteria.from && block.start < criteria.to) out.add(block.id);
+    }
+    return [...out];
   }
 
   // ----- effects -------------------------------------------------------------------------------------
@@ -3021,6 +3059,26 @@ export class Editor {
     this.emit('time');
   }
 
+  /** The picked stretch of the song played over and over (again: stopped). Without one: a hint. */
+  toggleLoop() {
+    if (this.previewExtra?.songLoop === true) {
+      this.stopTrial();
+      this.setStatus(tr('Проигрывание по кругу остановлено'));
+      return;
+    }
+    const range = this.songRange;
+    if (range === null || Math.abs(range.end - range.start) < 1e-6) {
+      this.setStatus(tr('Выделите участок песни: Shift + протянуть по линейке или спектрограмме'));
+      return;
+    }
+    const start = Math.min(range.start, range.end);
+    const end = Math.max(range.start, range.end);
+    // (the notes side: the objects picked with the stretch let go — it plays, nothing to edit)
+    if (this.tab === 'notes' && this.noteSelection.size > 0) this.selectNotes([]);
+    this.startTrial({ clips: [], raw: [], start: start + 0.5, end: end - 1, songLoop: true });
+    this.setStatus(tr('По кругу: доли {0}–{1}. L или Esc — стоп', Math.round(start * 1000) / 1000, Math.round(end * 1000) / 1000));
+  }
+
   stopTrial() {
     if (this.previewExtra === null) return;
     this.previewExtra = null;
@@ -3157,6 +3215,19 @@ export class Editor {
   /** The selected objects with their kinds. */
   selectedObjects() {
     return allObjects(this.objects).filter(({ item }) => this.noteSelection.has(item.id));
+  }
+
+  /** The notes side's objects within a stretch of beats (walls, arcs and chains reaching into it). */
+  objectsInRange(start: number, end: number): string[] {
+    const from = Math.min(start, end) - 1e-6;
+    const to = Math.max(start, end) + 1e-6;
+    return allObjects(this.objects)
+      .filter(({ kind, item }) => {
+        const [a, b] = objectSpan(kind, item);
+        // (a point inside, ends included; a span overlapping it, not just touching an end)
+        return b - a < 1e-6 ? a >= from && a <= to : b > from + 2e-6 && a < to - 2e-6;
+      })
+      .map(({ item }) => item.id);
   }
 
   selectNotes(ids: Iterable<string>, mode: 'replace' | 'add' | 'toggle' = 'replace') {

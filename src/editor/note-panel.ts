@@ -177,7 +177,7 @@ export class NotePanel {
     const scheme = editor.preview.colors;
     // (the directions coloured by how well they follow the hand's last note before the cursor)
     const comfort = tool.kind === 'red' || tool.kind === 'blue' ? directionComfort(editor.objects.notes, tool.kind === 'red' ? 0 : 1, editor.snapBeat(editor.playhead())) : null;
-    const key = `${tool.kind}|${String(tool.direction)}|${editor.wallKind}|${JSON.stringify(editor.wallStrobe)}|${[...scheme.leftNote, ...scheme.rightNote, ...scheme.obstacle].join(',')}|${JSON.stringify(comfort)}`;
+    const key = `${tool.kind}|${String(tool.direction)}|${String(editor.precision)}|${editor.wallKind}|${JSON.stringify(editor.wallStrobe)}|${[...scheme.leftNote, ...scheme.rightNote, ...scheme.obstacle].join(',')}|${JSON.stringify(comfort)}`;
     if (this.tools.dataset.key === key) return;
     this.tools.dataset.key = key;
     const colors = editor.preview.colors;
@@ -224,6 +224,14 @@ export class NotePanel {
     }
     const side = document.createElement('div');
     side.className = 'np-side';
+    // the free grid: a cell in quarters, things put anywhere on it and around it (Noodle Extensions)
+    const free = document.createElement('button');
+    free.type = 'button';
+    free.textContent = '▦ Свободная сетка';
+    free.title = 'Q — клетка 3D-сетки делится на четверти, сетка выходит за края: ноты, бомбы и стены ставятся куда угодно (Noodle Extensions — карта будет его требовать)';
+    free.classList.toggle('active', editor.precision);
+    free.addEventListener('click', () => editor.togglePrecision());
+    side.append(free);
     if (tool.kind === 'wall') {
       for (const [kind, label, title] of [
         ['full', 'Полная', 'Стена во весь рост: от неё уходят в сторону (на 3D-стене — нижний ряд)'],

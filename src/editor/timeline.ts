@@ -1,4 +1,5 @@
 import { adjustDialog, selectByDialog } from './adjust-dialog';
+import { noteSelectDialog } from './note-select-dialog';
 import { soundDialog } from './sound-dialog';
 import { ringStepsDialog } from './ring-steps-dialog';
 import { laserDialog, lastLaserMove } from './laser-dialog';
@@ -2000,11 +2001,15 @@ export class Timeline {
     showMenu(x, y, [
       { label: `Выделено: ${seconds.toFixed(2)} с`, heading: true },
       { label: 'Сделать превью песни', hint: 'Info.dat — сразу', action: () => void editor.previewFromRange() },
-      { label: 'Проиграть по кругу', hint: 'Esc — стоп', action: () => editor.startTrial({ clips: [], raw: [], start: start + 0.5, end: end - 1, songLoop: true }) },
+      { label: 'Проиграть по кругу', hint: 'L, Esc — стоп', action: () => editor.toggleLoop() },
       { label: 'Снять выделение', hint: 'Esc', action: () => editor.setSongRange(null) },
-      { label: 'Выделить события в нём…', hint: 'по строкам, цвету', action: () => selectByDialog(editor) },
-      { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor) },
-      { label: 'Глитч колец здесь…', hint: 'скретчи, глюки', disabled: editor.ringInfo.length === 0, action: () => ringGlitchDialog(editor, null) },
+      ...(this.notesMode
+        ? [{ label: 'Выделить объекты в нём…', hint: 'по виду, цвету, направлению, клеткам', action: () => noteSelectDialog(editor) }]
+        : [
+            { label: 'Выделить события в нём…', hint: 'по строкам, цвету', action: () => selectByDialog(editor) },
+            { label: 'Свет по звуку…', hint: 'удары бочки, малого, хэтов', action: () => soundDialog(editor) },
+            { label: 'Глитч колец здесь…', hint: 'скретчи, глюки', disabled: editor.ringInfo.length === 0, action: () => ringGlitchDialog(editor, null) },
+          ]),
       null,
       { label: 'Настройки спектрограммы…', action: () => this.openSpectroPanel(x, y - 200) },
     ]);
@@ -2897,6 +2902,9 @@ export class Timeline {
         if (drag.moved) this.editor.updateBookmark(drag.id, (item) => (item.beat = Math.max(0, to)), false);
       } else if (drag.kind === 'range') {
         this.editor.setSongRange({ start: drag.from, end: event.altKey ? Math.max(0, beat) : this.snapView(Math.max(0, beat)) });
+        // (the notes side: what's in the stretch picked as it grows)
+        const range = this.editor.songRange;
+        if (this.notesMode && range !== null) this.editor.selectNotes(this.editor.objectsInRange(range.start, range.end));
       } else if (drag.kind === 'spectro') {
         const height = Math.round(drag.height - (y - drag.grabY));
         this.setLook({ height: height < 16 ? 0 : Math.min(this.height - NAV_H - RULER_H - 60, height) });
@@ -3057,7 +3065,10 @@ export class Timeline {
       }
       if (drag.kind === 'range') {
         const range = this.editor.songRange;
-        if (range !== null && Math.abs(range.end - range.start) * this.pxPerBeat < 3) this.editor.setSongRange(null);
+        if (range !== null && Math.abs(range.end - range.start) * this.pxPerBeat < 3) {
+          this.editor.setSongRange(null);
+          if (this.notesMode) this.editor.selectNotes([]);
+        } else if (range !== null && this.notesMode) this.editor.setStatus(tr('Выделено: доли {0}–{1}, объектов: {2}. L — по кругу', round3(Math.min(range.start, range.end)), round3(Math.max(range.start, range.end)), this.editor.noteSelection.size));
         else if (range !== null) this.editor.setStatus(`Выделено: доли ${String(round3(Math.min(range.start, range.end)))}–${String(round3(Math.max(range.start, range.end)))}. ПКМ по выделению — превью песни, проиграть по кругу`);
       }
       if (drag.kind === 'create' && drag.row.kind === 'raw') {

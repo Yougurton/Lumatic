@@ -2752,6 +2752,44 @@
         place-items: center end;
         padding-right: 24px;
       }
+      .note-select .ns-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .note-select .ns-columns {
+        display: flex;
+        gap: 24px;
+      }
+      .note-select .ns-dirs {
+        display: grid;
+        grid-template-columns: repeat(3, 34px);
+        gap: 4px;
+      }
+      .note-select .ns-toggle input {
+        display: none;
+      }
+      .note-select .ns-toggle span {
+        display: inline-block;
+        min-width: 22px;
+        padding: 3px 8px;
+        border: 1px solid var(--line, #3a3f4b);
+        border-radius: 5px;
+        text-align: center;
+        cursor: pointer;
+        opacity: 0.45;
+        user-select: none;
+      }
+      .note-select .ns-dirs .ns-toggle span {
+        display: block;
+        padding: 3px 0;
+        font-size: 15px;
+      }
+      .note-select .ns-toggle input:checked + span {
+        opacity: 1;
+        background: rgba(106, 166, 255, 0.22);
+        border-color: #6aa6ff;
+      }
       .adjust-dialog {
         width: min(420px, 94vw);
         display: flex;

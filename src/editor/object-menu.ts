@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
 import { showMenu } from './menu';
+import { noteSelectDialog } from './note-select-dialog';
 import { mirrorObjects } from './notes-timeline';
 import type { MapObjects, MapWall, ObjectKind } from './notes';
 
@@ -35,6 +36,7 @@ function rightClickNow(editor: Editor, clientX: number, clientY: number, found: 
             if ('c' in item) item.c = 1 - item.c;
           }),
       },
+      { label: 'Выделить по условиям…', hint: 'вид, цвет, направление', action: () => noteSelectDialog(editor) },
       null,
       { label: 'Копировать', hint: 'Ctrl+C', action: () => editor.copyNotes() },
       { label: 'Вырезать', hint: 'Ctrl+X', action: () => editor.cutNotes() },

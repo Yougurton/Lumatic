@@ -225,7 +225,15 @@ function readV4(root: Json): MapObjects {
 
 const byBeat = <T extends { b: number }>(items: readonly T[]) => [...items].sort((a, b) => a.b - b.b);
 const withData = (node: Json, item: { customData?: Json }, key: string) => {
-  if (item.customData !== undefined && Object.keys(item.customData).length > 0) node[key] = item.customData;
+  if (item.customData !== undefined && Object.keys(item.customData).length > 0) {
+    let data = item.customData;
+    // (a v2 file: Noodle's v2 names for the places made here)
+    if (key === '_customData' && (data.coordinates !== undefined || data.size !== undefined)) {
+      const { coordinates, size, ...rest } = data;
+      data = { ...rest, ...(coordinates !== undefined && rest._position === undefined ? { _position: coordinates } : {}), ...(size !== undefined && rest._scale === undefined ? { _scale: size } : {}) };
+    }
+    node[key] = data;
+  }
   return node;
 };
 
@@ -411,6 +419,51 @@ export function wallFootprint(wall: MapWall) {
     color: colour === undefined ? undefined : ([colour[0] ?? 1, colour[1] ?? 1, colour[2] ?? 1, colour[3] ?? 1] as [number, number, number, number]),
     noodle: position !== undefined || size !== undefined,
   };
+}
+
+/**
+ * Where a note, bomb (or an arc's, a chain's head) stands on the grid: Noodle Extensions' `coordinates`
+ * (`_position`) taken in — column 0–3 from the left, row 0–2 from the bottom, fractional and beyond the
+ * grid for those placed freely.
+ */
+export function placeOf(item: { x: number; y: number; customData?: Json }): { x: number; y: number; free: boolean } {
+  const data = item.customData;
+  const position = data === undefined ? undefined : numbers(data.coordinates ?? data._position);
+  if (position === undefined || (position[0] === undefined && position[1] === undefined)) return { x: item.x, y: item.y, free: false };
+  return { x: position[0] !== undefined ? position[0] + 2 : item.x, y: position[1] ?? item.y, free: true };
+}
+
+const onGrid = (value: number, most: number) => Math.abs(value - Math.round(value)) < 1e-6 && Math.round(value) >= 0 && Math.round(value) <= most;
+const clamp = (value: number, most: number) => Math.max(0, Math.min(most, Math.round(value)));
+const tidy = (value: number) => Math.round(value * 10000) / 10000;
+
+/**
+ * Puts a note or bomb at a place on the grid: a cell of the 4×3 grid — its own x and y (Noodle's
+ * coordinates dropped); anywhere else — Noodle Extensions' `coordinates`, its x and y the nearest cell
+ * (what the game shows without the mod).
+ */
+export function setPlace(item: { x: number; y: number; customData?: Json }, x: number, y: number) {
+  const data = item.customData;
+  if (onGrid(x, 3) && onGrid(y, 2)) {
+    item.x = Math.round(x);
+    item.y = Math.round(y);
+    if (data !== undefined) {
+      delete data.coordinates;
+      delete data._position;
+      if (Object.keys(data).length === 0) delete item.customData;
+    }
+    return;
+  }
+  item.x = clamp(x, 3);
+  item.y = clamp(y, 2);
+  item.customData = { ...(data ?? {}), coordinates: [tidy(x - 2), tidy(y)] };
+  delete item.customData._position;
+}
+
+/** Whether any object is placed freely (Noodle Extensions' coordinates or size). */
+export function usesNoodlePlaces(objects: MapObjects) {
+  const has = (item: { customData?: Json }) => item.customData !== undefined && (item.customData.coordinates !== undefined || item.customData.size !== undefined);
+  return objects.notes.some(has) || objects.bombs.some(has) || objects.walls.some(has);
 }
 
 /** The game's turn of a note's arrow (degrees; 0 points down). */

@@ -1,7 +1,7 @@
 import { BPM_EVENT_TYPE } from './editor';
 import type { Editor } from './editor';
 import type { MapIssue } from './checks';
-import { DIR_ANGLE, MIRROR_DIR, objectSpan, strobeWalls, wallFootprint, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
+import { DIR_ANGLE, MIRROR_DIR, objectSpan, placeOf, setPlace, strobeWalls, wallFootprint, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { drawGameNote } from './note-draw';
 import { objectRightClick } from './object-menu';
@@ -34,7 +34,7 @@ type AnyObject = MapNote | MapBomb | MapWall | MapArc | MapChain;
 type Found = { kind: ObjectKind; item: AnyObject };
 
 type Drag =
-  | { kind: 'move'; grabBeat: number; grabLane: number; anchor: number; origin: Map<string, { b: number; tb?: number; x: number; tx?: number }>; moved: boolean }
+  | { kind: 'move'; grabBeat: number; grabLane: number; anchor: number; origin: Map<string, { b: number; tb?: number; x: number; tx?: number; data?: Record<string, unknown> }>; moved: boolean }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'wall'; from: number; to: number; lane: number; lane2: number }
   | { kind: 'place'; x0: number; y0: number; beat: number; lane: number; additive: boolean }
@@ -70,17 +70,21 @@ export class NotesLanes {
 
   /** The ticks drawn for the notes and bombs in view (as ChroViewer's): a thin stroke in its colour,
    *  in its lane's third that is its row (the top third: the top row). `w`, `h`: its box. */
-  private marks(): { found: Found; x: number; y: number; w: number; h: number }[] {
+  private marks(): { found: Found; x: number; y: number; w: number; h: number; free: { row: number; side: -1 | 0 | 1 } | null }[] {
     const host = this.host;
     const from = host.xToBeat(host.left - 8);
     const to = host.xToBeat(host.width + 8);
     const third = this.laneHeight() / 3;
-    const out: { found: Found; x: number; y: number; w: number; h: number }[] = [];
+    const out: { found: Found; x: number; y: number; w: number; h: number; free: { row: number; side: -1 | 0 | 1 } | null }[] = [];
     const put = (kind: ObjectKind, item: MapNote | MapBomb) => {
       if (item.b < from || item.b > to) return;
-      const lane = Math.max(0, Math.min(3, Math.round(item.x)));
-      const row = Math.max(0, Math.min(2, Math.round(item.y)));
-      out.push({ found: { kind, item }, x: host.beatToX(item.b), y: this.laneTop(lane) + (2 - row + 0.5) * third, w: 4, h: Math.max(4, third - 3) });
+      // (placed freely — Noodle's coordinates: between the lanes where its column is, at the edge
+      // beyond the grid; its row a little figure beside it)
+      const place = placeOf(item);
+      const lane = place.free ? Math.max(-0.4, Math.min(3.4, place.x)) : Math.max(0, Math.min(3, Math.round(item.x)));
+      const row = place.free ? Math.max(0, Math.min(2, place.y)) : Math.max(0, Math.min(2, Math.round(item.y)));
+      const side = place.x < -0.5 ? -1 : place.x > 3.5 ? 1 : 0;
+      out.push({ found: { kind, item }, x: host.beatToX(item.b), y: this.laneTop(lane) + (2 - row + 0.5) * third, w: 4, h: Math.max(4, third - 3), free: place.free ? { row: place.y, side } : null });
     };
     for (const item of this.editor.objects.bombs) put('bombs', item);
     for (const item of this.editor.objects.notes) put('notes', item);
@@ -267,7 +271,7 @@ export class NotesLanes {
       ctx.fillRect(x0 - size / 2, y0 + size * 0.12, size, 2);
     }
     // notes and bombs
-    for (const { found, x, y, w, h: tall } of this.marks()) {
+    for (const { found, x, y, w, h: tall, free } of this.marks()) {
       const picked = editor.noteSelection.has(found.item.id);
       if (picked) {
         ctx.fillStyle = '#ffe27a';
@@ -275,6 +279,28 @@ export class NotesLanes {
       }
       ctx.fillStyle = found.kind === 'bombs' ? '#9a9eaa' : this.rgb(noteColor((found.item as MapNote).c));
       ctx.fillRect(x - w / 2, y - tall / 2, w, tall);
+      if (free !== null) {
+        // (placed freely: a ring of dots round it, its row beside it, an arrow off the grid's edge)
+        ctx.strokeStyle = 'rgba(143,216,255,0.95)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(x - w / 2 - 3.5, y - tall / 2 - 3.5, w + 7, tall + 7);
+        ctx.setLineDash([]);
+        if (free.side !== 0) {
+          const edge = free.side < 0 ? host.lanesTop + 1 : host.lanesBottom - 1;
+          ctx.fillStyle = 'rgba(143,216,255,0.95)';
+          ctx.beginPath();
+          ctx.moveTo(x - 5, edge + (free.side < 0 ? 6 : -6));
+          ctx.lineTo(x + 5, edge + (free.side < 0 ? 6 : -6));
+          ctx.lineTo(x, edge);
+          ctx.fill();
+        }
+        if (h >= 30) {
+          ctx.fillStyle = 'rgba(143,216,255,0.95)';
+          ctx.font = '9px system-ui, sans-serif';
+          ctx.fillText(String(Math.round((free.row + 1) * 100) / 100), x + w / 2 + 4, y + 3);
+        }
+      }
     }
     // the map checker's finds: what's at fault ringed (red: an error, yellow: a warning), a mark over
     // the lanes where it is (the mouse over it tells what's wrong)
@@ -578,8 +604,8 @@ export class NotesLanes {
       for (const { kind, item } of copies) (editor.objects[kind] as AnyObject[]).push(item);
       editor.noteSelection = new Set(copies.map(({ item }) => item.id));
     }
-    const origin = new Map<string, { b: number; tb?: number; x: number; tx?: number }>();
-    for (const { item } of editor.selectedObjects()) origin.set(item.id, { b: item.b, x: item.x, ...('tb' in item ? { tb: item.tb, tx: item.tx } : {}) });
+    const origin = new Map<string, { b: number; tb?: number; x: number; tx?: number; data?: Record<string, unknown> }>();
+    for (const { item } of editor.selectedObjects()) origin.set(item.id, { b: item.b, x: item.x, ...('tb' in item ? { tb: item.tb, tx: item.tx } : {}), ...(item.customData !== undefined ? { data: structuredClone(item.customData) } : {}) });
     this.drag = { kind: 'move', grabBeat: beat, grabLane: lane, anchor: found.item.b, origin, moved: event.altKey };
   }
 
@@ -639,6 +665,18 @@ export class NotesLanes {
         const item = found.item;
         item.b = round(o.b + shift);
         item.x = o.x + laneShift;
+        // (placed freely — Noodle's coordinates: moved by as many lanes)
+        if (o.data !== undefined) {
+          const data = structuredClone(o.data);
+          item.customData = data;
+          if (found.kind === 'notes' || found.kind === 'bombs') {
+            const place = placeOf({ x: o.x, y: item.y, customData: o.data });
+            if (place.free) setPlace(item, place.x + laneShift, place.y);
+          } else if (found.kind === 'walls') {
+            const position = data.coordinates ?? data._position;
+            if (Array.isArray(position) && typeof position[0] === 'number') position[0] += laneShift;
+          }
+        }
         if ('tb' in item && o.tb !== undefined && o.tx !== undefined) {
           item.tb = round(o.tb + shift);
           item.tx = o.tx + laneShift;
@@ -750,10 +788,16 @@ export function mirrorObjects(editor: Editor) {
   editor.updateObjects(ids, (kind, item) => {
     if (kind === 'walls') {
       const wall = item as MapWall;
+      const shape = wallFootprint(wall);
       wall.x = 4 - wall.x - wall.w;
+      // (Noodle's place: mirrored about the grid's middle too)
+      const position = wall.customData?.coordinates ?? wall.customData?._position;
+      if (Array.isArray(position) && typeof position[0] === 'number') position[0] = 4 - shape.x - shape.w - 2;
       return;
     }
+    const place = placeOf(item);
     item.x = 3 - item.x;
+    if (place.free && (kind === 'notes' || kind === 'bombs')) setPlace(item, 3 - place.x, place.y);
     if ('c' in item) item.c = 1 - item.c;
     if ('d' in item) item.d = MIRROR_DIR[item.d] ?? item.d;
     if ('a' in item) item.a = -item.a;
