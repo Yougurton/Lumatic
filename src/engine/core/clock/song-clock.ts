@@ -143,33 +143,11 @@ export interface AudioClockOptions {
   onBuffer?: (buffer: AudioBuffer) => void;
 }
 
-function isOggAudio(audioData: ArrayBuffer) {
-  const signature = new Uint8Array(audioData, 0, Math.min(audioData.byteLength, 4));
-  return signature[0] === 0x4f && signature[1] === 0x67 && signature[2] === 0x67 && signature[3] === 0x53;
-}
-
-async function decodeOggVorbis(ctx: AudioContext, audioData: ArrayBuffer) {
-  return Result.tryPromise(async () => {
-    const { OggVorbisDecoderWebWorker } = await import('@wasm-audio-decoders/ogg-vorbis');
-    const decoder = new OggVorbisDecoderWebWorker();
-    try {
-      await decoder.ready;
-      const decoded = await decoder.decodeFile(new Uint8Array(audioData));
-      const buffer = ctx.createBuffer(decoded.channelData.length, decoded.samplesDecoded, decoded.sampleRate);
-      for (const [channel, channelData] of decoded.channelData.entries()) {
-        buffer.getChannelData(channel).set(channelData);
-      }
-      return buffer;
-    } finally {
-      await decoder.free();
-    }
-  });
-}
-
+/** The song decoded by the browser itself (Chromium reads Ogg Vorbis, Opus, MP3, WAV…). A WebAssembly
+ *  Ogg decoder used to stand behind it for browsers that can't — gone: its parser is LGPL-3.0, which
+ *  can't go into a GPL-2.0-only program. */
 async function decodeAudio(ctx: AudioContext, audioData: ArrayBuffer) {
-  const native = await Result.tryPromise(() => ctx.decodeAudioData(audioData.slice(0)));
-  if (native.isOk() || !isOggAudio(audioData)) return native;
-  return decodeOggVorbis(ctx, audioData);
+  return Result.tryPromise(() => ctx.decodeAudioData(audioData.slice(0)));
 }
 
 export async function createAudioClock({ audioData, songBpm, volume = 1, context, onBuffer }: AudioClockOptions) {

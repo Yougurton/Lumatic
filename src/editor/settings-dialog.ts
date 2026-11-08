@@ -456,6 +456,15 @@ function aboutPage(): HTMLElement {
     item(Object.assign(document.createElement('b'), { textContent: 'Phøenix' }), ' — ', link('BSCEL', 'https://github.com/Phoenix-BS/BSCEL'), ' (MIT)'),
     item(Object.assign(document.createElement('b'), { textContent: 'Lonely' }), ' — ', link("Lonely's Chroma Environments", 'https://github.com/LonelyCen/Chroma-Environments'), '; ', 'BTS Witch Edit — Fatalution'),
   );
-  page.append(logo, version, beta, author, heading('Спасибо'), thanks, heading('Готовые окружения'), environments);
+  // the licence: GPL-2.0, as ChroViewer's it's built on; the source code where it's kept
+  const licence = document.createElement('p');
+  licence.className = 'about-note';
+  licence.append(
+    tr('Lumatic — свободная программа под лицензией GNU GPL версии 2 (как ChroViewer, на котором она построена): её можно запускать, изучать, менять и распространять на тех же условиях. Исходный код:'),
+    ' ',
+    link('github.com/Yougurton/ChroEditor', 'https://github.com/Yougurton/ChroEditor'),
+    tr('. Текст лицензии — LICENSE.txt рядом с программой, сторонние компоненты и их лицензии — THIRD_PARTY_NOTICES.md.'),
+  );
+  page.append(logo, version, beta, author, heading('Спасибо'), thanks, heading('Готовые окружения'), environments, heading('Лицензия'), licence);
   return page;
 }

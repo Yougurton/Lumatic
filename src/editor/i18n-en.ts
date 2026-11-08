@@ -2123,4 +2123,8 @@ export const EN: Record<string, string> = {
   "скорость: сразу (50)": "speed: at once (50)",
   "скорость {0}": "speed {0}",
   "Клик — событие самой игры (ромб). Протянуть — событие Lumatic такой длины (поза, зум, лазеры). Конец полосы тянется — длина перехода; у событий Chroma со своей скоростью — скорость.": "Click: the game's own event (a diamond). Drag along: a Lumatic event that long (a pose, the zoom, the lasers). Drag a bar's end: the move's length; for Chroma events with a speed of their own, the speed.",
+  "Lumatic — свободная программа под лицензией GNU GPL версии 2 (как ChroViewer, на котором она построена): её можно запускать, изучать, менять и распространять на тех же условиях. Исходный код: ": "Lumatic is free software under the GNU GPL version 2 (as ChroViewer, which it's built on): it can be run, studied, changed and shared on the same terms. Source code: ",
+  ". Текст лицензии — LICENSE.txt рядом с программой, сторонние компоненты и их лицензии — THIRD_PARTY_NOTICES.md.": ". The licence text is LICENSE.txt next to the program; third-party components and their licences are in THIRD_PARTY_NOTICES.md.",
+  "Лицензия": "Licence",
+  "Lumatic — свободная программа под лицензией GNU GPL версии 2 (как ChroViewer, на котором она построена): её можно запускать, изучать, менять и распространять на тех же условиях. Исходный код:": "Lumatic is free software under the GNU GPL version 2 (as ChroViewer, which it's built on): it can be run, studied, changed and shared on the same terms. Source code:",
 };
