@@ -151,7 +151,12 @@ export class Editor {
   /** The effect gone into: its events shown and editable (null: none). */
   openEffect: string | null = null;
   /** What drawing on a row makes: a clip (the brush), or an effect from the library. */
-  tool: { kind: 'clip' } | { kind: 'effect'; name: string; effect: EffectKind; params: Partial<EffectParams> } = { kind: 'clip' };
+  /** What a drag on the timeline makes: plain light, an effect — or a ring tool's block (put in its own
+   *  rows: `types`; `open`: its editor opened once it's put). */
+  tool:
+    | { kind: 'clip' }
+    | { kind: 'effect'; name: string; effect: EffectKind; params: Partial<EffectParams> }
+    | { kind: 'ring'; name: string; types: number[]; template: RingBlock; open?: boolean } = { kind: 'clip' };
   /** The row effects and ring forms from the library go onto (its key). */
   activeRow: string | null = null;
   /** Something tried out in the 3D view only (not in the show): played over and over. */
@@ -2686,6 +2691,19 @@ export class Editor {
   private fitEffect(effect: Effect) {
     const needed = effectNeededLength(effect, this.effectItemsOf(effect).length);
     if (needed > effect.end - effect.start + 1e-6) effect.end = effect.start + needed;
+  }
+
+  /** Effects by sound among these, moved: made anew from the song where they are now (part of the
+   *  move's undo step). */
+  remakeSoundEffects(ids: readonly string[]) {
+    let any = false;
+    for (const id of ids) {
+      const effect = this.effectById(id);
+      if (effect === undefined || effect.kind !== 'sound' || effect.custom === true) continue;
+      this.regenerate(effect);
+      any = true;
+    }
+    if (any) this.changed();
   }
 
   /** Dragging an effect: from where it was (`origin`) by `delta` beats, its events with it. */

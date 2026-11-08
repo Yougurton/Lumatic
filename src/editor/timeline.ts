@@ -10,9 +10,9 @@ import type { Effect } from './effects';
 import { ask, showMenu, showPanel, type MenuItem } from './menu';
 import { setGroupSync } from './presets';
 import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, type LightClip, type RawEvent } from './model';
-import { classicGroupName, groupHue, lightGroupName } from './names';
+import { classicGroupName, groupHue, lightGroupName, otherEventName } from './names';
 import { tr } from './i18n';
-import { chromaMoveBeats, fitRingBlock, isBarRing, isLasers, isSingleRing, isTurn, isZoom, laserBlockMove, newLaserBlock, newPose, newRingBlock, newZoomBlock, poseBase, ringDelay, type RingBlock, type RingPose } from './rings';
+import { chromaMoveBeats, fitRingBlock, isBarRing, isLasers, isSingleRing, isTurn, isZoom, laserBlockMove, newLaserBlock, newPose, newRingBlock, newZoomBlock, placeRingTemplate, poseBase, ringDelay, type RingBlock, type RingPose } from './rings';
 import { ringSpeedFor } from '../engine/core/lighting/ring-motion';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
@@ -700,7 +700,7 @@ export class Timeline {
               this.drawClip({ clip: editor.effectProxy(effect), effect, partial: false, level, role: 'own' }, item.top, item.height, true);
               this.ghostChildren = null;
             }
-          } else {
+          } else if (tool.kind === 'clip') {
             const ghost = editor.newClipForRow(item.row, a, end);
             if (ghost !== null) this.drawClip({ clip: ghost, partial: false, level, role: 'own' }, item.top, item.height, true);
           }
@@ -3071,9 +3071,31 @@ export class Timeline {
         } else if (range !== null && this.notesMode) this.editor.setStatus(tr('Выделено: доли {0}–{1}, объектов: {2}. L — по кругу', round3(Math.min(range.start, range.end)), round3(Math.max(range.start, range.end)), this.editor.noteSelection.size));
         else if (range !== null) this.editor.setStatus(`Выделено: доли ${String(round3(Math.min(range.start, range.end)))}–${String(round3(Math.max(range.start, range.end)))}. ПКМ по выделению — превью песни, проиграть по кругу`);
       }
+      const brush = this.editor.tool;
+      if (drag.kind === 'create' && brush.kind === 'ring') {
+        // a ring tool is the brush: its block put in its own row — a click: as long as it is; drawn
+        // along: that long
+        const type = drag.row.kind === 'raw' ? drag.row.type : null;
+        if (type === null || !brush.types.includes(type)) {
+          this.editor.setStatus(tr('Кисть «{0}» ставится на строку «{1}»', tr(brush.name), brush.types.map((item) => otherEventName(item)).join(' / ')));
+          this.needsDraw = true;
+          return;
+        }
+        const [a, b] = [Math.min(drag.from, drag.to), Math.max(drag.from, drag.to)];
+        const drawn = drag.moved && b - a > 1e-6 ? b - a : null;
+        const block = placeRingTemplate(brush.template, a, drawn);
+        // (the lasers put on one side's row: that side, unless they turn both)
+        if (block.lasers !== undefined && block.lasers.sides !== 'both') block.lasers = { ...block.lasers, sides: type === 12 ? 'left' : 'right' };
+        this.editor.addRingBlock(block);
+        if (brush.open === true) this.editor.ringEditorHook?.(block.id);
+        else this.editor.select([block.id]);
+        this.needsDraw = true;
+        return;
+      }
       if (drag.kind === 'create' && drag.row.kind === 'raw') {
         // a ring row: a click — the game's own event; drawn along — a Lumatic event that long
-        if (!drag.moved) this.placeRaw(drag.row.type, drag.from);
+        // (moved by less than a grid step: still a click)
+        if (!drag.moved || Math.abs(drag.to - drag.from) < 1e-6) this.placeRaw(drag.row.type, drag.from);
         else this.createRingEvent(drag.row.type, Math.min(drag.from, drag.to), Math.max(drag.from, drag.to));
         this.needsDraw = true;
         return;
@@ -3130,6 +3152,9 @@ export class Timeline {
       } else if (drag.kind === 'move' && !drag.moved) {
         // just a click: nothing moved — no undo step for it
         this.editor.undoDiscard();
+      } else if (drag.kind === 'move') {
+        // (effects by sound: made anew from the song where they are now)
+        this.editor.remakeSoundEffects([...drag.effectOrigin.keys()]);
       }
       this.needsDraw = true;
     });

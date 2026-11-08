@@ -23,6 +23,7 @@ import {
   PlaneGeometry,
   Quaternion,
   Raycaster,
+  ShaderMaterial,
   Sprite,
   SpriteMaterial,
   TubeGeometry,
@@ -60,7 +61,8 @@ import { arrowGeometry, bombGeometry, chainLinkGeometry, dotGeometry, noteBodyGe
 let METRES_PER_BEAT = 1.6;
 /** How far the track goes ahead of the cursor and behind it (metres). */
 const TRACK_M = 64;
-const BEHIND_M = 2.4;
+/** The most the track reaches behind the wall (the passed notes shown that far at most). */
+const BACK_M = 40;
 const LANE = 0.6;
 const WIDTH = LANE * 4;
 const NOTE = 0.5;
@@ -68,7 +70,7 @@ const NOTE = 0.5;
 const NOTE_SCALE = 0.82;
 /** The beats shown ahead of the cursor and behind it. */
 let AHEAD = TRACK_M / METRES_PER_BEAT;
-let BEHIND = BEHIND_M / METRES_PER_BEAT;
+let BEHIND = 1.5;
 /** Where things count as gone through the wall (just past the notes at the cursor). */
 const PASSED = NOTE / 2 + 0.02;
 const rowY = (row: number) => LANE / 2 + row * LANE;
@@ -76,7 +78,12 @@ const colX = (col: number) => (col - 1.5) * LANE;
 /** The free grid (Q): its step (a quarter of a cell) and how far it reaches — four cells either side,
  *  three rows up (edges, in cells from the grid's left and from the floor). */
 const FINE = 0.25;
-const FREE = { left: -4, right: 8, bottom: 0, top: 6 };
+const FREE = { left: -50, right: 54, bottom: 0, top: 30 };
+/** How far round the mouse the free grid shows (cells). */
+const FREE_SHOWN = 2.6;
+/** A crouch wall's bottom as drawn: half way up the middle row (where the game's crouch wall reaches). */
+const CROUCH_BOTTOM = 1.5;
+const wallBottom = (y: number) => (y >= 2 ? CROUCH_BOTTOM : Math.max(0, y));
 const snapFine = (value: number) => Math.round(value / FINE) * FINE;
 /** A place on the grid (cells: column from the left, row from the bottom) — a point of the free grid. */
 type Cell = { col: number; row: number };
@@ -170,6 +177,7 @@ export class NoteTrack {
   private hovered: string | null = null;
   private wheelSum = 0;
   private active = false;
+  private mouseOver = false;
   private readonly box = document.createElement('div');
   private lastMouse: { x: number; y: number } | null = null;
   private drag:
@@ -197,6 +205,38 @@ export class NoteTrack {
     | null = null;
   /** The free grid's lines on the wall (shown with Q). */
   private readonly fineGrid = new Group();
+  private readonly freeGridMaterial = new ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: DoubleSide,
+    uniforms: { mouse: { value: new Vector2(2, 1.5) }, reach: { value: FREE_SHOWN }, lane: { value: LANE }, halfWidth: { value: WIDTH / 2 } },
+    vertexShader: `varying vec2 at;
+      uniform float lane;
+      uniform float halfWidth;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        at = vec2((world.x + halfWidth) / lane, world.y / lane);
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }`,
+    fragmentShader: `varying vec2 at;
+      uniform vec2 mouse;
+      uniform float reach;
+      float line(vec2 p, float step, float width) {
+        vec2 q = abs(fract(p / step + 0.5) - 0.5) * step;
+        vec2 w = fwidth(p) * width;
+        vec2 l = 1.0 - smoothstep(w * 0.5, w * 1.5, q);
+        return max(l.x, l.y);
+      }
+      void main() {
+        float fade = 1.0 - smoothstep(reach * 0.45, reach, distance(at, mouse));
+        if (fade <= 0.0) discard;
+        float whole = line(at, 1.0, 2.2);
+        float quarter = line(at, 0.25, 1.1);
+        float a = max(whole * 0.8, quarter * 0.32) * fade;
+        if (a < 0.01) discard;
+        gl_FragColor = vec4(1.0, 1.0, 1.0, a);
+      }`,
+  });
   /** The box Shift + drag picks with. */
   private readonly volume = new Group();
 
@@ -219,13 +259,14 @@ export class NoteTrack {
     this.moving.add(this.beatLines, this.extras);
 
     // the track's floor and its four lanes
-    const floor = new Mesh(new PlaneGeometry(WIDTH + 0.3, (AHEAD + BEHIND) * METRES_PER_BEAT), new MeshBasicMaterial({ color: 0x2a2d36, transparent: true, opacity: 0.9, depthWrite: false }));
+    // (as far behind as the passed notes may be shown: cut where they stop)
+    const floor = new Mesh(new PlaneGeometry(WIDTH + 0.3, TRACK_M + BACK_M), new MeshBasicMaterial({ color: 0x2a2d36, transparent: true, opacity: 0.9, depthWrite: false, clippingPlanes: this.trackClip }));
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, -0.004, -((AHEAD - BEHIND) * METRES_PER_BEAT) / 2);
+    floor.position.set(0, -0.004, -(TRACK_M - BACK_M) / 2);
     floor.renderOrder = -2;
     this.root.add(floor);
     const lanes: number[][] = [];
-    for (let k = 0; k <= 4; k++) lanes.push([colX(k - 0.5), BEHIND * METRES_PER_BEAT, colX(k - 0.5), -AHEAD * METRES_PER_BEAT]);
+    for (let k = 0; k <= 4; k++) lanes.push([colX(k - 0.5), BACK_M, colX(k - 0.5), -TRACK_M]);
     this.root.add(this.floorStrips(lanes, k(lanes.length, (index) => (index === 0 || index === 4 ? 0.045 : index === 2 ? 0.035 : 0.022)), 0xe6e9f0, 0.85));
 
     // the wall at the cursor: the grid 4×3 notes go on
@@ -236,13 +277,14 @@ export class NoteTrack {
     for (let col = 0; col <= 4; col++) grid.push([colX(col - 0.5), 0, colX(col - 0.5), LANE * 3]);
     for (let row = 0; row <= 3; row++) grid.push([-WIDTH / 2, row * LANE, WIDTH / 2, row * LANE]);
     this.wall.add(this.wallStrips(grid, 0.028, 0xffffff, 0.8));
-    // (the free grid: quarters faint, whole cells brighter, reaching past the grid's edges)
-    const fine: number[][] = [];
-    const whole: number[][] = [];
-    const ex = (edge: number) => edge * LANE - WIDTH / 2;
-    for (let edge = FREE.left; edge <= FREE.right + 1e-9; edge += FINE) (Math.abs(edge - Math.round(edge)) < 1e-9 ? whole : fine).push([ex(edge), FREE.bottom * LANE, ex(edge), FREE.top * LANE]);
-    for (let up = FREE.bottom; up <= FREE.top + 1e-9; up += FINE) (Math.abs(up - Math.round(up)) < 1e-9 ? whole : fine).push([ex(FREE.left), up * LANE, ex(FREE.right), up * LANE]);
-    this.fineGrid.add(this.wallStrips(fine, 0.008, 0x8fd8ff, 0.35), this.wallStrips(whole, 0.016, 0x8fd8ff, 0.6));
+    // (the free grid: as the grid's own lines — whole cells, quarters fainter — everywhere, shown only
+    // round the mouse, fading out)
+    const span = (FREE.right - FREE.left) * LANE;
+    const tall = (FREE.top - FREE.bottom) * LANE;
+    const free = new Mesh(new PlaneGeometry(span, tall), this.freeGridMaterial);
+    free.position.set((FREE.left + FREE.right) / 2 * LANE - WIDTH / 2, (FREE.bottom + FREE.top) / 2 * LANE, -0.002);
+    free.renderOrder = 1;
+    this.fineGrid.add(free);
     this.fineGrid.visible = false;
     this.wall.add(this.fineGrid);
     this.moving.add(this.volume);
@@ -445,7 +487,7 @@ export class NoteTrack {
       // (as ChroMapper draws them: lined up with the grid's rows — a crouch wall from the top row up;
       // Noodle's walls where their coordinates, size and turns put them, in their own colour)
       const shape = wallFootprint(wall);
-      const bottom = shape.noodle ? shape.y * LANE : Math.max(0, shape.y * LANE);
+      const bottom = shape.noodle ? shape.y * LANE : wallBottom(shape.y) * LANE;
       const top = shape.noodle ? bottom + Math.max(0.02, shape.h * LANE) : Math.max(bottom + 0.1, Math.min(shape.y + shape.h, 5.5) * LANE);
       const length = Math.max(0.02, shape.length !== undefined ? Math.abs(shape.length) * LANE : wall.d * METRES_PER_BEAT);
       const width = Math.max(0.02, shape.w * LANE - (shape.noodle ? 0 : 0.04));
@@ -592,11 +634,14 @@ export class NoteTrack {
     const editor = this.editor;
     const cursor = editor.isPlaying() ? editor.playhead() : editor.snapBeat(editor.playhead());
     const scale = Math.min(6, Math.max(0.3, settings().trackScale));
-    if (scale !== METRES_PER_BEAT) {
-      // (the track longer or shorter a beat: everything along it again)
+    const behind = Math.max(0.25, Math.min(BACK_M / scale, settings().trackBehind));
+    if (scale !== METRES_PER_BEAT || behind !== BEHIND) {
+      // (the track longer or shorter a beat, the passed notes shown further or nearer: everything along
+      // it again)
       METRES_PER_BEAT = scale;
       AHEAD = TRACK_M / scale;
-      BEHIND = BEHIND_M / scale;
+      BEHIND = behind;
+      this.behind.constant = BEHIND * METRES_PER_BEAT;
       this.builtKey = '';
       this.linesKey = '';
       this.numbersKey = '';
@@ -610,7 +655,10 @@ export class NoteTrack {
     const half = jumpOf(editor.songBpm, njs, info?.noteStartBeatOffset ?? 0).half;
     this.redLine.position.z = -half * METRES_PER_BEAT;
     this.redLine.visible = settings().visionLine;
-    this.fineGrid.visible = editor.precision;
+    // (the free grid round the mouse, when it's over the wall)
+    const point = editor.precision && this.lastMouse !== null && this.drag?.kind !== 'pick' ? this.meet(this.lastMouse.x, this.lastMouse.y, new Plane(new Vector3(0, 0, 1), 0)) : null;
+    this.fineGrid.visible = point !== null && this.mouseOver;
+    if (point !== null) (this.freeGridMaterial.uniforms.mouse!.value as Vector2).set((point.x + WIDTH / 2) / LANE, point.y / LANE);
     this.updateGhost();
     this.updateVolume();
   }
@@ -720,11 +768,13 @@ export class NoteTrack {
     return { col, row };
   }
 
-  /** On the free grid: the point of its lines nearest the mouse (a wall's corner: edges, in cells). */
+  /** On the free grid: the quarter of a cell under the mouse — its bottom left corner (edges, in cells;
+   *  walls are drawn from one to another). */
   private edgeAt(clientX: number, clientY: number) {
     const point = this.meet(clientX, clientY, new Plane(new Vector3(0, 0, 1), 0));
     if (point === null) return null;
-    return { x: Math.max(FREE.left, Math.min(FREE.right, snapFine((point.x + WIDTH / 2) / LANE))), y: Math.max(FREE.bottom, Math.min(FREE.top, snapFine(point.y / LANE))) };
+    const quarter = (value: number) => Math.floor(value / FINE + 1e-6) * FINE;
+    return { x: Math.max(FREE.left, Math.min(FREE.right - FINE, quarter((point.x + WIDTH / 2) / LANE))), y: Math.max(FREE.bottom, Math.min(FREE.top - FINE, quarter(point.y / LANE))) };
   }
 
   /** What on the track can be picked besides the instanced notes (walls and arcs, nested or not). */
@@ -791,6 +841,9 @@ export class NoteTrack {
     const size = free ? FINE * LANE : LANE - 0.04;
     const glow = new Mesh(new PlaneGeometry(size, size), new MeshBasicMaterial({ color: taken ? 0xffe27a : 0x6aa6ff, transparent: true, opacity: free ? 0.55 : 0.2, depthWrite: false, side: DoubleSide }));
     glow.position.set(colX(cell.col), rowY(cell.row), 0.001);
+    // (a wall on the free grid: the quarter of a cell under the mouse, not a point of the lines)
+    const quarter = free && tool.kind === 'wall' && this.lastMouse !== null ? this.edgeAt(this.lastMouse.x, this.lastMouse.y) : null;
+    if (quarter !== null) glow.position.set(quarter.x * LANE - WIDTH / 2 + (FINE * LANE) / 2, quarter.y * LANE + (FINE * LANE) / 2, 0.001);
     this.ghost.add(glow);
     if (tool.kind === 'wall' && free) {
       // (the free grid: a wall from the point the drag started at to the one under the mouse, any size)
@@ -811,8 +864,9 @@ export class NoteTrack {
       const left = Math.min(from, to);
       const wide = Math.abs(to - from) + 1;
       const length = Math.max(0.1, (this.editor.snap || 1) * METRES_PER_BEAT);
-      const box = new Mesh(new BoxGeometry(wide * LANE - 0.04, (Math.min(shape.y + shape.h, 5.5) - shape.y) * LANE, length), new MeshBasicMaterial({ color: this.rgb(editor.preview.colors.obstacle), transparent: true, opacity: 0.35, depthWrite: false }));
-      box.position.set(colX(left) + ((wide - 1) * LANE) / 2, ((shape.y + Math.min(shape.y + shape.h, 5.5)) / 2) * LANE, -length / 2);
+      const low = wallBottom(shape.y);
+      const box = new Mesh(new BoxGeometry(wide * LANE - 0.04, (Math.min(shape.y + shape.h, 5.5) - low) * LANE, length), new MeshBasicMaterial({ color: this.rgb(editor.preview.colors.obstacle), transparent: true, opacity: 0.35, depthWrite: false }));
+      box.position.set(colX(left) + ((wide - 1) * LANE) / 2, ((low + Math.min(shape.y + shape.h, 5.5)) / 2) * LANE, -length / 2);
       this.ghost.add(box);
       return;
     }
@@ -845,10 +899,9 @@ export class NoteTrack {
     const here = this.edgeAt(mouse.x, mouse.y);
     if (here === null) return null;
     const start = drag?.kind === 'place' && drag.edge !== null ? drag.edge : here;
-    const w = Math.abs(here.x - start.x);
-    const h = Math.abs(here.y - start.y);
-    // (not drawn out one way: a cell's size that way)
-    return { x: Math.min(start.x, here.x), y: Math.min(start.y, here.y), w: w < FINE / 2 ? 1 : w, h: h < FINE / 2 ? 1 : h };
+    // (from the quarter it started in to the one under the mouse, both in; a click: a whole cell's size)
+    if (Math.abs(here.x - start.x) < 1e-6 && Math.abs(here.y - start.y) < 1e-6) return { x: start.x, y: start.y, w: 1, h: 1 };
+    return { x: Math.min(start.x, here.x), y: Math.min(start.y, here.y), w: Math.abs(here.x - start.x) + FINE, h: Math.abs(here.y - start.y) + FINE };
   }
 
   /** A short right click (the camera didn't fly): the object there deleted. */
@@ -1020,6 +1073,7 @@ export class NoteTrack {
   private bind() {
     const canvas = this.canvas;
     canvas.addEventListener('mousemove', (event) => {
+      this.mouseOver = true;
       if (!this.active) return;
       this.lastMouse = { x: event.clientX, y: event.clientY };
       if (event.buttons & 2) {
@@ -1032,7 +1086,9 @@ export class NoteTrack {
       this.hovered = hit?.id ?? null;
       canvas.style.cursor = hit !== null ? 'pointer' : this.hoverCell !== null ? 'crosshair' : 'default';
     });
+    canvas.addEventListener('mouseenter', () => (this.mouseOver = true));
     canvas.addEventListener('mouseleave', () => {
+      this.mouseOver = false;
       if (this.drag === null) {
         this.hoverCell = null;
         this.hovered = null;

@@ -80,5 +80,37 @@ const toSeconds = (beat: number) => beat * 0.5;
   check(made.clips.every((clip) => clip.endColor !== null), 'each a fade to the next point', made.clips.find((clip) => clip.endColor === null));
 }
 
+// the direction: backward — the first item takes the highest band; outward — the middle ones the lowest,
+// side by side sharing it
+{
+  const effect: Effect = {
+    id: 's2',
+    name: 'eq',
+    kind: 'sound',
+    type: 0,
+    ids: null,
+    start: 0,
+    end: 8,
+    layer: 1,
+    params: { color: { ref: 'right', brightness: 1 }, color2: null, hsv: false, startMode: 'on', endMode: 'off', fadeIn: 0.25, pulse: 1, repeats: 1, direction: 'forward', rate: 0.25, duty: 0.5, pattern: 'all', density: 0.3, seed: 1, soundMode: 'eq', soundStep: 1 / 8 },
+  };
+  const items = Array.from({ length: 4 }, (_, id) => ({ kind: 'light' as const, type: 0, id }));
+  const scheme = { left: [1, 0, 0], right: [0, 0, 1], white: [1, 1, 1] } as never;
+  const extras = { secondsPerBeat: 0.5, ringCount: () => 1, sound: source };
+  const bright = (clips: { slot: number; start: number; color: { brightness: number } }[], slot: number, from: number, to: number) => {
+    const own = clips.filter((clip) => clip.slot === slot && clip.start >= from && clip.start < to);
+    return own.reduce((sum, clip) => sum + clip.color.brightness, 0) / Math.max(1, own.length);
+  };
+  const forward = buildEffect(effect, items, scheme, extras).clips;
+  const backward = buildEffect({ ...effect, params: { ...effect.params, direction: 'backward' } }, items, scheme, extras).clips;
+  // (the kick — low bands — in the first half)
+  check(bright(forward, 0, 0, 4) > bright(forward, 3, 0, 4), 'forward: the first item low', [bright(forward, 0, 0, 4), bright(forward, 3, 0, 4)]);
+  check(bright(backward, 3, 0, 4) > bright(backward, 0, 0, 4), 'backward: the last item low', [bright(backward, 3, 0, 4), bright(backward, 0, 0, 4)]);
+  const outward = buildEffect({ ...effect, params: { ...effect.params, direction: 'outward' } }, items, scheme, extras).clips;
+  const same = (a: number, b: number) => JSON.stringify(outward.filter((clip) => clip.slot === a).map((clip) => [clip.start, clip.color])) === JSON.stringify(outward.filter((clip) => clip.slot === b).map((clip) => [clip.start, clip.color]));
+  check(same(1, 2) && same(0, 3), 'outward: mirrored about the middle');
+  check(bright(outward, 1, 0, 4) > bright(outward, 0, 0, 4), 'outward: the middle low', [bright(outward, 1, 0, 4), bright(outward, 0, 0, 4)]);
+}
+
 console.log('checks', checks, 'failures', failures);
 if (failures > 0) process.exit(1);

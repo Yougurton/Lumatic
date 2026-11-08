@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { BasicEvent } from '../src/engine/core/beatmap/types';
 import { createRingPositionSampler, createRingRotationSampler, deterministicRingRandom, MEASURED_RING_TICKS, ringTickSeconds, setRingTickRate, type RingRotationConfig } from '../src/engine/core/lighting/ring-motion';
-import { dataFirstRing, firstRingFromLog, fitRingBlock, newPose, newRingBlock, newSpinBlock, stepPoses, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
+import { dataFirstRing, firstRingFromLog, fitRingBlock, newPose, newRingBlock, newSpinBlock, stepPoses, newStepsBlock, newGlitchBlock, placeRingTemplate, newZoomBlock, poseRingEvents, poseZoomEvents, ringAnimations, ringEnhancements, ringObjectNames, zoomPositions, type RingBlock, type RingSystemInfo, type ZoomSystemInfo } from '../src/editor/rings';
 import type { OutEvent } from '../src/editor/bake';
 
 /**
@@ -431,6 +431,24 @@ if (firstRingFromLog(log, names) !== 611 || firstRingFromLog('nothing', names) !
   const sampler = createRingRotationSampler(all, bpm, Array(system.rings).fill(0) as number[], system.rotation, deterministicRingRandom(system.seed));
   const first = sampler(23)[0]!;
   check1(Math.abs((((first % 360) + 540) % 360) - 180) < 0.5, 'spins back to back, then a pose: on its angle', first);
+}
+
+// a ring tool's brush put on the timeline: a click — as long as it is; drawn — that long
+{
+  const poses = newRingBlock('Rings', 'event', 0, 4);
+  poses.poses = [newPose(0, { duration: 1 }), newPose(2, { duration: 1 })];
+  const clicked = placeRingTemplate(poses, 10, null);
+  check1(clicked.start === 10 && clicked.end === 14 && clicked.id !== poses.id && clicked.poses[0]!.id !== poses.poses[0]!.id, 'brush click: its own length, new ids', clicked);
+  const drawn = placeRingTemplate(poses, 10, 8);
+  check1(drawn.end === 18 && drawn.poses[1]!.beat === 4 && drawn.poses[1]!.duration === 2, 'brush drawn: poses spread out', drawn.poses);
+  const steps = newStepsBlock('Rings', 'event', 0, { fromAngle: 0, toAngle: 90, fromStep: 0, toStep: 0, steps: 4, every: 1, turn: 0.5 });
+  const stretched = placeRingTemplate(steps, 2, (steps.end - steps.start) * 2);
+  check1(stretched.steps?.every === 2 && stretched.poses.length === steps.poses.length, 'brush drawn: steps spread out', stretched.steps);
+  const glitch = newGlitchBlock('Rings', 'event', 0, { length: 4, every: 0.25, strength: 30, chaos: 10, snap: 0.3, seed: 3, back: true });
+  const longer = placeRingTemplate(glitch, 0, 8);
+  check1(longer.glitch?.length === 8 && longer.end >= 8, 'brush drawn: a glitch made that long', longer.glitch);
+  const spin = newSpinBlock('Rings', 'rotation', 0, 8);
+  check1(placeRingTemplate(spin, 4, 2).end === 6, 'brush drawn: a spin that long');
 }
 
 console.log('checks', checks, 'failures', failures);

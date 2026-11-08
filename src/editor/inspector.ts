@@ -140,7 +140,7 @@ export class Inspector {
       this.ringTab = block !== undefined ? 'lumatic' : 'chroma';
     }
     const tabs = document.createElement('div');
-    tabs.className = 'ins-buttons ring-tabs';
+    tabs.className = 'lib-tabs ring-tabs';
     for (const [value, label, hint] of [
       ['lumatic', 'Lumatic', 'Настройки Lumatic: поза, переход, движение'],
       ['chroma', 'Chroma', 'Числа события Chroma как есть: поворот, шаг, prop, скорость'],
@@ -582,6 +582,9 @@ export class Inspector {
       ];
       const mode = p.soundMode ?? 'eq';
       root.append(this.section('По звуку', this.buttons(modes, mode, (value) => change((params) => (params.soundMode = value)))));
+      // (as a wave's: where the low frequencies, the meter's bottom, the first lamp are)
+      const along = mode === 'eq' ? 'Направление частот (от низких к высоким)' : mode === 'meter' ? 'Откуда заполняется' : 'Направление задержки';
+      root.append(this.section(along, this.buttons(directions.filter(([key]) => key !== 'pingpong'), p.direction === 'pingpong' ? 'forward' : p.direction, (value) => change((params) => (params.direction = value)))));
       if (p.color2 !== null) {
         const by: ['level' | 'item', string, string][] = [
           ['level', 'По громкости', 'Тихо — первый цвет, громко — второй'],

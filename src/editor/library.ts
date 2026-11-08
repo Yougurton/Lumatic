@@ -8,7 +8,9 @@ import type { ClipColor, LightClip, RawEvent } from './model';
 import { newColorBox } from './gls';
 import { PresetPanel } from './presets';
 import type { SoundSource } from './sound-effect';
-import { newRingBlock, newSpinBlock, newZoomBlock } from './rings';
+import { newRingBlock, newSpinBlock, newZoomBlock, type RingBlock } from './rings';
+import { otherEventName } from './names';
+import { tr } from './i18n';
 
 /**
  * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
@@ -319,13 +321,12 @@ export class Library {
       poses.className = 'lib-poses';
       poses.textContent = '◎ Точные позы колец…';
       poses.title = 'Блок поз у курсора: угол каждого кольца, спирали, волны, ручная раскладка — с предпросмотром';
+      poses.title = 'Кисть: поставьте блок поз мышью на строку «Вращение колец» (клик — 4 доли, протянуть — своя длина), откроется его редактор';
+      this.armedLook(poses, 'Точные позы колец');
       poses.addEventListener('click', () => {
         const editor = this.editor;
         if (editor.project === null) return;
-        const start = editor.snapBeat(editor.playhead());
-        const block = newRingBlock(editor.ringInfo[0]!.name, 'event', start, start + 4);
-        editor.addRingBlock(block);
-        editor.ringEditorHook?.(block.id);
+        this.disarmOr('Точные позы колец', () => this.armRing('Точные позы колец', [8], newRingBlock(editor.ringInfo[0]!.name, 'event', 0, 4), true));
       });
       this.body.append(poses);
     }
@@ -335,7 +336,8 @@ export class Library {
       steps.className = 'lib-poses';
       steps.textContent = '⟳ Кольца по шагам…';
       steps.title = 'Кольца переходят из начального угла в конечный за несколько шагов: число шагов и скорость поворота настраиваются';
-      steps.addEventListener('click', () => ringStepsDialog(this.editor, null));
+      this.armedLook(steps, 'Кольца по шагам');
+      steps.addEventListener('click', () => this.disarmOr('Кольца по шагам', () => ringStepsDialog(this.editor, null, (block) => this.armRing('Кольца по шагам', [8], block))));
       this.body.append(steps);
     }
     if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
@@ -344,7 +346,8 @@ export class Library {
       glitch.className = 'lib-poses';
       glitch.textContent = '⚡ Глитч колец…';
       glitch.title = 'Кольца дёргаются в случайные стороны — по сетке или по ударам песни (скретчи, глюки). Над выделенным участком песни, иначе от курсора';
-      glitch.addEventListener('click', () => ringGlitchDialog(this.editor, null));
+      this.armedLook(glitch, 'Глитч колец');
+      glitch.addEventListener('click', () => this.disarmOr('Глитч колец', () => ringGlitchDialog(this.editor, null, (block) => this.armRing('Глитч колец', [8], block))));
       this.body.append(glitch);
     }
     if (this.tab === 'rings' && this.editor.project !== null) {
@@ -353,7 +356,15 @@ export class Library {
       lasers.className = 'lib-poses';
       lasers.textContent = '✳ Лазеры…';
       lasers.title = 'Вращающиеся лазеры: крутятся ровным рядом в выбранную сторону или поворачиваются на угол по шагам (нужен Chroma)';
-      lasers.addEventListener('click', () => laserDialog(this.editor));
+      this.armedLook(lasers, 'Лазеры');
+      lasers.addEventListener('click', () =>
+        this.disarmOr('Лазеры', () =>
+          laserDialog(this.editor, null, (block) => {
+            const sides = block.lasers?.sides ?? 'both';
+            this.armRing('Лазеры', sides === 'left' ? [12] : sides === 'right' ? [13] : [12, 13], block);
+          }),
+        ),
+      );
       this.body.append(lasers);
     }
     if (this.tab === 'rings' && this.editor.zoomInfo.length > 0) {
@@ -361,13 +372,12 @@ export class Library {
       zoom.className = 'lib-poses';
       zoom.textContent = '⇹ Зум колец…';
       zoom.title = 'Блок зума у курсора: расстояние между кольцами по позам — с предпросмотром';
+      zoom.title = 'Кисть: поставьте блок зума мышью на строку «Зум колец» (клик — 4 доли, протянуть — своя длина), откроется его редактор';
+      this.armedLook(zoom, 'Зум колец');
       zoom.addEventListener('click', () => {
         const editor = this.editor;
         if (editor.project === null) return;
-        const start = editor.snapBeat(editor.playhead());
-        const block = newZoomBlock(editor.zoomInfo[0], start, start + 4, editor.zoomInfo.length > 1 ? editor.zoomInfo[0]!.name : '');
-        editor.addRingBlock(block);
-        editor.ringEditorHook?.(block.id);
+        this.disarmOr('Зум колец', () => this.armRing('Зум колец', [9], newZoomBlock(editor.zoomInfo[0], 0, 4, editor.zoomInfo.length > 1 ? editor.zoomInfo[0]!.name : ''), true));
       });
       this.body.append(zoom);
     }
@@ -377,16 +387,16 @@ export class Library {
       button.className = 'lib-poses';
       button.textContent = text;
       button.title = title;
+      this.armedLook(button, text);
       button.addEventListener('click', () => {
         const editor = this.editor;
         if (editor.project === null) return;
-        // (over the picked stretch of the song, else 8 beats from the cursor)
-        const range = editor.songRange;
-        const start = range !== null ? Math.min(range.start, range.end) : editor.snapBeat(editor.playhead());
-        const end = range !== null ? Math.max(range.start, range.end) : start + 8;
         const system = kind === 'zoom' ? (editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '') : (editor.ringInfo[0]?.name ?? '');
-        editor.addRingBlock(newSpinBlock(system, kind, start, end));
-        editor.emit('selection');
+        // (the spin's settings as the last such block had them: set there, on the right, once it's put)
+        const template = newSpinBlock(system, kind, 0, 8);
+        const last = [...editor.ringBlocks].reverse().find((block) => block.spin !== undefined && (block.kind === 'zoom') === (kind === 'zoom'));
+        if (last?.spin !== undefined) template.spin = structuredClone(last.spin);
+        this.disarmOr(text, () => this.armRing(text, [kind === 'zoom' ? 9 : 8], template));
       });
       this.body.append(button);
     };
@@ -397,15 +407,42 @@ export class Library {
     tip.textContent =
       this.tab === 'effects'
         ? 'Клик — выбрать эффект и протянуть по строке таймлайна. Двойной клик — вставить на выбранную строку у курсора. ▶ — попробовать в окне просмотра.'
-        : 'Клик — вставить событие колец у курсора. ▶ — посмотреть в окне просмотра. Наведите на карточку, чтобы увидеть схему.';
+        : 'Кнопки сверху — кисти: выберите, настройте и поставьте мышью на свою строку таймлайна (клик — своя длина, протянуть — по мыши; Esc — обычный свет). Карточки: клик — событие колец у курсора, ▶ — посмотреть.';
     this.body.append(grid, tip);
   }
 
   private updateTarget() {
     if (this.targetLabel === null) return;
     const row = this.editor.libraryRow();
-    this.targetLabel.textContent = this.tab === 'rings' ? 'События колец — у курсора' : row === null ? 'Откройте карту' : `Строка: ${row.label}`;
+    this.targetLabel.textContent = this.tab === 'rings' ? 'Кнопки — кисти (ставятся мышью), карточки — у курсора' : row === null ? 'Откройте карту' : `Строка: ${row.label}`;
     this.targetLabel.title = 'Строка, на которую эффект ставится двойным кликом: последняя, по которой вы кликнули на таймлайне';
+  }
+
+  /** A ring tool's button lit while it's the brush. */
+  private armedLook(button: HTMLButtonElement, name: string) {
+    const tool = this.editor.tool;
+    button.classList.toggle('armed', tool.kind === 'ring' && tool.name === name);
+  }
+
+  /** The ring tool already the brush: let go; else `open` (its window: the brush taken from it). */
+  private disarmOr(name: string, open: () => void) {
+    const tool = this.editor.tool;
+    if (tool.kind === 'ring' && tool.name === name) this.armRing(name, [], null);
+    else open();
+  }
+
+  /** A ring tool made the brush (the same again, or `template` null: back to plain light). */
+  private armRing(name: string, types: number[], template: RingBlock | null, open = false) {
+    const editor = this.editor;
+    if (template === null) {
+      editor.tool = { kind: 'clip' };
+      editor.setStatus('Рисование обычного света');
+    } else {
+      editor.tool = { kind: 'ring', name, types, template, open };
+      const rows = types.map((type) => otherEventName(type)).join(' / ');
+      editor.setStatus(tr('Кисть «{0}»: кликните или протяните по строке «{1}» (Esc — обычный свет)', tr(name), rows));
+    }
+    this.render();
   }
 
   /** Effect cards: click arms the tool for drawing. */

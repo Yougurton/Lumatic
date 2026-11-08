@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="color-scheme" content="dark" />
     <title>Lumatic</title>
-    <link rel="icon" href="data:," />
+    <link rel="icon" type="image/png" href="favicon.png" />
     <style>
       :root {
         --bg: #101114;
@@ -404,11 +404,19 @@
       }
       .np-scale {
         display: grid;
-        grid-template-columns: auto 1fr auto;
+        grid-template-columns: 9.8em minmax(0, 1fr) 5.4em;
         gap: 6px;
         align-items: center;
         font-size: 11px;
         color: var(--dim);
+      }
+      .np-scale > .ins-value {
+        white-space: nowrap;
+        text-align: right;
+      }
+      .np-scale > input {
+        width: 100%;
+        min-width: 0;
       }
       .np-kinds {
         display: grid;
@@ -873,6 +881,10 @@
         background: var(--panel2);
         color: #fff;
         border-color: var(--line);
+      }
+      .lib-tabs.ring-tabs {
+        padding: 0;
+        margin-bottom: 8px;
       }
       .lib-body {
         flex: 1;
@@ -2700,6 +2712,11 @@
       .lib-poses {
         width: 100%;
         margin: 0 0 8px;
+      }
+      .lib-poses.armed {
+        border-color: #6aa6ff;
+        background: rgba(106, 166, 255, 0.22);
+        color: #fff;
       }
       .gls-dock {
         position: fixed;

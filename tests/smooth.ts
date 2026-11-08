@@ -41,9 +41,9 @@ const run = (seconds: number) => {
 
 wheel(-100);
 run(1.5);
-check('one notch: on to the next grid step or two', head > 8 && head <= 8.75 && Math.abs(head / 0.25 - Math.round(head / 0.25)) < 1e-9, head);
+check('one notch: exactly one grid step', Math.abs(head - 8.25) < 1e-9, head);
 const steps = seen.slice(1).map((beat, k) => beat - seen[k]!);
-check('smooth: many small moves, slowing down', seen.length > 10 && Math.max(...steps) < 0.1, { frames: seen.length, most: Math.max(...steps) });
+check('smooth: many small moves', seen.length > 6 && Math.max(...steps) < 0.1, { frames: seen.length, most: Math.max(...steps) });
 check('no going back while gliding on', steps.every((step) => step >= -1e-9), steps.filter((step) => step < 0));
 
 const from = head;
@@ -52,8 +52,16 @@ for (let k = 0; k < 6; k++) {
   run(0.06);
 }
 run(3);
-check('quick notches: further', head - from > 3, head - from);
+check('quick notches: further than a step each', head - from > 6 * 0.25 + 1e-9, head - from);
 check('settled on the grid', Math.abs(head / 0.25 - Math.round(head / 0.25)) < 1e-9, head);
+
+// a notch with the grid at 1/8: an eighth
+(editor as { snap: number }).snap = 0.125;
+const at = head;
+wheel(-100);
+run(1);
+check('grid 1/8: one notch an eighth', Math.abs(head - at - 0.125) < 1e-9, head - at);
+(editor as { snap: number }).snap = 0.25;
 
 head = 0.5;
 wheel(300);

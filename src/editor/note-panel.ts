@@ -78,7 +78,7 @@ export class NotePanel {
     this.canvas.className = 'np-grid';
     this.label.className = 'np-label nm-dim';
     this.canvas.title = 'Сетка 4×3 на доле курсора, как её видит игрок; предыдущая нота каждой руки — бледная.\nКлик — поставить, потянуть из клетки — стрелка в ту сторону, ПКМ — удалить, средняя кнопка — другой цвет.\nКолёсико — шаг сетки по песне. 1/2/3/4 — красная, синяя, бомба, стена; W/A/S/D/F — направление (две сразу — диагональ).';
-    root.append(this.tools, this.label, this.canvas, this.volumeRow('Громкость песни', 'volume'), this.volumeRow('Удары нот', 'noteHitVolume'), this.scaleRow());
+    root.append(this.tools, this.label, this.canvas, this.volumeRow('Громкость песни', 'volume'), this.volumeRow('Удары нот', 'noteHitVolume'), this.scaleRow(), this.behindRow());
     this.renderTools();
     new ResizeObserver(() => this.resize()).observe(this.canvas);
     editor.onChange(() => {
@@ -144,30 +144,40 @@ export class NotePanel {
     return row;
   }
 
-  /** The 3D track's scale: metres a beat (longer: the notes farther apart along it). */
-  private scaleRow() {
+  /** A slider of the 3D track's settings (the wheel over it works too). */
+  private trackRow(name: string, title: string, key: 'trackScale' | 'trackBehind', min: number, max: number, step: number, format: (value: number) => string) {
     const row = document.createElement('label');
     row.className = 'np-scale';
-    row.title = 'Масштаб 3D-дорожки: насколько далеко друг от друга стоят доли (колёсико над ползунком тоже работает)';
-    const input = Object.assign(document.createElement('input'), { type: 'range', min: '0.4', max: '5', step: '0.1', value: String(settings().trackScale) });
+    row.title = title;
+    const input = Object.assign(document.createElement('input'), { type: 'range', min: String(min), max: String(max), step: String(step), value: String(settings()[key]) });
     const value = Object.assign(document.createElement('span'), { className: 'ins-value' });
-    const show = () => (value.textContent = `${Number(input.value).toFixed(1)} м/доля`);
+    const show = () => (value.textContent = format(Number(input.value)));
     show();
     input.addEventListener('input', () => {
       show();
-      setSettings({ trackScale: Number(input.value) });
+      setSettings({ [key]: Number(input.value) });
     });
     input.addEventListener(
       'wheel',
       (event) => {
         event.preventDefault();
-        input.value = String(Math.min(5, Math.max(0.4, Number(input.value) + (event.deltaY < 0 ? 0.1 : -0.1))));
+        input.value = String(Math.min(max, Math.max(min, Number(input.value) + (event.deltaY < 0 ? step : -step))));
         input.dispatchEvent(new Event('input'));
       },
       { passive: false },
     );
-    row.append(Object.assign(document.createElement('span'), { textContent: 'Масштаб дорожки' }), input, value);
+    row.append(Object.assign(document.createElement('span'), { textContent: name }), input, value);
     return row;
+  }
+
+  /** The 3D track's scale (metres a beat: longer, the notes farther apart along it) and how far behind
+   *  the wall the passed notes still show. */
+  private scaleRow() {
+    return this.trackRow('Масштаб дорожки', 'Масштаб 3D-дорожки: насколько далеко друг от друга стоят доли (колёсико над ползунком тоже работает)', 'trackScale', 0.4, 5, 0.1, (value) => `${value.toFixed(1)} м/доля`);
+  }
+
+  private behindRow() {
+    return this.trackRow('Пройденные ноты', 'Сколько долей за стеной ещё видны проигранные ноты (бледными)', 'trackBehind', 0.25, 4, 0.25, (value) => tr('{0} доли', value));
   }
 
   /** The tools and the direction pad (drawn again when the tool changes). */

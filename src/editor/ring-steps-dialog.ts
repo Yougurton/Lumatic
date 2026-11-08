@@ -21,7 +21,7 @@ const SPEEDS: [string, number][] = [
 
 let remembered: StepTransition = { ...DEFAULT_STEPS };
 
-export function ringStepsDialog(editor: Editor, blockId: string | null) {
+export function ringStepsDialog(editor: Editor, blockId: string | null, brush?: (block: RingBlock) => void) {
   if (editor.project === null || editor.ringInfo.length === 0) return;
   const old = blockId === null ? undefined : editor.ringBlockById(blockId);
   const values: StepTransition = { ...(old?.steps ?? remembered) };
@@ -52,7 +52,7 @@ export function ringStepsDialog(editor: Editor, blockId: string | null) {
     </div>
     <canvas class="steps-picture" data-id="picture" width="400" height="74"></canvas>
     <div class="nm-dim" data-id="summary"></div>
-    <div class="ce-dialog-buttons"><button type="button" data-id="fine" title="Открыть блок в редакторе поз: каждая поза отдельно, волны, раскладка по кольцам">Точнее…</button><span class="adjust-gap"></span><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="apply">${old === undefined ? 'Поставить' : 'Готово'}</button></div>`;
+    <div class="ce-dialog-buttons"><button type="button" data-id="fine" title="Открыть блок в редакторе поз: каждая поза отдельно, волны, раскладка по кольцам">Точнее…</button><span class="adjust-gap"></span><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="apply">${old === undefined ? (brush !== undefined ? 'Ставить мышью' : 'Поставить') : 'Готово'}</button></div>`;
   shade.append(box);
   document.body.append(shade);
   const el = <T extends HTMLElement>(name: string) => box.querySelector<T>(`[data-id="${name}"]`)!;
@@ -173,13 +173,16 @@ export function ringStepsDialog(editor: Editor, blockId: string | null) {
 
   const close = (keep: boolean) => {
     window.clearTimeout(timer);
+    // (a brush: the settings taken, the block put with the mouse — not here at the cursor)
+    const asBrush = keep && brush !== undefined && old === undefined;
     if (keep) {
       editor.tryRingBlock(current);
       remembered = { ...values };
     }
-    editor.finishTrying(keep);
+    editor.finishTrying(keep && !asBrush);
     shade.remove();
     window.removeEventListener('keydown', keys, true);
+    if (asBrush) brush(current);
   };
   const keys = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {

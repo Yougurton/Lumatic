@@ -528,10 +528,15 @@ function soundClips(
   const times: number[] = [];
   for (let t = effect.start; t < effect.end - 1e-6; t += settings.step) times.push(Math.round(t * 1e5) / 1e5);
   times.push(effect.end);
-  const { levels, peak } = soundLevels(source, settings, items.length, times, toSeconds, secondsPerBeat);
-  const count = items.length;
+  // (the direction, as a wave's: which item takes which band / place in the meter / delay — side by
+  // side from the middle sharing one)
+  const order = stepsOf(items.length, p.direction === 'pingpong' ? 'forward' : p.direction);
+  const places = Math.max(1, ...order.map((step) => step + 1));
+  const { levels, peak } = soundLevels(source, settings, places, times, toSeconds, secondsPerBeat);
+  const count = places;
   const out: LightClip[] = [];
-  items.forEach((item, index) => {
+  items.forEach((item, slot) => {
+    const index = order[slot]!;
     const own = levels[index]!;
     const points = times.map((time, k) => {
       const topHere = peak[k] === index;
@@ -546,7 +551,7 @@ function soundClips(
     for (let k = 0; k + 1 < kept.length; k++) {
       const from = kept[k]!;
       const to = kept[k + 1]!;
-      const clip = make(from.time, to.time, from.color, index);
+      const clip = make(from.time, to.time, from.color, slot);
       clip.startMode = 'on';
       clip.endColor = to.color;
       clip.endMode = k + 2 < kept.length ? 'stay' : 'off';

@@ -78,6 +78,7 @@ function createWindow(reopen?: string) {
     minHeight: 700,
     backgroundColor: '#101114',
     title: 'Lumatic',
+    icon: path.join(distRoot, 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

@@ -336,6 +336,31 @@ export function laserBlockMove(block: RingBlock): LaserMove {
   return move.mode === 'steps' ? { ...move, steps: Math.max(1, Math.round(length / Math.max(1 / 64, move.every))) } : { ...move, length };
 }
 
+/**
+ * A brush's block (from the ring tools) put on the timeline: a copy at `start`, as long as it was
+ * (`length` null — a click) or drawn `length` beats long — the steps spread over it, a glitch made
+ * that long, a spin or the lasers going that long, poses spread out in proportion.
+ */
+export function placeRingTemplate(template: RingBlock, start: number, length: number | null): RingBlock {
+  const own = template.end - template.start;
+  const wanted = length === null || length < 1e-6 ? own : length;
+  const block: RingBlock = { ...structuredClone(template), id: newId('k'), start, end: start + wanted };
+  block.poses = block.poses.map((pose) => ({ ...pose, id: newId('p') }));
+  if (Math.abs(wanted - own) < 1e-6) return block;
+  const ratio = wanted / Math.max(1e-6, own);
+  if (block.steps !== undefined) {
+    const steps = { ...block.steps, every: round(block.steps.every * ratio), turn: round(block.steps.turn * ratio) };
+    return { ...newStepsBlock(block.system, block.mode, start, steps), name: block.name };
+  }
+  if (block.glitch !== undefined) {
+    const glitch = { ...block.glitch, length: wanted, ...(block.glitch.hits === undefined ? {} : { hits: block.glitch.hits.filter((hit) => hit < wanted) }) };
+    return { ...newGlitchBlock(block.system, block.mode, start, glitch), name: block.name };
+  }
+  if (block.spin !== undefined || block.lasers !== undefined) return block;
+  block.poses = block.poses.map((pose) => ({ ...pose, beat: round(pose.beat * ratio), duration: round(pose.duration * ratio) }));
+  return block;
+}
+
 export function newZoomBlock(system: ZoomSystemInfo | undefined, start: number, end: number, name = ''): RingBlock {
   const length = Math.max(1, end - start);
   const initial = round(system?.initialStep ?? 2);

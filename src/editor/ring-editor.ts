@@ -6,7 +6,7 @@ import { easingPicker } from './easing-picker';
 import { beatDrumStep, numberDrum } from './grids';
 import { fillRingShape, ringSystemName } from './library';
 import { newId } from './model';
-import { absolutePose, dataFirstRing, poseBefore, MOTIONS, EVENT_SHAPES, firstRingFromLog, isTurn, isZoom, newPose, newRingBlock, newZoomBlock, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
+import { absolutePose, dataFirstRing, poseBefore, MOTIONS, EVENT_SHAPES, firstRingFromLog, isSingleRing, isTurn, isZoom, newPose, newRingBlock, newZoomBlock, poseAngles, ringDelay, poseBase, ringObjectNames, SHAPES, zoomPositions, type PoseShape, type RingBlock, type RingPose, type RingSystemInfo, type TurnWay, type ZoomSystemInfo } from './rings';
 
 /**
  * The editor of a ring pose block. It sits where the timeline is, so the 3D view above shows what it
@@ -454,7 +454,8 @@ export class RingEditor {
     }
     const events = block.mode === 'event';
     col.append(heading('Поза'));
-    col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
+    // (a single event: where it is is where it stands on the timeline — no beat within a block)
+    if (!isSingleRing(block)) col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
     // (ring events set the rings out evenly or as a spiral: those two)
     const shapes = SHAPES.filter(([shape]) => EVENT_SHAPES.has(shape));
     col.append(toggle(shapes, shapeOf(pose, block), (value) => this.changePose((item) => {
@@ -609,7 +610,8 @@ export class RingEditor {
       return col;
     }
     col.append(heading('Поза'));
-    col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
+    // (a single event: where it is is where it stands on the timeline — no beat within a block)
+    if (!isSingleRing(block)) col.append(labeled('Доля (от начала блока)', this.beatDrum(block, pose)));
     // (spacings a tenth apart; the game's own ones — squeezed, at the start, stretched — among them)
     col.append(labeled('Расстояние между кольцами', numberDrum(`zoom-step:${pose.id}`, pose.step, (value) => this.changePose((item) => (item.step = round(value))), { step: 0.1, min: -20, max: 40, digits: 2 })));
     if (system !== undefined) col.append(note(`В игре: сжато — ${String(round(system.position.minPositionStep))}, в начале — ${String(round(system.initialStep))}, растянуто — ${String(round(system.position.maxPositionStep))}.`));

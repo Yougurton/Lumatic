@@ -91,6 +91,12 @@ def variants():
   <path d="{d}" transform="{tr}" fill="{WHITE}"/>
   {dashes(96, 416, 374, 16, 8, ['#ff4f8b', '#ff4f8b', '#ff9a3d', '#ffd84a', '#4dffb8', '#3dc8ff', '#8f6bff', '#8f6bff'], gap_ratio=0.45, opacity_bell=True)}'''))
 
+    # 1, small: the same for 16–32 px — the letters bigger, four thick lights (thin ones blur away)
+    d, tr, bottom = lu('Bold', 360, c, 92)
+    made.append(svg('1-classic-small', f'''<rect width="{SIZE}" height="{SIZE}" rx="{RADIUS}" fill="{PANEL}"/>
+  <path d="{d}" transform="{tr}" fill="{WHITE}"/>
+  {dashes(76, 436, 384, 44, 4, ['#ff4f8b', '#ffd84a', '#4dffb8', '#8f6bff'], gap_ratio=0.3)}'''))
+
     # 2. bold: heavier, bigger letters; six lights, one a colour
     d, tr, bottom = lu('Bold', 326, c, 100)
     made.append(svg('2-bold', f'''<rect width="{SIZE}" height="{SIZE}" rx="{RADIUS}" fill="{PANEL}"/>
