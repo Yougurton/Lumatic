@@ -3340,6 +3340,29 @@ export class Editor {
     this.changed();
   }
 
+  /** Ring and zoom events made the game's own: Chroma's numbers taken off (raw events), a Lumatic
+   *  event replaced by one plain event where it starts (one undo step). */
+  toGameEvents(ids: readonly string[]) {
+    const project = this.project;
+    if (project === null) return;
+    const raws = project.raw.filter((event) => ids.includes(event.id) && (event.type === RING_EVENT_TYPE || event.type === ZOOM_EVENT_TYPE));
+    const blocks = this.ringBlocks.filter((block) => ids.includes(block.id) && !isLasers(block));
+    if (raws.length === 0 && blocks.length === 0) return;
+    this.checkpoint();
+    for (const event of raws) {
+      delete event.customData;
+      event.value = 0;
+      event.floatValue = 1;
+    }
+    const made: RawEvent[] = blocks.map((block) => ({ id: newId('r'), beat: block.start, type: isTurn(block) ? RING_EVENT_TYPE : ZOOM_EVENT_TYPE, value: 0, floatValue: 1 }));
+    project.raw.push(...made);
+    const gone = new Set(blocks.map((block) => block.id));
+    project.ringBlocks = this.ringBlocks.filter((block) => !gone.has(block.id));
+    this.posePick = null;
+    this.selection = new Set([...raws.map((event) => event.id), ...made.map((event) => event.id)]);
+    this.changed();
+  }
+
   /** Chroma's (or the game's) ring and zoom events made Lumatic's: each a pose with its move — its
    *  turn from where the first ring was (by its rotation and direction), its step, its speed's time,
    *  its wave's (one undo step). */

@@ -4,7 +4,8 @@ import { tr } from './i18n';
 /**
  * A map packed for BeatSaver: a zip of Info.dat and only what it points to — the song, the cover, the
  * difficulties (in v4 also the audio data and the lightshows), the contributors' pictures — all at the
- * zip's top. Lumatic's own files (projects, backups, the song's kept source) stay out.
+ * zip's top. Lumatic's own files (backups, the song's kept source) stay out — its projects of the
+ * difficulties go in only when asked.
  */
 
 type Json = Record<string, unknown>;
@@ -46,7 +47,7 @@ export const BEATSAVER_LIMIT = 15 * 1024 * 1024;
  * The zip: `files` — the folder's file names; `read` — a file's bytes. Already squeezed files (the
  * song, pictures) are stored as they are, the rest compressed.
  */
-export async function packForBeatSaver(files: readonly string[], read: (name: string) => Promise<ArrayBuffer>): Promise<BeatSaverPack> {
+export async function packForBeatSaver(files: readonly string[], read: (name: string) => Promise<ArrayBuffer>, options: { lumatic?: boolean } = {}): Promise<BeatSaverPack> {
   const find = (name: string) => files.find((file) => file.toLowerCase() === name.toLowerCase().replace(/\\/gu, '/'));
   const infoName = find('Info.dat');
   if (infoName === undefined) throw new Error('В папке карты нет Info.dat');
@@ -68,6 +69,14 @@ export async function packForBeatSaver(files: readonly string[], read: (name: st
     const stored = /\.(ogg|egg|png|jpe?g|webp)$/iu.test(name);
     zip[name] = [new Uint8Array(await read(found)), { level: stored ? 0 : 6 }];
     packed.push(name);
+  }
+  // (Lumatic's projects of the difficulties, when asked: the light's effects, groups… kept for later)
+  if (options.lumatic === true) {
+    for (const name of files) {
+      if (!/\.lumatic\.json$/iu.test(name) || name.includes('/') || name.includes('\\') || packed.includes(name)) continue;
+      zip[name] = [new Uint8Array(await read(name)), { level: 6 }];
+      packed.push(name);
+    }
   }
   const info = JSON.parse(infoText) as Json;
   const song = String(info.version ?? '').startsWith('4') ? text(((info.audio ?? {}) as Json).songFilename) : text(info._songFilename);

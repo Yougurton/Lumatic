@@ -34,6 +34,62 @@ export const OTHER_ENVIRONMENTS: [string, string][] = environmentCatalog
   .filter((entry) => !isGLSCapableEnvironment(entry.id) && !SHOW_ENVIRONMENTS.some(([id]) => id === entry.id))
   .map((entry) => [entry.id, entry.title]);
 
+/** The game's environments in the order they came out (oldest first; the ones not listed after them). */
+const RELEASE_ORDER = [
+  'DefaultEnvironment',
+  'TriangleEnvironment',
+  'NiceEnvironment',
+  'BigMirrorEnvironment',
+  'KDAEnvironment',
+  'MonstercatEnvironment',
+  'CrabRaveEnvironment',
+  'DragonsEnvironment',
+  'OriginsEnvironment',
+  'GlassDesertEnvironment',
+  'PanicEnvironment',
+  'RocketEnvironment',
+  'GreenDayEnvironment',
+  'GreenDayGrenadeEnvironment',
+  'TimbalandEnvironment',
+  'FitBeatEnvironment',
+  'LinkinParkEnvironment',
+  'BTSEnvironment',
+  'KaleidoscopeEnvironment',
+  'InterscopeEnvironment',
+  'SkrillexEnvironment',
+  'BillieEnvironment',
+  'HalloweenEnvironment',
+  'GagaEnvironment',
+  'WeaveEnvironment',
+  'PyroEnvironment',
+  'EDMEnvironment',
+  'TheSecondEnvironment',
+  'LizzoEnvironment',
+  'TheWeekndEnvironment',
+  'RockMixtapeEnvironment',
+  'Dragons2Environment',
+  'Panic2Environment',
+  'QueenEnvironment',
+  'LinkinPark2Environment',
+  'TheRollingStonesEnvironment',
+  'LatticeEnvironment',
+  'DaftPunkEnvironment',
+  'HipHopEnvironment',
+  'ColliderEnvironment',
+  'BritneyEnvironment',
+  'Monstercat2Environment',
+  'MetallicaEnvironment',
+];
+
+/** Every environment with classic lights the editor offers, in the order they came out in the game. */
+export const STANDARD_ENVIRONMENTS: [string, string][] = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS].sort(([a], [b]) => {
+  const rank = (id: string) => {
+    const index = RELEASE_ORDER.indexOf(id);
+    return index < 0 ? RELEASE_ORDER.length : index;
+  };
+  return rank(a) - rank(b);
+});
+
 const DIFFICULTIES: [string, number][] = [
   ['ExpertPlus', 9],
   ['Expert', 7],
@@ -579,7 +635,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
 /** A plate showing an environment (its picture, name, who made it) with a button opening the gallery to
  *  pick another (the new map's dialog and the map's settings). */
 export function environmentPlate(plate: HTMLElement, initial: EnvironmentChoice, title: string, changed: (choice: EnvironmentChoice) => void) {
-  const standard = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS];
+  const standard = STANDARD_ENVIRONMENTS;
   let choice = initial;
   const showPlate = () => {
     const label = choiceLabel(choice, standard);

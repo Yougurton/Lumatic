@@ -322,15 +322,57 @@ async function save() {
   }
 }
 
+/** What goes into the BeatSaver zip besides the map (null: cancelled): Lumatic's projects, the choice
+ *  remembered. */
+function packOptions(): Promise<{ lumatic: boolean } | null> {
+  return new Promise((resolve) => {
+    const shade = document.createElement('div');
+    shade.className = 'ce-shade';
+    const box = document.createElement('div');
+    box.className = 'ce-dialog adjust-dialog';
+    box.innerHTML = `
+      <div class="ce-dialog-title">Архив для BeatSaver</div>
+      <div class="nm-dim">Карта сохранится, в архив попадут Info.dat и файлы, на которые он указывает: песня, обложка, сложности.</div>
+      <label class="adjust-check"><input type="checkbox" data-id="lumatic"> Добавить файлы Lumatic (проекты сложностей: эффекты, группы, кольца — чтобы продолжить работу в Lumatic)</label>
+      <div class="ce-dialog-buttons"><button type="button" data-id="cancel">Отмена</button><button type="button" class="primary" data-id="pack">Собрать</button></div>`;
+    shade.append(box);
+    document.body.append(shade);
+    const check = box.querySelector<HTMLInputElement>('[data-id="lumatic"]')!;
+    check.checked = settings().packLumatic;
+    const close = (result: { lumatic: boolean } | null) => {
+      shade.remove();
+      window.removeEventListener('keydown', keys, true);
+      resolve(result);
+    };
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        close(null);
+      } else if (event.key === 'Enter') {
+        event.stopPropagation();
+        box.querySelector<HTMLButtonElement>('[data-id="pack"]')!.click();
+      }
+    };
+    window.addEventListener('keydown', keys, true);
+    box.querySelector('[data-id="cancel"]')!.addEventListener('click', () => close(null));
+    box.querySelector('[data-id="pack"]')!.addEventListener('click', () => {
+      setSettings({ packLumatic: check.checked });
+      close({ lumatic: check.checked });
+    });
+  });
+}
+
 /** The map packed for BeatSaver: saved first, then Info.dat and what it points to in a zip where the
  *  user picks. */
 async function exportBeatSaver() {
   const map = editor.map;
   if (map === null) return;
+  const options = await packOptions();
+  if (options === null) return;
   try {
     if (editor.dirty) await editor.save();
     editor.setStatus(tr('Собираю архив для BeatSaver…'));
-    const pack = await packForBeatSaver(map.folder.files, (name) => map.folder.readBinary(name));
+    const pack = await packForBeatSaver(map.folder.files, (name) => map.folder.readBinary(name), options);
     if (pack.missing.length > 0 && !window.confirm(tr('Info.dat указывает на файлы, которых нет в папке: {0}. Всё равно собрать архив?', pack.missing.join(', ')))) {
       editor.setStatus(tr('Архив не собран'));
       return;

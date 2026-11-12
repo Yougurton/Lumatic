@@ -2,7 +2,7 @@ import type { Editor } from './editor';
 import { environmentGallery } from './environment-gallery';
 import { environmentParts, findPreset, fitsV2, modsFragment, ringSystemParts, type EnvironmentMods, type RingLook } from './environment-mods';
 import { difficultyFile, difficultyVersion } from './map-io';
-import { OTHER_ENVIRONMENTS, SHOW_ENVIRONMENTS } from './new-map';
+import { STANDARD_ENVIRONMENTS } from './new-map';
 
 /**
  * "Environment": a ready-made environment for the map (MadChase's, Phøenix's, Lonely's), or the environment as it is
@@ -109,7 +109,7 @@ export async function environmentDialog(editor: Editor): Promise<void> {
       environmentGallery({
         mode: 'apply',
         current: { environment, preset: mods.preset },
-        standard: [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS],
+        standard: STANDARD_ENVIRONMENTS,
         version,
         choose: (choice) => {
           const preset = findPreset(choice.preset);

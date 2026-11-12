@@ -115,7 +115,7 @@ export class Inspector {
   }
 
   /** Which tab the rings' events show: Lumatic's own settings, or Chroma's numbers as they are. */
-  private ringTab: 'lumatic' | 'chroma' | null = null;
+  private ringTab: 'game' | 'lumatic' | 'chroma' | null = null;
   private ringTabFor = '';
 
   /**
@@ -132,16 +132,27 @@ export class Inspector {
     const block = pose !== undefined ? pickedBlock : one;
     const raw = (editor.project?.raw ?? []).filter((event) => editor.selection.has(event.id));
     const rawRing = block === undefined && raw.length > 0 && raw.length === editor.selection.size && raw.every((event) => event.type === raw[0]!.type && (event.type === 8 || event.type === 9));
-    if (block === undefined && !rawRing) return false;
-    // (a new thing picked: its own tab first — Lumatic's for Lumatic's, Chroma's for Chroma's)
+    if (block === undefined && !rawRing) {
+      // (picked again later: its own tab first again)
+      this.ringTabFor = '';
+      return false;
+    }
+    // (the game's own event: no Chroma numbers in it)
+    const plain = block === undefined && raw.every((event) => event.customData === undefined || Object.keys(event.customData).length === 0);
+    // (lasers have no plain event of the rings' kind: Lumatic and Chroma only)
+    const gameTab = block === undefined || !isLasers(block);
+    // (a new thing picked: its own tab first — the game's for the game's, Lumatic's for Lumatic's,
+    // Chroma's for Chroma's)
     const key = block?.id ?? raw.map((event) => event.id).join(',');
     if (key !== this.ringTabFor) {
       this.ringTabFor = key;
-      this.ringTab = block !== undefined ? 'lumatic' : 'chroma';
+      this.ringTab = block !== undefined ? 'lumatic' : plain ? 'game' : 'chroma';
     }
+    if (this.ringTab === 'game' && !gameTab) this.ringTab = 'lumatic';
     const tabs = document.createElement('div');
     tabs.className = 'lib-tabs ring-tabs';
     for (const [value, label, hint] of [
+      ...(gameTab ? ([['game', 'Игра', 'Обычное событие Beat Saber, без модов']] as const) : []),
       ['lumatic', 'Lumatic', 'Настройки Lumatic: поза, переход, движение'],
       ['chroma', 'Chroma', 'Числа события Chroma как есть: поворот, шаг, prop, скорость'],
     ] as const) {
@@ -156,6 +167,18 @@ export class Inspector {
       tabs.append(tab);
     }
     root.append(tabs);
+    if (this.ringTab === 'game') {
+      if (plain) {
+        root.append(Object.assign(document.createElement('h3'), { textContent: tr('Обычное событие Beat Saber') }));
+        return true;
+      }
+      root.append(this.note(block !== undefined ? tr('Событие Lumatic станет одним обычным событием Beat Saber на доле {0}: поза и переход пропадут.', round3(block.start)) : tr('Числа Chroma у события пропадут — останется обычное событие Beat Saber.')));
+      const make = document.createElement('button');
+      make.textContent = tr('Сделать обычным событием игры');
+      make.addEventListener('click', () => editor.toGameEvents(block !== undefined ? [block.id] : raw.map((event) => event.id)));
+      root.append(make);
+      return true;
+    }
     if (this.ringTab === 'lumatic') {
       if (block === undefined) {
         // a Chroma (or the game's) event: made one of Lumatic's — a pose and its move

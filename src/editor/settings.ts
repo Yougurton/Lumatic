@@ -29,6 +29,8 @@ export interface Settings {
   checkUpdates: boolean;
   /** A version the user chose not to be asked about. */
   skippedVersion: string;
+  /** The BeatSaver zip: Lumatic's projects of the difficulties in it too. */
+  packLumatic: boolean;
   /** The notes side's track: the red line where the player's sight ends (the half jump). */
   visionLine: boolean;
   /** The show's lights in the 3D view (off: every lamp a dim white, nothing moving). */
@@ -103,6 +105,7 @@ export const DEFAULT_SETTINGS: Settings = {
   trackBehind: 1.5,
   checkUpdates: true,
   skippedVersion: '',
+  packLumatic: false,
   ringTicks: 30.6,
   uiScale: 1,
   wheel: 'time',

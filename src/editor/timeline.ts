@@ -1384,7 +1384,8 @@ export class Timeline {
     const events = this.visibleRaw(row.type);
     const hue = row.type === 8 ? 300 : row.type === 9 ? 190 : row.type === 5 ? 45 : 140;
     if (isRingRow(row.type)) this.drawRingRow(row.type, top, height, hue);
-    // (the boost: on — a filled diamond, off — a hollow one; one that changes nothing, red-rimmed)
+    // (the boost: on — a filled diamond, off — a hollow one; one that changes nothing, red-rimmed; the
+    // rings' and zoom's own game events hollow, Chroma's filled)
     const boost = row.type === 5 ? this.boostStates() : null;
     for (const event of events) {
       const x = this.beatToX(event.beat);
@@ -1399,7 +1400,9 @@ export class Timeline {
       ctx.lineTo(x - 5, cy);
       ctx.closePath();
       const state = boost?.get(event.id);
-      if (state !== undefined && !state.on) {
+      // (a ring or zoom event of the game's own — no Chroma numbers: hollow; with them: filled)
+      const plainRing = (row.type === 8 || row.type === 9) && (event.customData === undefined || Object.keys(event.customData).length === 0);
+      if ((state !== undefined && !state.on) || plainRing) {
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.6;
         ctx.stroke();
