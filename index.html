@@ -2709,6 +2709,42 @@
         font-size: 14px;
         background: rgba(20, 22, 30, 0.85);
       }
+      .update-dialog {
+        width: min(560px, 94vw);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .update-notes {
+        max-height: 50vh;
+        overflow-y: auto;
+        background: var(--panel2, #1b1d24);
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .update-notes h4 {
+        margin: 8px 0 4px;
+      }
+      .update-notes ul {
+        margin: 4px 0;
+        padding-left: 20px;
+      }
+      .update-progress {
+        width: 100%;
+      }
+      .song-volume input[type='range'] {
+        flex: 1;
+        min-width: 120px;
+      }
+      .song-volume-value {
+        min-width: 4.5em;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .song-volume-warn {
+        color: #ffb347;
+      }
       .lib-poses {
         width: 100%;
         margin: 0 0 8px;
@@ -3258,6 +3294,7 @@
         <select id="difficulty" title="Сложность" disabled></select>
         <span class="side-tabs"><button id="tab-lights" class="active" title="Свет: события, эффекты, кольца, лазеры (Tab — переключить)">💡 Свет</button><button id="tab-notes" title="Ноты, бомбы, стены, дуги и цепи (Tab — переключить)">◆ Ноты</button></span>
         <button id="save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
+        <button id="beatsaver" title="Архив для BeatSaver: карта сохраняется, в zip — только Info.dat и файлы, на которые он указывает (песня, обложка, сложности)" disabled>📦 BeatSaver</button>
         <button id="settings" title="Свойства карты: названия, BPM, начало песни" disabled>Свойства</button>
         <button id="quest" title="Сохранить и отправить карту на Quest по adb (кабель или Wi‑Fi)" hidden disabled>📤 Quest</button>
         <button id="environment" title="Окружение карты: готовые окружения, лишние детали, размер колец и их света" disabled>Окружение</button>

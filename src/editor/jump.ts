@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 /**
  * How fast a difficulty's notes come and how far ahead they show: the note jump speed (NJS), the start
  * offset, and what they give — the half jump (beats), the jump distance (metres) and the reaction time
@@ -58,7 +59,7 @@ export function jumpWarnings(difficulty: string, njs: number, distance: number, 
   if (reaction > 1300) out.push({ level: 'warn', text: `Ноты видны очень заранее (${String(Math.round(reaction))} мс): на экране много нот сразу, их легко перепутать.` });
   if (range !== undefined) {
     if (njs < range.njs[0] || njs > range.njs[1]) out.push({ level: 'warn', text: `NJS ${String(njs)} вне обычного для ${name} (${String(range.njs[0])}–${String(range.njs[1])}, по BSMG).` });
-    if (distance < range.jd[0] || distance > range.jd[1]) out.push({ level: 'warn', text: `Дальность появления ${distance.toFixed(1)} м вне обычной для ${name} (${String(range.jd[0])}–${String(range.jd[1])} м, по BSMG).` });
+    if (distance < range.jd[0] || distance > range.jd[1]) out.push({ level: 'warn', text: tr('Дальность появления {0} м вне обычной для {1} ({2}–{3} м, по BSMG).', distance.toFixed(1), name, range.jd[0], range.jd[1]) });
     if (nps !== undefined && nps > 0 && (nps < range.nps[0] || nps > range.nps[1])) out.push({ level: 'warn', text: `Нот в секунду ${nps.toFixed(2)} — вне обычного для ${name} (${String(range.nps[0])}–${String(range.nps[1])}, по официальным картам).` });
   }
   return out;

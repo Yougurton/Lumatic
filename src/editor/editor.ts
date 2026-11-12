@@ -47,14 +47,14 @@ import { BANDS } from './onsets';
 import { lightGroupName, otherEventName, setEnvironmentTracks } from './names';
 import type { MapFolder } from './platform';
 import { choose } from './menu';
-import { tr } from './i18n';
+import { tr, translate } from './i18n';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
 import { settings } from './settings';
 import { checkMap, type MapIssue } from './checks';
 import { jumpOf } from './jump';
-import { allObjects, objectSpan, usesNoodlePlaces, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
+import { allObjects, chainFromNote, directionOf, objectSpan, usesNoodlePlaces, noteRolls, readFakeWalls, strobeWalls, type MapWall, emptyObjects, engineObjects, readObjects, unsupported, type MapObjects, type ObjectKind, type WallKind } from './notes';
 import { effectiveNoteJumpSpeed } from '../engine/core/beatmap/info';
 import { createRingRotationSampler, deterministicRingRandom } from '../engine/core/lighting/ring-motion';
 import type { BasicEvent } from '../engine/core/beatmap/types';
@@ -2595,7 +2595,8 @@ export class Editor {
     if (target === null) return null;
     return {
       id: newId('e'),
-      name,
+      // (in the language picked: the name stays as it was made)
+      name: translate(name),
       kind,
       ...target,
       start,
@@ -2984,6 +2985,7 @@ export class Editor {
   addRingBlock(block: RingBlock) {
     if (this.project === null) return;
     this.checkpoint();
+    block.name = translate(block.name);
     this.ringBlocks.push(block);
     fitRingBlock(block);
     this.selection = new Set([block.id]);
@@ -3546,22 +3548,28 @@ export class Editor {
    *  first note's place; the second only marks where it ends). */
   makeChain(): boolean {
     const pair = this.selectedPair();
-    if (pair === null) {
-      this.setStatus('Для цепи выделите две ноты на разных долях: начало и конец');
+    const picked = this.objects.notes.filter((note) => this.noteSelection.has(note.id));
+    const single = pair === null && picked.length === 1 ? picked[0]! : null;
+    if (pair === null && single === null) {
+      this.setStatus('Для цепи выделите ноту (хвост встанет по её стрелке) или две ноты на разных долях: начало и конец');
       return false;
     }
     if (difficultyVersionOf(this) === '2') {
       this.setStatus('В формате v2 цепей нет — переведите сложность в v3');
       return false;
     }
-    const [head, tail] = pair;
-    const chain = { id: newId('n'), c: head.c, b: head.b, x: head.x, y: head.y, d: head.d === 8 ? 1 : head.d, tb: tail.b, tx: tail.x, ty: tail.y, sc: 5, s: 1 };
+    // (one note: its tail two cells along the arrow; two: from the first to the second, the head's
+    // arrow turned to the tail)
+    const chain =
+      single !== null
+        ? { id: newId('n'), ...chainFromNote(single, Math.max(1 / 16, Math.min(0.5, this.snap || 0.25))) }
+        : { id: newId('n'), c: pair![0].c, b: pair![0].b, x: pair![0].x, y: pair![0].y, d: directionOf(pair![1].x - pair![0].x, pair![1].y - pair![0].y, pair![0].d === 8 ? 1 : pair![0].d), tb: pair![1].b, tx: pair![1].x, ty: pair![1].y, sc: 5, s: 1 };
     this.noteCheckpoint();
-    this.removeObjects(new Set([head.id, tail.id]));
+    this.removeObjects(new Set(single !== null ? [single.id] : [pair![0].id, pair![1].id]));
     this.objects.chains.push(chain);
     this.noteSelection = new Set([chain.id]);
     this.notesChanged();
-    this.setStatus('Цепь добавлена: число звеньев — справа или Alt+колесо');
+    this.setStatus('Цепь добавлена: голову и хвост можно тянуть мышью, число звеньев — справа или Alt+колесо');
     return true;
   }
 

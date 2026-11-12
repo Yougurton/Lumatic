@@ -21,6 +21,16 @@ export interface MapFolder {
   remove?(name: string): Promise<void>;
 }
 
+/** The newest release against this app (electron/updater.ts). */
+export interface UpdateInfo {
+  current: string;
+  latest: string | null;
+  newer: boolean;
+  notes: string;
+  page: string;
+  asset: { url: string; size: number; name: string } | null;
+}
+
 interface NativeApi {
   openFolder(): Promise<{ path: string; files: string[] } | null>;
   listFolder(path: string): Promise<string[]>;
@@ -31,6 +41,8 @@ interface NativeApi {
   backupFile?(path: string, keep: number): Promise<void>;
   /** Deletes a file of an opened folder (a copy kept in its "Lumatic backups" folder first). */
   deleteFile?(path: string): Promise<void>;
+  /** A file saved where the user picks (null: cancelled; else where it went). */
+  saveFileAs?(name: string, data: ArrayBuffer, filterName: string, extensions: string[]): Promise<string | null>;
   /** The language of the window's own questions (closing with unsaved changes, picking folders). */
   setLanguage?(language: string): void;
   /** The whole window's scale. */
@@ -45,6 +57,13 @@ interface NativeApi {
   pickScreenColor?(): Promise<[number, number, number] | null>;
   /** The colours saved in another map's projects (its folder picked; null: cancelled). */
   paletteFromMap?(): Promise<{ name: string; colors: number[][]; presets?: unknown[] } | null>;
+  /** Updates from the project's releases (electron/updater.ts). */
+  updates?: {
+    check(): Promise<UpdateInfo>;
+    canInstall(): Promise<boolean>;
+    download(url: string, size: number, progress: (done: number) => void): Promise<boolean>;
+    install(): Promise<void>;
+  };
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
@@ -63,6 +82,21 @@ declare global {
 }
 
 export const isDesktop = () => window.chroeditorNative !== undefined;
+
+/** A file saved where the user picks (the browser: downloaded). Where it went (null: cancelled; the
+ *  browser: its name). */
+export async function saveFileAs(name: string, data: Uint8Array, filterName: string, extensions: string[]): Promise<string | null> {
+  const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  const native = window.chroeditorNative;
+  if (native?.saveFileAs !== undefined) return native.saveFileAs(name, bytes, filterName, extensions);
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const link = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return name;
+}
 
 function joinPath(folder: string, name: string) {
   return `${folder.replace(/[\\/]+$/u, '')}/${name}`;

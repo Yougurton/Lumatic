@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   writeFile: (file: string, data: ArrayBuffer | string) => ipcRenderer.invoke('write-file', file, data),
   backupFile: (file: string, keep: number) => ipcRenderer.invoke('backup-file', file, keep),
   deleteFile: (file: string) => ipcRenderer.invoke('delete-file', file),
+  saveFileAs: (name: string, data: ArrayBuffer, filterName: string, extensions: string[]) => ipcRenderer.invoke('save-file-as', name, data, filterName, extensions),
   setLanguage: (language: string) => ipcRenderer.send('set-language', language),
   setZoom: (factor: number) => webFrame.setZoomFactor(factor),
   pickScreenColor: () => ipcRenderer.invoke('pick-screen-color'),
@@ -19,6 +20,16 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   log: (kind: string, message: string) => ipcRenderer.send('log', kind, message),
   openLogs: () => ipcRenderer.invoke('open-logs'),
   paletteFromMap: () => ipcRenderer.invoke('palette-from-map'),
+  updates: {
+    check: () => ipcRenderer.invoke('update-check'),
+    canInstall: () => ipcRenderer.invoke('update-can-install'),
+    download: (url: string, size: number, progress: (done: number) => void) => {
+      const listener = (_event: unknown, done: number) => progress(done);
+      ipcRenderer.on('update-progress', listener);
+      return ipcRenderer.invoke('update-download', url, size).finally(() => ipcRenderer.removeListener('update-progress', listener));
+    },
+    install: () => ipcRenderer.invoke('update-install'),
+  },
   quest: {
     findAdb: (picked?: string) => ipcRenderer.invoke('quest-find-adb', picked),
     downloadAdb: () => ipcRenderer.invoke('quest-download-adb'),

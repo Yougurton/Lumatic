@@ -25,6 +25,10 @@ export interface Settings {
   trackScale: number;
   /** The 3D track: how far behind the wall the passed notes still show (beats). */
   trackBehind: number;
+  /** Ask for a newer version at the start. */
+  checkUpdates: boolean;
+  /** A version the user chose not to be asked about. */
+  skippedVersion: string;
   /** The notes side's track: the red line where the player's sight ends (the half jump). */
   visionLine: boolean;
   /** The show's lights in the 3D view (off: every lamp a dim white, nothing moving). */
@@ -97,6 +101,8 @@ export const DEFAULT_SETTINGS: Settings = {
   visionLine: true,
   trackScale: 1.6,
   trackBehind: 1.5,
+  checkUpdates: true,
+  skippedVersion: '',
   ringTicks: 30.6,
   uiScale: 1,
   wheel: 'time',

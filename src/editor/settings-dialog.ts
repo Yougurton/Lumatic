@@ -1,3 +1,5 @@
+import type { Editor } from './editor';
+import { checkUpdates } from './updates';
 import { tr } from './i18n';
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
@@ -32,7 +34,7 @@ const GRIDS: [string, number][] = [
 
 let lastSection: Section = 'general';
 
-export function settingsDialog(restart: () => void) {
+export function settingsDialog(restart: () => void, editorRef: Editor) {
   const shade = document.createElement('div');
   shade.className = 'ce-shade';
   const box = document.createElement('div');
@@ -163,6 +165,18 @@ export function settingsDialog(restart: () => void) {
         'Правый клик по пустому месту таймлайна по-прежнему даёт выбрать: в строку под мышью или как было.',
       ),
       row('Горячие клавиши', Object.assign(document.createElement('button'), { type: 'button', textContent: '⌨ Назначить…', onclick: () => void hotkeysDialog() })),
+      row(
+        'Обновления',
+        (() => {
+          const box = document.createElement('div');
+          box.className = 'steps-buttons';
+          const ask = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Проверить сейчас' });
+          ask.addEventListener('click', () => void checkUpdates(editorRef, true));
+          box.append(check(' Проверять при запуске', () => settings().checkUpdates, (on) => change({ checkUpdates: on })), ask);
+          return box;
+        })(),
+        tr('Версия {0}. Новая версия скачивается и ставится сама, с описанием изменений.', __APP_VERSION__),
+      ),
     ],
     view: () => [
       row(
@@ -422,8 +436,7 @@ export function settingsDialog(restart: () => void) {
   });
 }
 
-/** "About": the editor's name and version (a beta: not released to the public yet), who makes it, and
- *  whose work it stands on. */
+/** "About": the editor's name and version, who makes it, and whose work it stands on. */
 function aboutPage(): HTMLElement {
   const page = document.createElement('div');
   page.className = 'about';
@@ -432,7 +445,6 @@ function aboutPage(): HTMLElement {
   logo.src = 'lumatic-wordmark.svg';
   logo.alt = 'Lumatic';
   const version = Object.assign(document.createElement('div'), { className: 'about-version', textContent: tr('Версия {0} beta', __APP_VERSION__) });
-  const beta = Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: 'Бета-версия: публичного релиза ещё не было.' });
   const author = document.createElement('div');
   author.className = 'about-line';
   author.append(Object.assign(document.createElement('span'), { className: 'nm-dim', textContent: 'Разработчик Lumatic: ' }), Object.assign(document.createElement('b'), { textContent: 'Yougurton' }));
@@ -446,8 +458,7 @@ function aboutPage(): HTMLElement {
   const thanks = document.createElement('ul');
   thanks.className = 'about-list';
   thanks.append(
-    item(link('ChroMapper', 'https://github.com/Caeden117/ChroMapper'), ' — ', 'его разработчикам: за редактор, на который Lumatic равняется — раскладку, клавиши, работу с Chroma.'),
-    item(Object.assign(document.createElement('b'), { textContent: 'ChroViewer' }), ' — ', 'его разработчикам: за просмотр карт, на котором построен 3D-вид Lumatic, и данные окружений игры.'),
+    item('Разработчикам ', link('ChroViewer', 'https://github.com/Umbranoxio/chroviewer'), ' за просмотр карт, на котором построен 3D-вид Lumatic, и данные окружений игры.'),
   );
   const environments = document.createElement('ul');
   environments.className = 'about-list';
@@ -465,6 +476,6 @@ function aboutPage(): HTMLElement {
     link('github.com/Yougurton/ChroEditor', 'https://github.com/Yougurton/ChroEditor'),
     tr('. Текст лицензии — LICENSE.txt рядом с программой, сторонние компоненты и их лицензии — THIRD_PARTY_NOTICES.md.'),
   );
-  page.append(logo, version, beta, author, heading('Спасибо'), thanks, heading('Готовые окружения'), environments, heading('Лицензия'), licence);
+  page.append(logo, version, author, heading('Спасибо'), thanks, heading('Готовые окружения'), environments, heading('Лицензия'), licence);
   return page;
 }

@@ -1,3 +1,4 @@
+import { canInstall, checkForUpdate, downloadUpdate, installUpdate } from './updater';
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron';
 import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -276,6 +277,14 @@ void app.whenReady().then(() => {
     if (!allowed(file)) throw new Error('not in an opened folder');
     await backupFile(file, keep);
   });
+  ipcMain.handle('save-file-as', async (event, name: string, data: ArrayBuffer, filterName: string, extensions: string[]) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = { title: say('Сохранить', 'Save'), defaultPath: path.join(app.getPath('documents'), name), filters: [{ name: filterName, extensions }] };
+    const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options);
+    if (result.canceled || result.filePath === undefined) return null;
+    await fs.writeFile(result.filePath, Buffer.from(data));
+    return result.filePath;
+  });
   ipcMain.handle('delete-file', async (_event, file: string) => {
     if (!allowed(file)) throw new Error('not in an opened folder');
     // (a copy kept first: a deleted difficulty can be brought back from "Lumatic backups")
@@ -342,6 +351,21 @@ void app.whenReady().then(() => {
   ipcMain.handle('open-logs', async () => {
     await fs.mkdir(logFolder(), { recursive: true });
     return shell.openPath(logFolder());
+  });
+  // updates: the newest release asked about, downloaded, put in place
+  let downloaded: string | null = null;
+  ipcMain.handle('update-check', () => checkForUpdate());
+  ipcMain.handle('update-can-install', () => canInstall());
+  ipcMain.handle('update-download', async (event, url: string, size: number) => {
+    downloaded = await downloadUpdate(url, size, (done) => {
+      if (!event.sender.isDestroyed()) event.sender.send('update-progress', done);
+    });
+    return true;
+  });
+  ipcMain.handle('update-install', async () => {
+    if (downloaded === null) throw new Error('nothing downloaded');
+    log('update', `installing over ${app.getVersion()}`);
+    await installUpdate(downloaded);
   });
   log('start', `Lumatic ${app.getVersion()}`);
 

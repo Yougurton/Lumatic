@@ -9,7 +9,7 @@ import { colorsDialog } from './editor/colors-dialog';
 import { environmentDialog } from './editor/environment-dialog';
 import { newMapDialog } from './editor/new-map';
 import { canSendToQuest, questDialog } from './editor/quest-dialog';
-import { isDesktop, openMapFolder, openRecentFolder, recentFolders, type MapFolder } from './editor/platform';
+import { isDesktop, openMapFolder, openRecentFolder, recentFolders, saveFileAs, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
 import { MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
 import { adjustDialog } from './editor/adjust-dialog';
@@ -25,6 +25,8 @@ import { setRingTickRate } from './engine/core/lighting/ring-motion';
 import { NotePanel } from './editor/note-panel';
 import { NoteInspector } from './editor/note-inspector';
 import { FlyCamera } from './editor/fly-camera';
+import { packForBeatSaver, packName } from './editor/beatsaver';
+import { startUpdates } from './editor/updates';
 import { SmoothScroll } from './editor/smooth-scroll';
 import { NoteTrack, TRACK_POSE } from './editor/note-track';
 import { mirrorObjects } from './editor/notes-timeline';
@@ -127,6 +129,7 @@ function refreshToolbar() {
   status.textContent = `${editor.dirty ? '● ' : ''}${editor.status}`;
   saveButton.disabled = editor.project === null;
   byId<HTMLButtonElement>('settings').disabled = editor.project === null;
+  byId<HTMLButtonElement>('beatsaver').disabled = editor.project === null;
   byId<HTMLButtonElement>('quest').disabled = editor.project === null;
   byId<HTMLButtonElement>('environment').disabled = editor.project === null;
   byId<HTMLButtonElement>('map-colors').disabled = editor.project === null;
@@ -319,6 +322,37 @@ async function save() {
   }
 }
 
+/** The map packed for BeatSaver: saved first, then Info.dat and what it points to in a zip where the
+ *  user picks. */
+async function exportBeatSaver() {
+  const map = editor.map;
+  if (map === null) return;
+  try {
+    if (editor.dirty) await editor.save();
+    editor.setStatus(tr('Собираю архив для BeatSaver…'));
+    const pack = await packForBeatSaver(map.folder.files, (name) => map.folder.readBinary(name));
+    if (pack.missing.length > 0 && !window.confirm(tr('Info.dat указывает на файлы, которых нет в папке: {0}. Всё равно собрать архив?', pack.missing.join(', ')))) {
+      editor.setStatus(tr('Архив не собран'));
+      return;
+    }
+    const infoName = map.folder.files.find((name) => name.toLowerCase() === 'info.dat')!;
+    const where = await saveFileAs(packName(await map.folder.readText(infoName)), pack.data, 'Zip', ['zip']);
+    if (where === null) {
+      editor.setStatus(tr('Архив не собран'));
+      return;
+    }
+    const size = (pack.data.byteLength / 1024 / 1024).toFixed(1);
+    editor.setStatus(tr('Архив для BeatSaver: {0} ({1} МБ, файлов: {2})', where, size, pack.files.length));
+    if (pack.warnings.length > 0) window.alert(`${tr('Архив сохранён, но BeatSaver может быть недоволен:')}\n\n${pack.warnings.map((line) => `• ${line}`).join('\n')}`);
+  } catch (error) {
+    console.error(error);
+    editor.setStatus(tr('Архив не собран: {0}', error instanceof Error ? error.message : String(error)));
+  }
+}
+byId('beatsaver').addEventListener('click', () => void exportBeatSaver());
+// (what's new after an update; a newer version asked about)
+startUpdates(editor);
+
 // ----- the settings (settings.ts): what applies at once, the window, a restart for the rest ----------
 
 new Clicks(editor);
@@ -371,7 +405,7 @@ const REOPEN = 'lumatic.reopen';
       });
   }
 }
-byId('app-settings').addEventListener('click', () => settingsDialog(() => void restart()));
+byId('app-settings').addEventListener('click', () => settingsDialog(() => void restart(), editor));
 
 // the last moment the hands were on the mouse or the keys: saving waits for a pause in the work
 // (a fifth of a second of a big map's saving, in the middle of a drag, is a freeze)

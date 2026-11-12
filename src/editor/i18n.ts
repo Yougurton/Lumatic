@@ -27,7 +27,8 @@ let bare: Map<string, string> | null = null;
 let patterns: Pattern[] = [];
 
 /** Marks around the words: the words themselves, and what's before and after them. */
-const MARKS = /^([\s·•◆▾▴►✳◎⇹⟳⚡＋+✨🎲🎵■▶⚑…:;,.—–-]*)([\s\S]*?)([\s·•◆▾▴…:;,.—–-]*)$/u;
+// (any symbol or emoji — ● ≋ ∞ ⟲ ⇋ 🗑… — and the usual punctuation round them)
+const MARKS = /^([\s\p{So}\p{Sm}\p{Sk}\uFE0F\u200D·•…:;,.—–-]*)([\s\S]*?)([\s\p{So}\p{Sm}\p{Sk}\uFE0F·•…:;,.—–-]*)$/u;
 
 function load() {
   if (exact !== null) return;
@@ -119,6 +120,8 @@ export function translate(text: string): string {
 export function tr(text: string, ...values: (string | number)[]): string {
   const filled = (template: string) => template.replace(/\{(\d+)\}/gu, (_, index: string) => String(values[Number(index)] ?? ''));
   if (language() === 'ru') return filled(text);
+  // (what's put in translated too, when it's the editor's own text — names of groups, of effects…)
+  values = values.map((value) => (typeof value === 'string' ? translate(value) : value));
   load();
   const english = exact!.get(text) ?? EN[text];
   return english !== undefined ? filled(english) : translate(filled(text));

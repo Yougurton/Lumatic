@@ -15,6 +15,8 @@ export interface SongSource {
   file: string;
   /** Seconds of silence the map's song has in front of the source (below 0: cut off it). */
   lead: number;
+  /** How much louder the map's song is than the source (dB; quieter below 0). */
+  gain?: number;
 }
 
 /** The kept source and what it is (null: none — a map made elsewhere or before this was kept). */
@@ -29,9 +31,9 @@ export async function readSongSource(folder: MapFolder): Promise<{ source: SongS
 }
 
 /** Keeps `data` (a file named `name`) as the song's source, the map's song having `lead` seconds in front of it. */
-export async function writeSongSource(folder: MapFolder, data: ArrayBuffer, name: string, lead: number): Promise<boolean> {
+export async function writeSongSource(folder: MapFolder, data: ArrayBuffer, name: string, lead: number, gain = 0): Promise<boolean> {
   const extension = /\.([a-z0-9]{1,5})$/iu.exec(name)?.[1]?.toLowerCase() ?? 'audio';
-  const source: SongSource = { file: `${FOLDER}/song source.${extension}`, lead };
+  const source: SongSource = { file: `${FOLDER}/song source.${extension}`, lead, ...(gain !== 0 ? { gain } : {}) };
   try {
     await folder.writeBinary(source.file, data);
     await folder.writeText(META, JSON.stringify(source, null, 2));
@@ -43,7 +45,8 @@ export async function writeSongSource(folder: MapFolder, data: ArrayBuffer, name
   }
 }
 
-/** The map's song made again with `lead` seconds in front of the source. */
-export async function setSongSourceLead(folder: MapFolder, source: SongSource, lead: number): Promise<void> {
-  await folder.writeText(META, JSON.stringify({ ...source, lead }, null, 2)).catch(() => undefined);
+/** The map's song made again with `lead` seconds in front of the source, `gain` dB louder. */
+export async function setSongSourceLead(folder: MapFolder, source: SongSource, lead: number, gain = source.gain ?? 0): Promise<void> {
+  const next: SongSource = { file: source.file, lead, ...(gain !== 0 ? { gain } : {}) };
+  await folder.writeText(META, JSON.stringify(next, null, 2)).catch(() => undefined);
 }

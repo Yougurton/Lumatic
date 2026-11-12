@@ -9,7 +9,7 @@ Lumatic распространяется под **GNU General Public License в�
 
 | Компонент | Лицензия | Что из него |
 |---|---|---|
-| ChroViewer (движок ChroPaper 1.1.0) | GPL-2.0 | 3D-вид, разбор карт, данные окружений |
+| [ChroViewer](https://github.com/Umbranoxio/chroviewer) (движок ChroPaper 1.1.0) | GPL-2.0 | 3D-вид, разбор карт, данные окружений |
 
 ## Библиотеки, собранные в программу
 

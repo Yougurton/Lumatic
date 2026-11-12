@@ -1,3 +1,5 @@
+import { translate } from './i18n';
+import { numberDrum } from './grids';
 import type { Editor } from './editor';
 import { mirrorObjects } from './notes-timeline';
 import { jumpOf, jumpWarnings } from './jump';
@@ -182,6 +184,8 @@ export class NoteInspector {
     if (picked.length === 2 && picked.every(({ kind }) => kind === 'notes')) {
       button('〜 Дуга', 'Дуга от первой ноты ко второй: подсказывает плавный замах между ними (V)', () => editor.makeArc());
       button('⛓ Цепь', 'Цепь: голова — первая нота, звенья тянутся до места второй (C)', () => editor.makeChain());
+    } else if (picked.length === 1 && picked[0]!.kind === 'notes') {
+      button('⛓ Цепь', 'Цепь из этой ноты: хвост — на две клетки по её стрелке; голову и хвост потом можно тянуть мышью (C)', () => editor.makeChain());
     }
     section.append(buttons);
     if (picked.length === 1) {
@@ -193,14 +197,10 @@ export class NoteInspector {
         line.append(Object.assign(document.createElement('span'), { textContent: label }), input);
         form.append(line);
       };
-      const number = (value: number, step: number, set: (value: number) => void) => {
-        const input = Object.assign(document.createElement('input'), { type: 'number', step: String(step), value: String(value) });
-        input.addEventListener('change', () => {
-          const next = Number(input.value.replace(',', '.'));
-          if (Number.isFinite(next)) editor.updateObjects([item.id], () => set(next));
-        });
-        return input;
-      };
+      // (a drum: turned notch by notch — one undo step while it turns)
+      const number = (value: number, step: number, set: (value: number) => void, options: { min?: number; max?: number; beats?: boolean; key?: string } = {}) =>
+        numberDrum(`note:${item.id}:${options.key ?? String(step)}`, value, (next) => editor.updateObjects([item.id], () => set(next), `drum:${item.id}:${options.key ?? ''}`), { step, min: options.min ?? 0, ...(options.max === undefined ? {} : { max: options.max }), ...(options.beats === true ? { beats: true } : {}) });
+      const beats = editor.snap || 0.25;
       const select = (options: [number, string][], value: number, set: (value: number) => void) => {
         const input = document.createElement('select');
         for (const [optionValue, text] of options) input.append(Object.assign(document.createElement('option'), { value: String(optionValue), textContent: text }));
@@ -208,23 +208,23 @@ export class NoteInspector {
         input.addEventListener('change', () => editor.updateObjects([item.id], () => set(Number(input.value))));
         return input;
       };
-      field('Доля', number(item.b, editor.snap || 0.25, (value) => (item.b = Math.max(0, value))));
+      field('Доля', number(item.b, beats, (value) => (item.b = Math.max(0, value)), { beats: true, key: 'b', max: Math.max(item.b + 64, editor.endBeat) }));
       if (kind === 'arcs') {
         const arc = item as MapArc;
-        field('Конец (доля)', number(arc.tb, editor.snap || 0.25, (value) => (arc.tb = Math.max(arc.b, value))));
-        field('Сила у головы', number(arc.mu, 0.1, (value) => (arc.mu = value)));
-        field('Сила у хвоста', number(arc.tmu, 0.1, (value) => (arc.tmu = value)));
+        field('Конец (доля)', number(arc.tb, beats, (value) => (arc.tb = Math.max(arc.b, value)), { beats: true, key: 'tb', max: Math.max(arc.tb + 64, editor.endBeat) }));
+        field('Сила у головы', number(arc.mu, 0.1, (value) => (arc.mu = value), { min: -3, max: 3, key: 'mu' }));
+        field('Сила у хвоста', number(arc.tmu, 0.1, (value) => (arc.tmu = value), { min: -3, max: 3, key: 'tmu' }));
         field('Середина', select([[0, 'Прямо'], [1, 'По часовой'], [2, 'Против часовой']], arc.m, (value) => (arc.m = value)));
         field('Направление хвоста', select(DIRS, arc.tc, (value) => (arc.tc = value)));
       } else if (kind === 'chains') {
         const chain = item as MapChain;
-        field('Конец (доля)', number(chain.tb, editor.snap || 0.25, (value) => (chain.tb = Math.max(chain.b, value))));
-        field('Звеньев', number(chain.sc, 1, (value) => (chain.sc = Math.max(2, Math.min(32, Math.round(value))))));
-        field('Сжатие', number(chain.s, 0.1, (value) => (chain.s = Math.max(0.05, Math.min(1, value)))));
+        field('Конец (доля)', number(chain.tb, beats, (value) => (chain.tb = Math.max(chain.b, value)), { beats: true, key: 'tb', max: Math.max(chain.tb + 64, editor.endBeat) }));
+        field('Звеньев', number(chain.sc, 1, (value) => (chain.sc = Math.max(2, Math.min(32, Math.round(value)))), { min: 2, max: 32, key: 'sc' }));
+        field('Сжатие', number(chain.s, 0.05, (value) => (chain.s = Math.max(0.05, Math.min(1, value))), { min: 0.05, max: 1, key: 's' }));
         field('Направление', select(DIRS.slice(0, 8), chain.d, (value) => (chain.d = value)));
       } else if (kind === 'walls') {
         const wall = item as MapWall;
-        field('Длина (доли)', number(wall.d, editor.snap || 0.25, (value) => (wall.d = Math.max(0, value))));
+        field('Длина (доли)', number(wall.d, beats, (value) => (wall.d = Math.max(0, value)), { beats: true, key: 'd', max: Math.max(wall.d + 64, 64) }));
         field('Колонка', select([0, 1, 2, 3].map((x) => [x, String(x + 1)]), wall.x, (value) => (wall.x = Math.min(value, 4 - wall.w))));
         field('Ширина', select([1, 2, 3, 4].map((w) => [w, String(w)]), wall.w, (value) => (wall.w = Math.min(value, 4 - wall.x))));
         const kinds: WallKind[] = wallKindOf(wall) === 'deep' ? ['full', 'deep', 'crouch'] : ['full', 'crouch'];
@@ -236,7 +236,7 @@ export class NoteInspector {
           const note = item as MapNote;
           field('Цвет', select([[0, 'Красная (левая)'], [1, 'Синяя (правая)']], note.c, (value) => (note.c = value)));
           field('Направление', select(DIRS, note.d, (value) => (note.d = value)));
-          field('Поворот стрелки, °', number(note.a, 15, (value) => (note.a = value)));
+          field('Поворот стрелки, °', number(note.a, 15, (value) => (note.a = value), { min: -360, max: 360, key: 'a' }));
         }
       }
       section.append(form);
@@ -373,7 +373,8 @@ export class NoteInspector {
       line.type = 'button';
       line.className = `ni-check ni-check-${issue.level}`;
       const rule = names.get(issue.rule);
-      line.title = `${rule === undefined ? '' : `${rule.name} (${rule.source}): ${rule.about}\n`}ПКМ — ${editor.isIgnored(issue) ? 'не игнорировать' : 'игнорировать'}`;
+      // (each part in the language picked: the rule's text has colons of its own)
+      line.title = `${rule === undefined ? '' : `${rule.name} (${rule.source}): ${translate(rule.about)}\n`}${translate(editor.isIgnored(issue) ? 'ПКМ — не игнорировать' : 'ПКМ — игнорировать')}`;
       const where = Object.assign(document.createElement('b'), { textContent: (Math.round(issue.beat * 100) / 100).toString() });
       line.append(Object.assign(document.createElement('span'), { className: 'ni-check-icon', textContent: issue.level === 'error' ? '⛔' : issue.level === 'warn' ? '⚠' : 'ℹ' }), where, Object.assign(document.createElement('span'), { textContent: issue.text }));
       line.addEventListener('click', () => {

@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import type { RingBlock } from './rings';
@@ -325,7 +326,7 @@ export class PresetPanel {
     info.className = 'pr-info';
     const effects = preset.effects?.length ?? 0;
     const copies = this.editor.effects.filter((effect) => effect.preset === preset.id && effect.presetSync === true).length;
-    info.textContent = `${formatBeats(preset.length)} · ${String(preset.clips.length + preset.raw.length + (preset.rings ?? []).length)} соб.${effects > 0 ? ` · ${String(effects)} эфф.` : ''}${copies > 0 ? ` · ${String(copies)} ⇄` : ''}`;
+    info.textContent = [formatBeats(preset.length), tr('{0} соб.', preset.clips.length + preset.raw.length + (preset.rings ?? []).length), ...(effects > 0 ? [tr('{0} эфф.', effects)] : []), ...(copies > 0 ? [`${String(copies)} ⇄`] : [])].join(' · ');
     if (copies > 0) info.title = `Копий на таймлайне, меняющихся вместе: ${String(copies)}`;
     text.append(name, info);
     const insert = document.createElement('button');
@@ -421,7 +422,7 @@ export class PresetPanel {
 
 function formatBeats(beats: number) {
   const value = Math.round(beats * 100) / 100;
-  return `${String(value)} ${value === 1 ? 'доля' : value > 1 && value < 5 && Number.isInteger(value) ? 'доли' : 'долей'}`;
+  return tr(value === 1 ? '{0} доля' : value > 1 && value < 5 && Number.isInteger(value) ? '{0} доли' : '{0} долей', value);
 }
 
 // ----- copies kept in step ------------------------------------------------------------------------------

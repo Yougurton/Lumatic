@@ -1,3 +1,4 @@
+import { volumeControl, withGain } from './song-volume';
 import { DEFAULT_NJS } from './jump';
 import { difficultyPanel } from './difficulty-panel';
 import { silencePreview } from './silence-preview';
@@ -248,6 +249,8 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
               <div class="nm-wide nm-dim" data-id="silence-info"></div>
               <div class="nm-wide" data-id="silence-preview"></div>
             </div>
+            <div class="nm-section">Громкость песни</div>
+            <div data-id="volume"></div>
             <div class="nm-section">Окружение</div>
             <div class="env-plate" data-id="env"></div>
             <div class="nm-section">Превью в списке песен</div>
@@ -287,6 +290,10 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     el('ogg').append(oggQualitySlider(editorSettings().oggQuality, (quality) => setEditorSettings({ oggQuality: quality })));
 
     let audio: AudioBuffer | null = null;
+    // (the song's loudness changed in the map's file; the original is kept as it is)
+    const volume = volumeControl(0, () => (audio === null ? 0 : audio.duration * 0.35));
+    volume.setSong(null);
+    el('volume').append(volume.element);
     /** The picked file as it is (kept in the map as the song's source). */
     let original: { data: ArrayBuffer; name: string } | null = null;
     let detected: BpmResult | null = null;
@@ -433,6 +440,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
           const data = await file.arrayBuffer();
           audio = await decodeAudio(data);
           original = { data, name: file.name };
+          volume.setSong(audio);
           const minutes = Math.floor(audio.duration / 60);
           el('song').textContent = `${file.name} · ${String(minutes)}:${String(Math.floor(audio.duration % 60)).padStart(2, '0')}`;
           // the title, the artist and the cover from the file's tags; else from its name: "Artist - Title"
@@ -507,6 +515,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
       if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
       stopListening?.();
       picker?.stop();
+      volume.stop();
       shade.remove();
       resolve(result);
     };
@@ -540,11 +549,12 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
             return;
           }
           status.textContent = 'Перевожу песню в ogg… 0%';
-          const ogg = await encodeOgg(song, settings.silence, (done) => (status.textContent = `Перевожу песню в ogg… ${String(Math.round(done * 100))}%`));
+          const gain = volume.value();
+          const ogg = await encodeOgg(withGain(song, gain), settings.silence, (done) => (status.textContent = `Перевожу песню в ogg… ${String(Math.round(done * 100))}%`));
           status.textContent = 'Записываю карту…';
           if (settings.difficulties.length === 0) throw new Error('Отметьте хотя бы одну сложность');
           await folder.writeBinary('song.ogg', ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
-          if (original !== null) await writeSongSource(folder, original.data, original.name, settings.silence);
+          if (original !== null) await writeSongSource(folder, original.data, original.name, settings.silence, gain);
           await folder.writeBinary('cover.jpg', await coverJpeg(cover, settings.title, settings.artist));
           for (const entry of settings.difficulties) await folder.writeText(newDifficultyFile(entry), emptyDifficulty(editorSettings().newFormat));
           await folder.writeText('Info.dat', infoText(settings, 'song.ogg', 'cover.jpg'));

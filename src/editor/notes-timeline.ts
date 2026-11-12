@@ -1,7 +1,7 @@
 import { BPM_EVENT_TYPE } from './editor';
 import type { Editor } from './editor';
 import type { MapIssue } from './checks';
-import { DIR_ANGLE, MIRROR_DIR, objectSpan, placeOf, setPlace, strobeWalls, wallFootprint, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
+import { DIR_ANGLE, directionOf, MIRROR_DIR, objectSpan, placeOf, setPlace, strobeWalls, wallFootprint, WALL_NAMES, WALL_SHAPES, wallKindOf, type MapArc, type MapBomb, type MapChain, type MapNote, type MapObjects, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { drawGameNote } from './note-draw';
 import { objectRightClick } from './object-menu';
@@ -38,7 +38,9 @@ type Drag =
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'wall'; from: number; to: number; lane: number; lane2: number }
   | { kind: 'place'; x0: number; y0: number; beat: number; lane: number; additive: boolean }
-  | { kind: 'resize'; id: string; edge: 'start' | 'end'; b: number; d: number; moved: boolean };
+  | { kind: 'resize'; id: string; edge: 'start' | 'end'; b: number; d: number; moved: boolean }
+  /** A chain's head or tail dragged along the lanes (the head's arrow turning to the tail). */
+  | { kind: 'chainEnd'; id: string; end: 'head' | 'tail'; origin: MapChain; moved: boolean };
 
 const ROW_NAMES = ['низ', 'середина', 'верх'];
 const DIR_NAMES: Record<number, string> = { 0: '↑', 1: '↓', 2: '←', 3: '→', 4: '↖', 5: '↗', 6: '↙', 7: '↘', 8: '•' };
@@ -127,6 +129,8 @@ export class NotesLanes {
         const tx = this.host.beatToX(item.tb);
         const reach = kind === 'chains' ? this.markSize() / 2 + 2 : 7;
         if (Math.hypot(x - hx, y - this.laneCenter(item.x)) <= reach || Math.hypot(x - tx, y - this.laneCenter(item.tx)) <= 7) return { kind, item };
+        // (a chain: along its line too — dragged by it, it moves whole)
+        if (kind === 'chains' && segmentDistance(x, y, hx, this.laneCenter(item.x), tx, this.laneCenter(item.tx)) <= 4) return { kind, item };
       }
     }
     for (const wall of this.editor.objects.walls) {
@@ -596,6 +600,18 @@ export class NotesLanes {
       editor.selectNotes([id], 'toggle');
       return;
     }
+    if (found.kind === 'chains' && !event.altKey) {
+      // a chain by its head or its tail: that end dragged (by the line between: the whole of it)
+      const chain = found.item as MapChain;
+      const nearTail = Math.hypot(x - this.host.beatToX(chain.tb), y - this.laneCenter(chain.tx)) <= 8;
+      const nearHead = Math.hypot(x - this.host.beatToX(chain.b), y - this.laneCenter(chain.x)) <= this.markSize() / 2 + 3;
+      if (nearTail || nearHead) {
+        editor.selectNotes([id]);
+        editor.noteCheckpoint();
+        this.drag = { kind: 'chainEnd', id, end: nearTail ? 'tail' : 'head', origin: structuredClone(chain), moved: false };
+        return;
+      }
+    }
     if (!editor.noteSelection.has(id)) editor.selectNotes([id]);
     editor.noteCheckpoint();
     if (event.altKey) {
@@ -618,6 +634,27 @@ export class NotesLanes {
     const beat = this.host.xToBeat(x);
     if (drag.kind === 'place') {
       if (Math.hypot(x - drag.x0, y - drag.y0) > 5) this.drag = { kind: 'box', x0: drag.x0, y0: drag.y0, x1: x, y1: y, additive: drag.additive };
+      this.host.redraw();
+      return true;
+    }
+    if (drag.kind === 'chainEnd') {
+      const chain = editor.objects.chains.find((item) => item.id === drag.id);
+      if (chain === undefined) return true;
+      const o = drag.origin;
+      const at = editor.snapBeat(Math.max(0, beat));
+      const lane = this.laneAt(Math.max(this.host.lanesTop, Math.min(this.host.lanesBottom - 1, y))) ?? (drag.end === 'tail' ? o.tx : o.x);
+      const least = 1 / 64;
+      if (drag.end === 'tail') {
+        chain.tb = round(Math.max(chain.b + least, at));
+        chain.tx = lane;
+      } else {
+        chain.b = round(Math.min(chain.tb - least, at));
+        chain.x = lane;
+      }
+      chain.d = directionOf(chain.tx - chain.x, chain.ty - chain.y, o.d);
+      drag.moved = chain.b !== o.b || chain.tb !== o.tb || chain.x !== o.x || chain.tx !== o.tx;
+      editor.noteVersion++;
+      editor.rebuildPreview();
       this.host.redraw();
       return true;
     }
@@ -694,7 +731,7 @@ export class NotesLanes {
     this.drag = null;
     if (drag === null) return;
     const editor = this.editor;
-    if (drag.kind === 'resize') {
+    if (drag.kind === 'resize' || drag.kind === 'chainEnd') {
       if (drag.moved) editor.notesChanged(true);
       else editor.noteUndoDiscard();
     } else if (drag.kind === 'place') {
@@ -808,6 +845,14 @@ export function mirrorObjects(editor: Editor) {
 }
 
 const round = (value: number) => Math.round(value * 1e6) / 1e6;
+
+/** How far a point is from a line between two points. */
+function segmentDistance(x: number, y: number, x0: number, y0: number, x1: number, y1: number) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const t = dx === 0 && dy === 0 ? 0 : Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(x - (x0 + t * dx), y - (y0 + t * dy));
+}
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();

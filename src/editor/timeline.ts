@@ -2413,7 +2413,7 @@ export class Timeline {
         text(String(lights.length), 'th-count'),
       );
       if (editor.focus !== group.id) item.append(enter);
-      item.title = `${group.name}: ${String(lights.length)} ламп. Клик — выбрать её лампы; если выделен кусок песни — ещё и выделить её события в куске (ещё клик — снять); двойной — войти, ПКМ — действия`;
+      item.title = tr('{0}: ламп — {1}. Клик — выбрать её лампы; если выделен кусок песни — ещё и выделить её события в куске (ещё клик — снять); двойной — войти, ПКМ — действия', group.name, lights.length);
       item.addEventListener('click', (event) => {
         if (!this.headerDragged) this.pickRow(row, lights.map((light) => lightKey(light.type, light.id)), row.parent, event.ctrlKey || event.metaKey || event.shiftKey);
       });

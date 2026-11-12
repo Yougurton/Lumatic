@@ -466,6 +466,39 @@ export function usesNoodlePlaces(objects: MapObjects) {
   return objects.notes.some(has) || objects.bombs.some(has) || objects.walls.some(has);
 }
 
+/** The cut direction (0–7) nearest a step on the grid (x right, y up); none (0, 0): `fallback`. */
+export function directionOf(dx: number, dy: number, fallback: number): number {
+  if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return fallback;
+  let best = fallback;
+  let most = -Infinity;
+  for (let direction = 0; direction < 8; direction++) {
+    const [vx, vy] = DIR_VECTOR[direction]!;
+    const fit = (vx * dx + vy * dy) / Math.hypot(vx, vy);
+    if (fit > most + 1e-9) {
+      most = fit;
+      best = direction;
+    }
+  }
+  return best;
+}
+
+/** A chain from one note: its tail two cells along the arrow (as far as the grid goes), a quarter of a
+ *  beat later. */
+export function chainFromNote(note: MapNote, length = 0.25): Omit<MapChain, 'id'> {
+  const d = note.d === 8 ? 1 : note.d;
+  const [dx, dy] = DIR_VECTOR[d] ?? [0, -1];
+  let tx = note.x;
+  let ty = note.y;
+  for (let k = 0; k < 2; k++) {
+    const nx = tx + dx;
+    const ny = ty + dy;
+    if (nx < 0 || nx > 3 || ny < 0 || ny > 2) break;
+    tx = nx;
+    ty = ny;
+  }
+  return { c: note.c, b: note.b, x: note.x, y: note.y, d, tb: Math.round((note.b + length) * 1e6) / 1e6, tx, ty, sc: 5, s: 1 };
+}
+
 /** The game's turn of a note's arrow (degrees; 0 points down). */
 export const NOTE_ROLL: Record<number, number> = { 0: 180, 1: 0, 2: -90, 3: 90, 4: -135, 5: 135, 6: -45, 7: 45, 8: 0 };
 

@@ -33,7 +33,7 @@ import {
 } from 'three';
 import { objectRightClick } from './object-menu';
 import type { Editor } from './editor';
-import { DIR_VECTOR, ROW_WALL, WALL_SHAPES, placeOf, setPlace, wallFootprint, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
+import { DIR_VECTOR, directionOf, ROW_WALL, WALL_SHAPES, placeOf, setPlace, wallFootprint, type MapArc, type MapChain, type MapNote, type MapWall, type ObjectKind } from './notes';
 import { newId } from './model';
 import { jumpOf } from './note-inspector';
 import { settings } from './settings';
@@ -94,7 +94,8 @@ export const TRACK_POSE = { position: [0, 2.6, 5.2] as [number, number, number],
 /** The arrow's turn (degrees, the game's): 0 points down. */
 const ROLL: Record<number, number> = { 0: 180, 1: 0, 2: -90, 3: 90, 4: -135, 5: 135, 6: -45, 7: 45, 8: 0 };
 
-type Hit = { kind: ObjectKind; id: string };
+/** What's under the mouse; a chain's `part`: its head, its tail (the last link) or a link between. */
+type Hit = { kind: ObjectKind; id: string; part?: 'head' | 'tail' | 'body' };
 type AnyObject = MapObjectsItem;
 type MapObjectsItem = { id: string; b: number; x: number; y: number; tb?: number; tx?: number; ty?: number; customData?: Record<string, unknown> };
 
@@ -168,7 +169,7 @@ export class NoteTrack {
   private readonly links: Pair;
   private noteIds: Hit[] = [];
   private bombIds: string[] = [];
-  private linkIds: string[] = [];
+  private linkIds: { id: string; last: boolean }[] = [];
   private builtKey = '';
   private linesKey = '';
   private numbersKey = '';
@@ -199,6 +200,9 @@ export class NoteTrack {
         before: string[];
       }
     | { kind: 'box'; x: number; y: number; adding: boolean }
+    /** A chain's head or tail dragged: that end moves (across the cells; the wheel: in time), the head's
+     *  arrow turning to the tail. */
+    | { kind: 'chainEnd'; x: number; y: number; id: string; end: 'head' | 'tail'; plane: Plane; grab: Vector3; origin: MapChain; time: number; moved: boolean }
     /** Shift + drag on the wall (as ChroMapper): a box of cells, along the track as far as the song is
      *  scrolled while dragging. */
     | { kind: 'volume'; x: number; y: number; cell: Cell; beat: number; free: boolean; hit: Hit | null; adding: boolean; moved: boolean }
@@ -438,7 +442,7 @@ export class NoteTrack {
       matrix.compose(position, quaternion, one);
       this.notes.solid.setMatrixAt(index, matrix);
       this.notes.solid.setColorAt(index, lit(this.rgb(note.c === 0 ? colors.leftNote : colors.rightNote), note.id));
-      this.noteIds.push({ kind, id: note.id });
+      this.noteIds.push(kind === 'chains' ? { kind, id: note.id, part: 'head' } : { kind, id: note.id });
       if (note.d === 8) this.dots.solid.setMatrixAt(dots++, matrix);
       else this.arrows.solid.setMatrixAt(arrows++, matrix);
     });
@@ -466,7 +470,7 @@ export class NoteTrack {
         matrix.compose(position, quaternion.setFromAxisAngle(axis, ((ROLL[chain.d] ?? 0) * Math.PI) / 180), one);
         this.links.solid.setMatrixAt(link, matrix);
         this.links.solid.setColorAt(link, lit(this.rgb(chain.c === 0 ? colors.leftNote : colors.rightNote), chain.id));
-        this.linkIds.push(chain.id);
+        this.linkIds.push({ id: chain.id, last: k === pieces });
         link++;
       }
     }
@@ -787,15 +791,18 @@ export class NoteTrack {
   }
 
   /** The object on the track under the mouse (null: none). */
-  private objectAt(clientX: number, clientY: number): Hit | null {
+  private objectAt(clientX: number, clientY: number, within = AHEAD * METRES_PER_BEAT): Hit | null {
     this.ray(clientX, clientY);
     this.root.updateMatrixWorld(true);
     const targets = [this.notes.solid, this.bombs.solid, this.links.solid, ...this.pickable()];
-    const hits = this.raycaster.intersectObjects(targets, false).filter((hit) => hit.point.z <= BEHIND * METRES_PER_BEAT && hit.point.z >= -AHEAD * METRES_PER_BEAT);
+    const hits = this.raycaster.intersectObjects(targets, false).filter((hit) => hit.point.z <= BEHIND * METRES_PER_BEAT && hit.point.z >= -Math.min(within, AHEAD * METRES_PER_BEAT));
     for (const hit of hits) {
       if (hit.object === this.notes.solid && hit.instanceId !== undefined) return this.noteIds[hit.instanceId] ?? null;
       if (hit.object === this.bombs.solid && hit.instanceId !== undefined) return { kind: 'bombs', id: this.bombIds[hit.instanceId]! };
-      if (hit.object === this.links.solid && hit.instanceId !== undefined) return { kind: 'chains', id: this.linkIds[hit.instanceId]! };
+      if (hit.object === this.links.solid && hit.instanceId !== undefined) {
+        const link = this.linkIds[hit.instanceId]!;
+        return { kind: 'chains', id: link.id, part: link.last ? 'tail' : 'body' };
+      }
       const data = hit.object.userData as { kind?: ObjectKind; id?: string };
       if (data.id !== undefined && data.kind !== undefined) return { kind: data.kind, id: data.id };
     }
@@ -1006,6 +1013,38 @@ export class NoteTrack {
     }
   }
 
+  /** A chain's head or tail where the drag has it: across the cells (on the grid), in time by the
+   *  wheel (the head never after the tail); the head's arrow turned to the tail. */
+  private moveChainEnd(drag: Extract<NoteTrack['drag'], { kind: 'chainEnd' }>, clientX: number, clientY: number) {
+    const editor = this.editor;
+    const chain = editor.objectById(drag.id)?.item as MapChain | undefined;
+    if (chain === undefined) return;
+    const point = this.meet(clientX, clientY, drag.plane);
+    const cols = point === null ? 0 : Math.round((point.x - drag.grab.x) / LANE);
+    const rows = point === null ? 0 : Math.round((point.y - drag.grab.y) / LANE);
+    const o = drag.origin;
+    const clamp = (value: number, most: number) => Math.max(0, Math.min(most, value));
+    const least = 1 / 64;
+    const round6 = (value: number) => Math.round(value * 1e6) / 1e6;
+    const next = { ...chain };
+    if (drag.end === 'tail') {
+      next.tx = clamp(o.tx + cols, 3);
+      next.ty = clamp(o.ty + rows, 2);
+      next.tb = round6(Math.max(o.b + least, o.tb + drag.time));
+    } else {
+      next.x = clamp(o.x + cols, 3);
+      next.y = clamp(o.y + rows, 2);
+      next.b = round6(Math.max(0, Math.min(o.tb - least, o.b + drag.time)));
+    }
+    next.d = directionOf(next.tx - next.x, next.ty - next.y, o.d);
+    if (next.x === chain.x && next.y === chain.y && next.b === chain.b && next.tx === chain.tx && next.ty === chain.ty && next.tb === chain.tb && next.d === chain.d) return;
+    Object.assign(chain, { x: next.x, y: next.y, b: next.b, tx: next.tx, ty: next.ty, tb: next.tb, d: next.d });
+    drag.moved = true;
+    editor.noteVersion++;
+    editor.rebuildPreview();
+    editor.emit('clips');
+  }
+
   private moveTo(clientX: number, clientY: number, timeOnly: boolean) {
     const drag = this.drag;
     if (drag?.kind !== 'pick') return;
@@ -1121,7 +1160,12 @@ export class NoteTrack {
       }
       // (Shift / Ctrl: what's under the mouse, even behind the wall — as in ChroMapper)
       const adding = event.shiftKey || event.ctrlKey || event.metaKey;
-      const hit = cell !== null && !adding ? this.cellObject(cell) : this.objectAt(event.clientX, event.clientY);
+      let hit = cell !== null && !adding ? this.cellObject(cell) : this.objectAt(event.clientX, event.clientY);
+      // (over a cell: a chain's head or tail just past the wall taken too — they're dragged by their ends)
+      if (hit === null && cell !== null && !adding) {
+        const near = this.objectAt(event.clientX, event.clientY, 2);
+        if (near?.kind === 'chains' && near.part !== 'body') hit = near;
+      }
       if (event.shiftKey && cell !== null) {
         // Shift + drag on the wall: a box of cells, along the track as far as the song goes while
         // dragging (Shift + Ctrl: added to what's picked); a Shift + click: the object there added
@@ -1146,6 +1190,20 @@ export class NoteTrack {
         this.drag = { kind: 'box', x: event.clientX, y: event.clientY, adding };
         return;
       }
+      // a chain's head or tail: that end dragged
+      if (!adding && hit.kind === 'chains' && (hit.part === 'head' || hit.part === 'tail')) {
+        const chain = editor.objectById(hit.id)?.item as MapChain | undefined;
+        if (chain !== undefined) {
+          editor.selectNotes([hit.id]);
+          const beat = hit.part === 'tail' ? chain.b + (chain.tb - chain.b) * Math.max(0.05, Math.min(1, chain.s)) : chain.b;
+          const z = -beat * METRES_PER_BEAT + this.moving.position.z;
+          const plane = new Plane(new Vector3(0, 0, 1), -z);
+          const grab = this.meet(event.clientX, event.clientY, plane) ?? new Vector3(0, 0, z);
+          editor.noteCheckpoint();
+          this.drag = { kind: 'chainEnd', x: event.clientX, y: event.clientY, id: hit.id, end: hit.part, plane, grab, origin: structuredClone(chain), time: 0, moved: false };
+          return;
+        }
+      }
       // a note: picked (with Shift / Ctrl: added or taken off), and dragged on
       const before = [...editor.noteSelection];
       if (adding) editor.selectNotes([hit.id], 'toggle');
@@ -1164,6 +1222,9 @@ export class NoteTrack {
       this.lastMouse = { x: event.clientX, y: event.clientY };
       if (drag.kind === 'box') {
         if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 4) this.showBox(drag.x, drag.y, event.clientX, event.clientY);
+      } else if (drag.kind === 'chainEnd') {
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5 && !drag.moved) return;
+        this.moveChainEnd(drag, event.clientX, event.clientY);
       } else if (drag.kind === 'volume') {
         if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 5) drag.moved = true;
       } else if (drag.kind === 'pick') {
@@ -1183,6 +1244,11 @@ export class NoteTrack {
           return;
         }
         editor.selectNotes(this.inBox(drag.x, drag.y, event.clientX, event.clientY), drag.adding ? 'add' : 'replace');
+        return;
+      }
+      if (drag.kind === 'chainEnd') {
+        if (drag.moved) editor.notesChanged(true);
+        else editor.noteUndoDiscard();
         return;
       }
       if (drag.kind === 'volume') {
@@ -1269,6 +1335,15 @@ export class NoteTrack {
         event.preventDefault();
         const editor = this.editor;
         const drag = this.drag;
+        if (drag?.kind === 'chainEnd') {
+          // the wheel while dragging a chain's end: that end a grid step on or back in time
+          this.wheelSum += event.deltaY;
+          if (Math.abs(this.wheelSum) < 40) return;
+          drag.time += (this.wheelSum < 0 ? 1 : -1) * (editor.snap || 0.25);
+          this.wheelSum = 0;
+          this.moveChainEnd(drag, event.clientX, event.clientY);
+          return;
+        }
         if (drag?.kind === 'pick') {
           // the wheel while dragging: the picked ones a grid step on or back in time
           this.wheelSum += event.deltaY;

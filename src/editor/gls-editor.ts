@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import { resolveRgb } from './bake';
 import type { Editor } from './editor';
 import { actionFor, comboOf } from './hotkeys';
@@ -827,7 +828,8 @@ export class GlsEditor {
       const cell = document.createElement('span');
       cell.className = 'gls-lamp';
       const k = order.get(index);
-      cell.title = `${item.kind === 'group' ? (findGroup(this.editor.groups, item.id)?.group.name ?? '') : `ID ${String(item.id)}`}${k === undefined ? '' : ` — ${String(k + 1)}-й в очереди`}`;
+      const what = item.kind === 'group' ? (findGroup(this.editor.groups, item.id)?.group.name ?? '') : `ID ${String(item.id)}`;
+      cell.title = k === undefined ? what : tr('{0} — {1}-й в очереди', what, k + 1);
       if (k !== undefined) {
         cell.classList.add('on');
         // (the order shown: early ones bright, late ones darker)
@@ -1275,7 +1277,7 @@ export class GlsEditor {
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = '#ffd65a';
-        ctx.fillText(`${box.beatSpread === 'wave' ? 'волна' : 'шаг'} ${beatsText(box.beatValue)} · ${knob.extra >= 0 ? '+' : ''}${knob.extra.toFixed(2)}`, Math.min(g.width - 120, knob.x + 10), Math.max(26, knob.y - 8));
+        ctx.fillText(tr(box.beatSpread === 'wave' ? 'волна {0} · {1}' : 'шаг {0} · {1}', beatsText(box.beatValue), `${knob.extra >= 0 ? '+' : ''}${knob.extra.toFixed(2)}`), Math.min(g.width - 120, knob.x + 10), Math.max(26, knob.y - 8));
       }
       if (blocks.length === 0) {
         ctx.fillStyle = '#7d8394';
@@ -2233,5 +2235,5 @@ export function scrubStrip(editor: Editor, range: () => { id?: string; start: nu
 
 /** Beats as a short text (fractions where they are the grid's). */
 function beatsText(beats: number) {
-  return `${beatsLabel(beats)} д.`;
+  return tr("{0} д.", beatsLabel(beats));
 }

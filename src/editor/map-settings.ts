@@ -1,3 +1,5 @@
+import { tr } from './i18n';
+import { volumeControl, withGain } from './song-volume';
 import { decodeAudio, encodeOgg, findBpm, findDownbeat, playWithClicks } from './audio-tools';
 import type { BpmResult } from './bpm-detect';
 import { convertMapFolder } from './convert-dialog';
@@ -150,6 +152,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
   const characteristic = editor.row?.infoDifficulty?.characteristic ?? 'Standard';
   const place: EnvironmentPlace = { file: editor.row === null ? '' : difficultyFile(editor.row), allDirections: characteristic === '360Degree' || characteristic === '90Degree' };
 
+  const keptSource = await readSongSource(map.folder);
   return new Promise((resolve) => {
     const shade = document.createElement('div');
     shade.className = 'ce-shade';
@@ -202,6 +205,8 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
               <div class="nm-wide nm-dim" data-id="shift-info"></div>
               <div class="nm-wide" data-id="silence-preview"></div>
             </div>
+            <div class="nm-section">Громкость песни</div>
+            <div data-id="volume"></div>
             <div class="nm-section">Окружение</div>
             <div class="env-plate" data-id="env"></div>
             <div class="nm-dim" data-id="env-info"></div>
@@ -347,6 +352,12 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       audio = await decodeAudio(data);
       return audio;
     };
+    // the song's loudness: against the song as it was first put in (when it's kept), else as it is
+    const appliedGain = keptSource?.source.gain ?? 0;
+    const volume = volumeControl(appliedGain, () => Number(previewInput.value) || 0);
+    el('volume').append(volume.element);
+    void (keptSource !== null ? decodeAudio(keptSource.data.slice(0)) : song()).then((buffer) => box.isConnected && volume.setSong(buffer)).catch(() => volume.setSong(null));
+    volume.setSong(null);
     void song()
       .then((buffer) => {
         if (!box.isConnected) return;
@@ -478,6 +489,7 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
       if (coverUrl !== '') URL.revokeObjectURL(coverUrl);
       stopListening?.();
       picker?.stop();
+      volume.stop();
       shade.remove();
       resolve();
     };
@@ -543,7 +555,9 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
               if (project !== null) await map.folder.writeText(projectFileName(file), JSON.stringify(transformProjectBeats(project, beat, length)));
             }
           }
-          if (Math.abs(shift) > 1e-6) {
+          const gain = volume.value();
+          const regain = Math.abs(gain - appliedGain) > 1e-6;
+          if (Math.abs(shift) > 1e-6 || regain) {
             status.textContent = 'Перевожу песню…';
             // (made from the song as it was first put in — compressed once, however often this is
             // changed; a map without one keeps its song as it is now as the source first)
@@ -551,9 +565,10 @@ export async function mapSettingsDialog(editor: Editor): Promise<void> {
             if (kept === null && map.parsed.audioData !== null && (await writeSongSource(map.folder, map.parsed.audioData.slice(0), fields.song, 0))) kept = await readSongSource(map.folder);
             const lead = (kept?.source.lead ?? 0) + shift;
             const prepared = kept === null ? withStart(await song(), shift) : withStart(await decodeAudio(kept.data), lead);
-            const ogg = await encodeOgg(prepared.buffer, prepared.silence, (done) => (status.textContent = `Перевожу песню… ${String(Math.round(done * 100))}%`));
+            // (louder or quieter: against the source — or the song as it was, when none is kept)
+            const ogg = await encodeOgg(withGain(prepared.buffer, kept === null ? gain - appliedGain : gain), prepared.silence, (done) => (status.textContent = tr('Перевожу песню… {0}%', Math.round(done * 100))));
             await map.folder.writeBinary(fields.song, ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
-            if (kept !== null) await setSongSourceLead(map.folder, kept.source, lead);
+            if (kept !== null) await setSongSourceLead(map.folder, kept.source, lead, gain);
             next.preview = Math.max(0, next.preview + shift);
           }
           let info = writeInfo(await map.folder.readText(infoName), next, place);
