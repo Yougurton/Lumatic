@@ -1,5 +1,6 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import catalog from './custom-environments.json';
+import { animEvents, animTrack, hasKeys, type SceneAnim } from './env-anim';
 import { arrayPlacings, type SceneArray } from './env-array';
 import { GEOMETRY_RING_MATERIALS, geometryRingFragment } from './geometry-rings';
 
@@ -23,6 +24,8 @@ export interface EnvironmentMods {
   scene?: SceneEdit[];
   /** Objects the scene editor added: copies of the game's objects and shapes of its own. */
   objects?: SceneObject[];
+  /** The scene editor's animations: keys on beats, an object each. */
+  anims?: SceneAnim[];
   /** The materials its shapes are made of, by name. */
   materials?: Record<string, SceneMaterial>;
 }
@@ -118,9 +121,12 @@ export function objectsFragment(mods: EnvironmentMods): { environment: Record<st
   const materials = mods.materials ?? {};
   const environment: Record<string, unknown>[] = [];
   const used = new Set<string>();
+  const animated = new Set((mods.anims ?? []).filter((anim) => hasKeys(anim)).map((anim) => anim.target));
   for (const object of expandObjects(mods.objects ?? [])) {
     const command = objectCommand(object, materials);
     if (command === null) continue;
+    // (an animated object: on a track of its own — not its array's others: they'd all go to one place)
+    if (object.of === undefined && animated.has(`o:${object.uid}`)) command.track = animTrack(`o:${object.uid}`);
     environment.push(command);
     if (object.kind === 'shape' && object.material !== undefined) used.add(object.material);
   }
@@ -356,6 +362,20 @@ export function modsFragment(mods: EnvironmentMods | undefined, data: Environmen
     const command = sceneCommand(edit);
     if (command !== null) fragment.environment.push(command);
   }
+  // the animations: a track on each animated thing, its keys as AnimateTrack events
+  for (const anim of mods.anims ?? []) {
+    if (!hasKeys(anim)) continue;
+    if (anim.target.startsWith('o:')) {
+      const object = (mods.objects ?? []).find((item) => `o:${item.uid}` === anim.target);
+      if (object === undefined || object.ghost === true) continue;
+      fragment.customEvents.push(...animEvents(anim, object.kind === 'shape'));
+      continue;
+    }
+    const own = fragment.environment.find((entry) => entry.id === anim.target && entry.lookupMethod === 'Exact' && entry.duplicate === undefined && entry.track === undefined);
+    if (own !== undefined) own.track = animTrack(anim.target);
+    else fragment.environment.push({ id: anim.target, lookupMethod: 'Exact', track: animTrack(anim.target) });
+    fragment.customEvents.push(...animEvents(anim, false));
+  }
   if (data === null) {
     addObjects(fragment, mods);
     return fragment;
@@ -476,7 +496,7 @@ export function fragmentRequirements(mods: EnvironmentMods | undefined): string[
   const out = new Set<string>();
   if (preset !== undefined) for (const mod of ['Chroma', ...(preset.noodle ? ['Noodle Extensions'] : [])]) out.add(mod);
   if (geometrySystems(mods).length > 0) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
-  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0) out.add('Chroma');
+  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim))) out.add('Chroma');
   return [...out];
 }
 
@@ -486,6 +506,6 @@ export function geometrySystems(mods: EnvironmentMods | undefined): string[] {
 }
 
 export function hasMods(mods: EnvironmentMods | undefined) {
-  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0);
+  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)));
 }
 

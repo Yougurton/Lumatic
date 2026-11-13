@@ -16,7 +16,8 @@ import { chromaMoveBeats, fitRingBlock, isBarRing, isLasers, isSingleRing, isTur
 import { ringSpeedFor } from '../engine/core/lighting/ring-motion';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
-import { NotesLanes } from './notes-timeline';
+import { AnimLanes } from './anim-lanes';
+import { NotesLanes, type LaneHost } from './notes-timeline';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
 /**
@@ -164,16 +165,28 @@ export class Timeline {
   /** The notes side's lanes (drawn in place of the rows when the notes side is open). */
   readonly lanes: NotesLanes;
 
+  /** The scene side's animation lines (drawn in place of the rows when the Scene side is open). */
+  readonly anim: AnimLanes;
+
   private get notesMode() {
     return this.editor.tab === 'notes';
   }
 
+  private get animMode() {
+    return this.editor.envMode && !this.notesMode;
+  }
+
+  /** What's drawn in place of the rows (null: the lights' rows are). */
+  private get alt(): NotesLanes | AnimLanes | null {
+    return this.notesMode ? this.lanes : this.animMode ? this.anim : null;
+  }
+
   constructor(private readonly editor: Editor, root: HTMLElement) {
     const timeline = this;
-    this.lanes = new NotesLanes({
+    const laneHost: LaneHost = {
       editor,
-      beatToX: (beat) => this.beatToX(beat),
-      xToBeat: (x) => this.xToBeat(x),
+      beatToX: (beat: number) => this.beatToX(beat),
+      xToBeat: (x: number) => this.xToBeat(x),
       get lanesTop() {
         return timeline.rowsTop;
       },
@@ -188,7 +201,9 @@ export class Timeline {
         return timeline.pxPerBeat;
       },
       redraw: () => this.redraw(),
-    });
+    };
+    this.lanes = new NotesLanes(laneHost);
+    this.anim = new AnimLanes(laneHost);
     this.headers = root.querySelector<HTMLElement>('#track-headers')!;
     this.canvas = root.querySelector<HTMLCanvasElement>('#tracks')!;
     this.context = this.canvas.getContext('2d')!;
@@ -618,22 +633,23 @@ export class Timeline {
     const first = Math.floor(this.viewStart);
     const last = Math.ceil(this.viewStart + beatsVisible);
 
-    if (this.notesMode) {
+    const alt = this.alt;
+    if (alt !== null) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, this.rowsTop, width, this.rowsBottom - this.rowsTop);
       ctx.clip();
-      this.lanes.draw(ctx);
+      alt.draw(ctx);
       this.drawGrid(first, last, this.rowsTop, this.rowsBottom);
       ctx.restore();
       ctx.save();
       ctx.beginPath();
       ctx.rect(GUTTER, this.rowsTop, width - GUTTER, this.rowsBottom - this.rowsTop);
       ctx.clip();
-      this.lanes.drawObjects(ctx);
+      alt.drawObjects(ctx);
       ctx.restore();
     }
-    if (!this.notesMode) {
+    if (alt === null) {
       // rows
       this.scrollY = Math.min(this.scrollY, this.maxScroll());
       if (editor.reveal !== null) {
@@ -787,7 +803,7 @@ export class Timeline {
     const list = this.headers.querySelector<HTMLElement>('.th-rows');
     if (list !== null) {
       list.style.height = `${String(Math.max(0, this.rowsBottom - this.rowsTop))}px`;
-      list.scrollTop = this.notesMode ? 0 : this.scrollY;
+      list.scrollTop = this.alt !== null ? 0 : this.scrollY;
       const spectro = this.headers.querySelector<HTMLElement>('.th-spectro');
       if (spectro !== null) spectro.style.height = `${String(this.spectroHeight)}px`;
       // (the grid and speed: moved when the spectrogram grows or shrinks past their room)
@@ -842,7 +858,7 @@ export class Timeline {
     const ctx = this.context;
     ctx.fillStyle = '#121318';
     ctx.fillRect(0, 0, GUTTER, this.navTop);
-    if (this.notesMode) return;
+    if (this.alt !== null) return;
     ctx.fillStyle = '#2a2c34';
     ctx.fillRect(GUTTER - 1, this.rowsTop, 1, this.rowsBottom - this.rowsTop);
     const bar = this.vbar();
@@ -2183,8 +2199,21 @@ export class Timeline {
         item.title = 'Точки справа от ноты — её ряд: нижняя — низ, средняя — середина, верхняя — верх';
         list.append(item);
       }
+    } else if (this.animMode) {
+      // (the scene side: the animation's lines are named on the timeline itself)
+      const tools = document.createElement('div');
+      tools.className = 'th-ruler';
+      tools.style.height = `${String(RULER_H)}px`;
+      tools.style.lineHeight = `${String(RULER_H)}px`;
+      tools.textContent = 'Анимация сцены';
+      box.append(tools);
+      const hint = document.createElement('div');
+      hint.className = 'nm-dim';
+      hint.style.cssText = 'padding:8px 10px;font-size:11px;line-height:1.5;white-space:normal';
+      hint.textContent = 'Ромбы — ключи. Клик — выбрать и перейти к нему, тянуть — сдвинуть, двойной клик по строке — новый ключ, ПКМ — плавность, Delete — удалить. Shift + колесо — листать строки.';
+      list.append(hint);
     } else box.append(this.headerTools());
-    if (!this.notesMode) {
+    if (this.alt === null) {
       list.addEventListener('wheel', (event) => {
         event.preventDefault();
         if (event.ctrlKey || event.metaKey) return;
@@ -2600,6 +2629,11 @@ export class Timeline {
       if (this.editor.project === null) return;
       const { x, y } = local(event);
       if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) {
+        if (this.animMode) {
+          event.preventDefault();
+          this.anim.contextMenu(x, y, event.clientX, event.clientY);
+          return;
+        }
         if (this.notesMode) return;
         const hit = this.hit(x, y);
         if (hit !== null && this.editor.selection.has(hitId(hit))) this.selectionMenu(event.clientX, event.clientY, 'clip' in hit ? hit.clip : null);
@@ -2619,7 +2653,7 @@ export class Timeline {
     canvas.addEventListener('wheel', (event) => {
       event.preventDefault();
       const { x, y } = local(event);
-      if (this.notesMode && y >= this.rowsTop && y < this.rowsBottom && this.lanes.wheel(event, x, y)) return;
+      if (this.alt !== null && y >= this.rowsTop && y < this.rowsBottom && this.alt.wheel(event, x, y)) return;
       if ((event.ctrlKey || event.metaKey) && event.altKey) {
         // Ctrl+Alt+wheel: the rows taller / shorter
         this.zoomRows(this.rowScale * Math.exp(-event.deltaY * 0.0015), Math.max(this.rowsTop, Math.min(this.rowsBottom, y)));
@@ -2676,7 +2710,7 @@ export class Timeline {
       if (this.editor.project === null) return;
       const { x, y } = local(event);
       const beat = this.xToBeat(x);
-      if (!this.notesMode && x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
+      if (this.alt === null && x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
         // the row scrollbar: its grips zoom the rows, its thumb scrolls, a click beside it jumps
         const bar = this.vbar();
         if (y >= bar.thumbTop && y < bar.thumbTop + GRIP) this.drag = { kind: 'rowZoom', edge: 'top', grabY: y, thumb: bar.thumb, scale: this.rowScale, scrollY: this.scrollY };
@@ -2740,8 +2774,8 @@ export class Timeline {
         this.followPlayhead = true;
         return;
       }
-      if (this.notesMode) {
-        this.lanes.mouseDown(event, x, y);
+      if (this.alt !== null) {
+        this.alt.mouseDown(event, x, y);
         this.needsDraw = true;
         return;
       }
@@ -2854,8 +2888,8 @@ export class Timeline {
       const { x, y } = local(event);
       this.hover = { x, y };
       if (event.isTrusted) this.lastMove = event;
-      if (this.notesMode && this.lanes.mouseMove(x, y)) {
-        canvas.style.cursor = this.lanes.cursor(x, y);
+      if (this.alt !== null && this.alt.mouseMove(x, y)) {
+        canvas.style.cursor = this.alt.cursor(x, y);
         return;
       }
       if (this.headerDrag !== null) {
@@ -2868,8 +2902,8 @@ export class Timeline {
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height) {
           if (this.onSpectroEdge(x, y)) cursor = 'ns-resize';
           else if (y < RULER_H && this.bookmarkAt(x, y) !== null) cursor = 'grab';
-          else if (!this.notesMode && this.barEndAt(x, y) !== null) cursor = 'ew-resize';
-          else if (!this.notesMode && this.poseMarkAt(x, y) !== null) cursor = 'grab';
+          else if (this.alt === null && this.barEndAt(x, y) !== null) cursor = 'ew-resize';
+          else if (this.alt === null && this.poseMarkAt(x, y) !== null) cursor = 'grab';
           else if (x < GUTTER && y >= this.rowsTop && y < this.rowsBottom) {
             const bar = this.vbar();
             cursor = (y >= bar.thumbTop && y < bar.thumbTop + GRIP) || (y > bar.thumbTop + bar.thumb - GRIP && y <= bar.thumbTop + bar.thumb) ? 'ns-resize' : 'default';
@@ -2878,8 +2912,8 @@ export class Timeline {
             const x0 = Math.max(GUTTER, nav.x0);
             const x1 = Math.max(x0 + 6, nav.x1);
             cursor = Math.abs(x - x0) <= 5 || Math.abs(x - x1) <= 5 ? 'ew-resize' : x > x0 && x < x1 ? 'grab' : 'pointer';
-          } else if (this.notesMode) {
-            cursor = this.lanes.cursor(x, y);
+          } else if (this.alt !== null) {
+            cursor = this.alt.cursor(x, y);
             this.needsDraw = true;
           } else {
             const hit = this.hit(x, y);
@@ -3037,7 +3071,7 @@ export class Timeline {
     });
 
     window.addEventListener('mouseup', (event) => {
-      if (this.notesMode) this.lanes.mouseUp(event);
+      if (this.alt !== null) this.alt.mouseUp(event);
       if (this.headerDrag !== null) {
         this.dropHeaderDrag(event.clientY);
         return;

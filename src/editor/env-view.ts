@@ -1,8 +1,8 @@
-import { BoxGeometry, BufferGeometry, EdgesGeometry, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Matrix4, Object3D, Raycaster, Vector2, Vector3 } from 'three';
+import { BoxGeometry, BufferGeometry, EdgesGeometry, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Matrix4, Object3D, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
-import { childrenOf, generatedRootOf, generatedRoots, localFromWorld, objectBox, rayBox, shown, shownBoxes, worldMatrix } from './env-scene';
+import { childrenOf, dataRotation, generatedRootOf, generatedRoots, localFromWorld, objectBox, rayBox, shown, shownBoxes, worldMatrix } from './env-scene';
 import { tr } from './i18n';
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale';
@@ -161,6 +161,16 @@ export class EnvView {
     return this.editor.sceneRendered().flatMap((object) => (object.of === uid ? [this.renderedIndex(`o:${object.uid}`)] : [])).filter((index): index is number => index !== null);
   }
 
+  /** Where a picked thing stands in the world now — an animated one: as its keys have it at the
+   *  playhead (the view's data knows only where it stands without them). */
+  private placed(data: EnvironmentData, index: number, key: string): Matrix4 {
+    const now = this.editor.sceneShown(key);
+    if (now === null || now.keyed.length === 0) return worldMatrix(data, index);
+    const local = new Matrix4().compose(new Vector3(now.position[0], now.position[1], -now.position[2]), new Quaternion().fromArray(dataRotation(now.rotation)), new Vector3().fromArray(now.scale));
+    const parent = data.objects[index]!.parent;
+    return parent < 0 ? local : worldMatrix(data, parent).multiply(local);
+  }
+
   /** Before each frame: the frames round the picked things, the handles on the first of them. */
   private update() {
     if (!this.active()) return;
@@ -173,18 +183,22 @@ export class EnvView {
     this.controls.enabled = usable;
     this.controls.getHelper().visible = usable;
     if (data === null) return;
-    const key = `${selection.join(',')}|${String(this.editor.version)}|${String(data.objects.length)}`;
+    const moving = selection.some((item) => this.editor.animOf(item) !== undefined);
+    const key = `${selection.join(',')}|${String(this.editor.version)}|${String(data.objects.length)}|${moving ? this.editor.playhead().toFixed(3) : ''}`;
     if ((key === this.framedKey && this.children?.data === data) || this.dragging !== null) return;
     this.framedKey = key;
     const kids = this.kids(data);
     this.clearFrames();
     selection.forEach((item, order) => {
       const index = this.renderedIndex(item);
-      if (index !== null) for (const { box, matrix } of shownBoxes(data, index, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, order === 0 ? 0xffe27a : 0x6aa6ff));
+      if (index !== null) {
+        const carried = this.placed(data, index, item).multiply(worldMatrix(data, index).invert());
+        for (const { box, matrix } of shownBoxes(data, index, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, carried.clone().multiply(matrix), order === 0 ? 0xffe27a : 0x6aa6ff));
+      }
       for (const other of this.othersOf(item)) for (const { box, matrix } of shownBoxes(data, other, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, 0x4fd6a0));
     });
     if (usable) {
-      worldMatrix(data, first).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
+      this.placed(data, first, selection[0]!).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
       this.proxy.updateMatrixWorld(true);
     }
   }
@@ -219,7 +233,7 @@ export class EnvView {
     const first = keys[0] === undefined ? null : this.renderedIndex(keys[0]);
     this.framedKey = '';
     if (data === null || first === null) return;
-    const before = editor.sceneValues(keys[0]!);
+    const before = editor.sceneShown(keys[0]!);
     if (before === null || (before.object === undefined && (before.id === null || before.id === undefined))) {
       editor.setStatus(tr('У этого объекта нет id для Chroma: его нельзя изменить'));
       return;

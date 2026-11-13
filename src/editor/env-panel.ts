@@ -1,6 +1,8 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
 import type { SceneNode } from './env-scene';
+import { ANIM_PARTS, type AnimPart } from './env-anim';
+import { EASINGS } from './rings';
 import { ARRAY_KINDS, arrayCount, defaultArray, mirrored, type ArrayKind, type SceneArray } from './env-array';
 import { expandObjects, isLightShader, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
 import { numberDrum } from './grids';
@@ -59,6 +61,8 @@ export class EnvPanel {
   private readonly list = document.createElement('div');
   private readonly count = document.createElement('div');
   private shownKey = '';
+  /** What the right panel was drawn for (the same again: it stays scrolled where it was). */
+  private inspectorShows = '';
   /** The keys of the tree's lines as shown, top to bottom (Shift picks a stretch of them). */
   private order: string[] = [];
   /** The line a Shift + click's stretch starts from (the last one clicked plainly). */
@@ -132,11 +136,19 @@ export class EnvPanel {
       this.shownKey = '';
     }
     if (this.material !== null && editor.sceneMaterials()[this.material] === undefined) this.material = null;
-    const key = `${JSON.stringify(editor.envSelection)}|${JSON.stringify(editor.project.environmentMods ?? {})}|${this.search}|${String(this.changedOnly)}|${[...this.open].join(',')}|${String(this.material)}|${JSON.stringify([...editor.lightsByType.keys()])}`;
+    // (an animated thing picked: its numbers follow the song — when it stands still)
+    const moving = !editor.isPlaying() && editor.envSelection.some((item) => editor.animOf(item) !== undefined) ? editor.playhead().toFixed(3) : '';
+    const key = `${moving}|${[...editor.animSelection].join(',')}|${JSON.stringify(editor.envSelection)}|${JSON.stringify(editor.project.environmentMods ?? {})}|${this.search}|${String(this.changedOnly)}|${[...this.open].join(',')}|${String(this.material)}|${JSON.stringify([...editor.lightsByType.keys()])}`;
     if (key === this.shownKey) return;
     this.shownKey = key;
+    // (drawn anew: left scrolled where they were)
+    const scrolled = [this.list, this.inspectorRoot].map((item) => item.scrollTop);
+    const shows = `${JSON.stringify(this.editor.envSelection)}|${String(this.material)}`;
     this.renderTree();
     this.renderInspector();
+    this.list.scrollTop = scrolled[0]!;
+    if (shows === this.inspectorShows) this.inspectorRoot.scrollTop = scrolled[1]!;
+    this.inspectorShows = shows;
   }
 
   /** The tree opened down to a picked thing (picked in the 3D view) and scrolled to it. */
@@ -418,7 +430,7 @@ export class EnvPanel {
     const editor = this.editor;
     const keys = editor.envSelection.filter((key) => editor.sceneValues(key) !== null);
     const first = keys[0];
-    const now = first === undefined ? null : editor.sceneValues(first);
+    const now = first === undefined ? null : editor.sceneShown(first);
     if (first === undefined || now === null) {
       root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Выберите объект: кликните по нему в 3D-окне или в списке слева. Ctrl — добавить к выбранным, Shift — выбрать всё от прошлого до этого. Новый объект — кнопками «＋ Объект» и «＋ Свет» над 3D-окном.') }));
       return;
@@ -473,6 +485,7 @@ export class EnvPanel {
     line('Поворот, °', 'rotation', 1, -360, 360, 'Поворот объекта вокруг осей X, Y, Z, в градусах');
     line('Масштаб', 'scale', 0.05, 0, 200, 'Размер объекта по осям (1 — как в игре; у фигуры — метры)');
     }
+    this.renderAnim(root, keys);
     this.renderArray(root, keys, object);
 
     if (object?.kind === 'shape') this.renderShape(root, object, keys);
@@ -541,6 +554,61 @@ export class EnvPanel {
       editor.selectEnv(like.filter((_item, at) => at + 1 >= rule.from && at + 1 <= to && (at + 1 - rule.from) % rule.every === 0));
     });
     box.append(drums, pick);
+    root.append(box);
+  }
+
+  /** The picked things' animation: a key here for a part, the picked key's easing, all of it away. */
+  private renderAnim(root: HTMLElement, keys: readonly string[]) {
+    const editor = this.editor;
+    const able = keys.filter((key) => editor.animTarget(key) !== null);
+    if (able.length === 0) return;
+    const now = editor.sceneShown(able[0]!);
+    const anim = editor.animOf(able[0]!);
+    const box = document.createElement('div');
+    box.className = 'env-row';
+    const head = this.section(tr('Анимация'));
+    head.title = 'Ключ — каким объект должен быть на этой доле песни. Между ключами он движется сам. До первого ключа объект стоит как задано выше';
+    box.append(head);
+    const buttons = document.createElement('div');
+    buttons.className = 'ins-buttons';
+    const names: Record<AnimPart, string> = { position: '◆ Положение', rotation: '◆ Поворот', scale: '◆ Масштаб' };
+    for (const part of ANIM_PARTS) {
+      const count = (anim?.keys[part] ?? []).length;
+      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: `${tr(names[part])}${count > 0 ? ` · ${String(count)}` : ''}`, title: 'Поставить ключ на текущей доле с тем, что сейчас (K — ключ того, что меняют ручки)' });
+      button.classList.toggle('active', now?.keyed.includes(part) === true);
+      button.addEventListener('click', () => editor.addAnimKeys(able, [part]));
+      buttons.append(button);
+    }
+    const all = Object.assign(document.createElement('button'), { type: 'button', textContent: '◆ Всё', title: 'Ключи положения, поворота и масштаба сразу' });
+    all.addEventListener('click', () => editor.addAnimKeys(able, ANIM_PARTS));
+    buttons.append(all);
+    if (able.some((key) => editor.animOf(key) !== undefined)) {
+      const clear = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕ Убрать анимацию', title: 'Удалить все ключи выбранных объектов' });
+      clear.addEventListener('click', () => editor.clearAnims(able));
+      buttons.append(clear);
+    }
+    box.append(buttons);
+    // the picked keys: how it comes to them
+    const picked = editor.sceneAnims().flatMap((item) => ANIM_PARTS.flatMap((part) => (item.keys[part] ?? []).filter((key) => editor.animSelection.has(key.id))));
+    if (picked.length > 0) {
+      const line = document.createElement('label');
+      line.className = 'env-field';
+      const easing = document.createElement('select');
+      for (const [id, name] of EASINGS) easing.append(Object.assign(document.createElement('option'), { value: id, textContent: name }));
+      easing.value = picked[0]!.easing ?? 'easeLinear';
+      easing.title = 'Как объект приходит к этому ключу от предыдущего';
+      easing.addEventListener('change', () => editor.changeAnimKeys(new Set(picked.map((key) => key.id)), (key) => (easing.value === 'easeLinear' ? delete key.easing : (key.easing = easing.value))));
+      line.append(Object.assign(document.createElement('span'), { textContent: tr('Выбрано ключей: {0} — плавность', picked.length) }), easing);
+      box.append(line);
+      if (picked.length === 1) {
+        const beat = document.createElement('label');
+        beat.className = 'env-field';
+        beat.append(Object.assign(document.createElement('span'), { textContent: 'Доля ключа' }), numberDrum(`env:key:${picked[0]!.id}`, picked[0]!.beat, (next) => editor.changeAnimKeys(new Set([picked[0]!.id]), (key) => (key.beat = Math.max(0, next)), 'anim:beat'), { step: 0.25, min: 0, max: 100000, digits: 3 }));
+        box.append(beat);
+      }
+    }
+    if (now !== null && now.keyed.length > 0) box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr('Числа выше — на текущей доле. Изменение анимированного свойства ставит ключ здесь.') }));
+    if ((anim?.keys.rotation ?? []).length > 1) box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr('Поворот идёт кратчайшим путём: для полного оборота ставьте ключи через каждые 90–120°.') }));
     root.append(box);
   }
 

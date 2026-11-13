@@ -113,6 +113,11 @@ envView.onMode = () => {
 };
 for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button[data-mode]')) button.addEventListener('click', () => envView.setMode(button.dataset.mode as GizmoMode));
 byId('env-snap').addEventListener('click', () => envView.setSnap(!envView.snap));
+byId('env-auto').addEventListener('click', () => {
+  editor.animAuto = !editor.animAuto;
+  byId('env-auto').classList.toggle('active', editor.animAuto);
+  editor.setStatus(tr(editor.animAuto ? 'Автоключ включён: любое изменение положения, поворота или масштаба ставит ключ на текущей доле' : 'Автоключ выключен: меняется исходное положение объекта (у уже анимированного свойства — ключ на текущей доле)'));
+});
 byId('env-add').addEventListener('click', (event) => {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   showMenu(rect.left, rect.bottom + 2, SHAPES.map((shape) => ({ label: SHAPE_NAMES[shape], action: () => envPanel.addShape(shape, false) })));
@@ -127,7 +132,12 @@ window.addEventListener(
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
     const ctrl = event.ctrlKey || event.metaKey;
     if (ctrl && event.code === 'KeyD') envPanel.copy();
-    else if (!ctrl && (event.code === 'Delete' || event.code === 'Backspace')) envPanel.remove();
+    else if (!ctrl && (event.code === 'Delete' || event.code === 'Backspace')) {
+      // (keys picked on the timeline: they go first, not the object)
+      if (editor.animSelection.size > 0) editor.removeAnimKeys(new Set(editor.animSelection));
+      else envPanel.remove();
+    } else if (!ctrl && event.code === 'KeyK' && editor.envSelection.length > 0) editor.addAnimKeys(editor.envSelection, [envView.mode === 'rotate' ? 'rotation' : envView.mode === 'scale' ? 'scale' : 'position']);
+    else if (!ctrl && event.code === 'Escape' && editor.animSelection.size > 0) editor.selectAnimKeys([]);
     else if (!ctrl && event.code === 'Escape' && editor.envSelection.length > 0) editor.selectEnv([]);
     else return;
     event.preventDefault();

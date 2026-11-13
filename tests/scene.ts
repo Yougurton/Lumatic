@@ -2,6 +2,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 import { chromaRotation, dataRotation, flipZ, localFromWorld, rayBox } from '../src/editor/env-scene';
 import { expandObjects, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
 import { arrayCount, arrayPlacings, mirrored } from '../src/editor/env-array';
+import { animEvents, animTrack, animValue } from '../src/editor/env-anim';
 
 /**
  * The scene editor's numbers: Chroma's turns and places to the 3D view's and back, a click's ray
@@ -97,6 +98,23 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   check('an array written out: the object, its others; a ghost: only the others', all.length === 5 && all[2]!.light?.id === 103 && all[2]!.of === 'l' && all[3]!.of === 'g' && all[4]!.position[2] === 9, all);
   const made = objectsFragment({ materials: { lamp: { shader: 'OpaqueLight', color: [1, 1, 1, 1], track: 't', keywords: ['A'] } }, objects: [lamp, ghost] });
   check('in the fragment: five commands, a material with its track and keywords', made.environment.length === 5 && JSON.stringify(made.materials.lamp) === JSON.stringify({ shader: 'OpaqueLight', color: [1, 1, 1, 1], track: 't', shaderKeywords: ['A'] }), made);
+}
+
+// animation: keys on beats
+{
+  const anim = { target: 'o:b', keys: { position: [{ id: 'k2', beat: 8, value: [4, 0, 0] as [number, number, number], easing: 'easeInQuad' }, { id: 'k1', beat: 4, value: [0, 0, 0] as [number, number, number] }], rotation: [{ id: 'r1', beat: 2, value: [0, 90, 0] as [number, number, number] }] } };
+  check('before the first key: the thing\'s own value', animValue(anim, 'position', 3) === null && animValue(anim, 'scale', 5) === null);
+  check('between keys: eased', JSON.stringify(animValue(anim, 'position', 6)) === JSON.stringify([1, 0, 0]), animValue(anim, 'position', 6));
+  check('after the last key: it stays', JSON.stringify(animValue(anim, 'position', 20)) === JSON.stringify([4, 0, 0]));
+  const turn = animValue({ target: 'x', keys: { rotation: [{ id: 'a', beat: 0, value: [0, 0, 0] }, { id: 'b', beat: 2, value: [0, 90, 0] }] } }, 'rotation', 1)!;
+  check('a turn half way', Math.abs(turn[1] - 45) < 1e-3 && Math.abs(turn[0]) < 1e-3, turn);
+  const events = animEvents(anim, true);
+  check('written: an event a part, beats as shares of its length', JSON.stringify(events) === JSON.stringify([{ b: 4, t: 'AnimateTrack', d: { track: 'lumaticAnim_b', duration: 4, position: [[0, 0, 0, 0], [4, 0, 0, 1, 'easeInQuad']] } }, { b: 2, t: 'AnimateTrack', d: { track: 'lumaticAnim_b', duration: 0, rotation: [[0, 90, 0, 0]] } }]), events);
+  const shape = { uid: 'b', name: 'cube', kind: 'shape' as const, shape: 'Cube' as const, material: 'm', position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
+  const mods = { materials: { m: { shader: 'Standard' as const, color: [1, 1, 1, 1] as [number, number, number, number] } }, objects: [shape], anims: [anim, { target: 'Env.[1]Thing', keys: { scale: [{ id: 's', beat: 1, value: [2, 2, 2] as [number, number, number] }] } }, { target: 'o:gone', keys: {} }] };
+  const fragment = modsFragment(mods, null);
+  check('in the fragment: tracks on both, three events, the game\'s thing by its own (local) names', fragment.customEvents.length === 3 && (fragment.environment.find((entry) => entry.id === 'Env.[1]Thing') as { track?: string }).track === animTrack('Env.[1]Thing') && (fragment.environment.at(-1) as { track?: string }).track === 'lumaticAnim_b', fragment);
+  check('an animation alone needs Chroma', JSON.stringify(fragmentRequirements({ anims: [anim] })) === JSON.stringify(['Chroma']) && hasMods({ anims: [anim] }) && !hasMods({ anims: [{ target: 'x', keys: {} }] }));
 }
 
 console.log('checks', checks, 'failures', failures);

@@ -236,6 +236,7 @@
         display: flex;
         gap: 4px;
       }
+      #env-auto.active { color: #ff7a7a; }
       #env-tools button.active {
         background: #263a5c;
         border-color: #6aa6ff;
@@ -3508,7 +3509,7 @@
         <span class="grow"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><div id="env-tools"><button data-mode="translate" class="active" title="Двигать (W)">↔ Двигать</button><button data-mode="rotate" title="Вращать (E)">⟳ Вращать</button><button data-mode="scale" title="Масштаб (R)">⤢ Масштаб</button><button id="env-snap" title="Привязка ручек: шаг 0,1 м, 15°, 0,1 размера; фигура встаёт вровень с соседней, если она рядом">⊞ Привязка</button><span class="env-gap"></span><button id="env-add" title="Новая фигура перед камерой: куб, сфера, цилиндр…">＋ Объект ▾</button><button id="env-add-light" title="Новая лампа перед камерой: ею управляют события света">＋ Свет</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><div id="env-tools"><button data-mode="translate" class="active" title="Двигать (W)">↔ Двигать</button><button data-mode="rotate" title="Вращать (E)">⟳ Вращать</button><button data-mode="scale" title="Масштаб (R)">⤢ Масштаб</button><button id="env-snap" title="Привязка ручек: шаг 0,1 м, 15°, 0,1 размера; фигура встаёт вровень с соседней, если она рядом">⊞ Привязка</button><button id="env-auto" title="Автоключ: пока включён, любое изменение объекта ставит ключ анимации на текущей доле">⏺ Автоключ</button><span class="env-gap"></span><button id="env-add" title="Новая фигура перед камерой: куб, сфера, цилиндр…">＋ Объект ▾</button><button id="env-add-light" title="Новая лампа перед камерой: ею управляют события света">＋ Свет</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
         <aside id="side">
           <div id="library"></div>
           <div id="note-panel"></div>

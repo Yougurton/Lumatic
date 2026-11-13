@@ -50,6 +50,7 @@ import { choose } from './menu';
 import { tr, translate } from './i18n';
 import { expandObjects, isLightShader, sceneCommand, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
 import { arrayCount, type SceneArray } from './env-array';
+import { ANIM_PARTS, animValue, hasKeys, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
 import { localOf, sceneTree } from './env-scene';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
@@ -946,8 +947,141 @@ export class Editor {
     else delete mods.objects;
     if (Object.keys(materials).length > 0) mods.materials = materials;
     else delete mods.materials;
+    // (an animation of an object that is no more goes with it)
+    const uids = new Set(objects.map((object) => `o:${object.uid}`));
+    const anims = (mods.anims ?? []).filter((anim) => hasKeys(anim) && (!anim.target.startsWith('o:') || uids.has(anim.target)));
+    if (anims.length > 0) mods.anims = anims;
+    else delete mods.anims;
     project.environmentMods = hasMods(mods) || mods.materials !== undefined ? mods : undefined;
     this.tidyArrays();
+  }
+
+  // ----- the scene's animations: keys on beats ------------------------------------------------------------
+
+  /** ⏺: every change of a place, turn or size in the scene makes a key at the playhead. */
+  animAuto = false;
+  /** The picked keys (their ids). */
+  animSelection = new Set<string>();
+
+  sceneAnims(): SceneAnim[] {
+    return this.project?.environmentMods?.anims ?? [];
+  }
+
+  private putAnims(anims: SceneAnim[], tidy = true) {
+    const project = this.project;
+    if (project === null) return;
+    const mods: EnvironmentMods = { ...(project.environmentMods ?? {}) };
+    mods.anims = anims;
+    project.environmentMods = mods;
+    if (tidy) this.putScene(this.sceneEdits());
+  }
+
+  /** What a picked thing's animation is kept under (null: it can't have one). */
+  animTarget(key: string): string | null {
+    const now = this.sceneValues(key);
+    if (now === null) return null;
+    if (now.object !== undefined) return now.object.ghost === true ? null : key;
+    return now.id ?? null;
+  }
+
+  animOf(key: string): SceneAnim | undefined {
+    const target = this.animTarget(key);
+    return target === null ? undefined : this.sceneAnims().find((anim) => anim.target === target);
+  }
+
+  /** The picked thing an animation is of (null: it's gone). */
+  animKeyOf(anim: SceneAnim): string | null {
+    if (anim.target.startsWith('o:')) return this.sceneObjects().some((object) => `o:${object.uid}` === anim.target) ? anim.target : null;
+    return this.gameKey(anim.target);
+  }
+
+  /** Where a picked thing stands at the playhead: its own values, the animated parts as their keys
+   *  have them there (`keyed`: those parts). */
+  sceneShown(key: string, beat = this.playhead()) {
+    const now = this.sceneValues(key);
+    if (now === null) return null;
+    const anim = this.animOf(key);
+    const keyed: AnimPart[] = [];
+    const out = { ...now, keyed };
+    for (const part of ANIM_PARTS) {
+      const value = animValue(anim, part, beat);
+      if (value === null) continue;
+      out[part] = value;
+      keyed.push(part);
+    }
+    return out;
+  }
+
+  /** Changes the animations (one undo step). */
+  changeAnims(patch: (anims: SceneAnim[]) => void, merge?: string) {
+    if (this.project === null) return;
+    this.sceneStep(merge);
+    const anims = structuredClone(this.sceneAnims());
+    patch(anims);
+    this.putAnims(anims);
+    const left = new Set(this.sceneAnims().flatMap((anim) => ANIM_PARTS.flatMap((part) => (anim.keys[part] ?? []).map((key) => key.id))));
+    this.animSelection = new Set([...this.animSelection].filter((id) => left.has(id)));
+    this.sceneChanged();
+  }
+
+  /** A key in an animation list at a beat: the one there already, or a new one. */
+  private keyAt(anims: SceneAnim[], target: string, part: AnimPart, beat: number): AnimKey {
+    let anim = anims.find((item) => item.target === target);
+    if (anim === undefined) anims.push((anim = { target, keys: {} }));
+    const keys = (anim.keys[part] ??= []);
+    let key = keys.find((item) => Math.abs(item.beat - beat) < 1e-3);
+    if (key === undefined) keys.push((key = { id: newId('k'), beat, value: [0, 0, 0] }));
+    return key;
+  }
+
+  /** A key of these parts at a beat for each picked thing, with what it has there now (picked after). */
+  addAnimKeys(keys: readonly string[], parts: readonly AnimPart[], beat = this.snapBeat(this.playhead())) {
+    const made: string[] = [];
+    const targets = keys.map((key) => ({ key, target: this.animTarget(key), now: this.sceneShown(key, beat) })).filter((item) => item.target !== null && item.now !== null);
+    if (targets.length === 0) return;
+    this.changeAnims((anims) => {
+      for (const { target, now } of targets) {
+        for (const part of parts) {
+          const key = this.keyAt(anims, target!, part, beat);
+          key.value = [...now![part]];
+          made.push(key.id);
+        }
+      }
+    });
+    this.animSelection = new Set(made);
+    this.emit('selection');
+  }
+
+  /** Changes keys by their ids (one undo step). */
+  changeAnimKeys(ids: ReadonlySet<string>, patch: (key: AnimKey, part: AnimPart) => void, merge?: string) {
+    if (ids.size === 0) return;
+    this.changeAnims((anims) => {
+      for (const anim of anims) for (const part of ANIM_PARTS) for (const key of anim.keys[part] ?? []) if (ids.has(key.id)) patch(key, part);
+    }, merge);
+  }
+
+  removeAnimKeys(ids: ReadonlySet<string>) {
+    if (ids.size === 0) return;
+    this.changeAnims((anims) => {
+      for (const anim of anims) for (const part of ANIM_PARTS) if (anim.keys[part] !== undefined) anim.keys[part] = anim.keys[part]!.filter((key) => !ids.has(key.id));
+    });
+  }
+
+  /** All the animation of the picked things taken away. */
+  clearAnims(keys: readonly string[]) {
+    const targets = new Set(keys.map((key) => this.animTarget(key)));
+    this.changeAnims((anims) => {
+      for (const anim of anims) if (targets.has(anim.target)) anim.keys = {};
+    });
+  }
+
+  selectAnimKeys(ids: readonly string[], mode: 'replace' | 'toggle' | 'add' = 'replace') {
+    if (mode === 'replace') this.animSelection = new Set(ids);
+    else for (const id of ids) {
+      if (mode === 'toggle' && this.animSelection.has(id)) this.animSelection.delete(id);
+      else this.animSelection.add(id);
+    }
+    this.emit('selection');
   }
 
   /** The added objects as they are shown and written: each, then its array's others. */
@@ -1226,10 +1360,28 @@ export class Editor {
     const objects = structuredClone(this.sceneObjects());
     let any = false;
     const same = (a: readonly number[], b: readonly number[]) => a.every((value, k) => Math.abs(value - b[k]!) < 1e-6);
+    const anims = structuredClone(this.sceneAnims());
+    const beat = this.snapBeat(this.playhead());
+    let keyedAny = false;
     for (const key of keys) {
-      const now = this.sceneValues(key);
+      const now = this.sceneShown(key);
       if (now === null) continue;
       const next = change(key, now);
+      // (an animated part — or any, with ⏺ on: the change is a key at the playhead, not the thing's
+      // own value)
+      const target = this.animTarget(key);
+      if (next !== 'reset' && target !== null) {
+        let keyedHere = false;
+        for (const part of ANIM_PARTS) {
+          const value = next[part];
+          if (value === undefined || !(this.animAuto || now.keyed.includes(part))) continue;
+          this.keyAt(anims, target, part, beat).value = [...value];
+          delete next[part];
+          keyedHere = true;
+        }
+        keyedAny ||= keyedHere;
+        if (keyedHere && Object.keys(next).length === 0) continue;
+      }
       if (now.object !== undefined) {
         const object = objects.find((item) => item.uid === now.object!.uid);
         if (object === undefined || next === 'reset') continue;
@@ -1266,8 +1418,9 @@ export class Editor {
       }
       any = true;
     }
-    if (!any) return;
+    if (!any && !keyedAny) return;
     this.sceneStep(merge);
+    if (keyedAny) this.putAnims(anims, false);
     this.putScene(scene, objects);
     this.sceneChanged();
   }
@@ -1562,6 +1715,7 @@ export class Editor {
   }
 
   buildRows() {
+    this.healEffects();
     this.version++;
     const project = this.project;
     if (project === null) {
@@ -1907,7 +2061,54 @@ export class Editor {
 
   // ----- groups ----------------------------------------------------------------------------------------
 
+  /** Effects left running over a group that is no more (deleted in an older version): put over the
+   *  lights their events are on, so they can be picked and removed again. */
+  private healEffects() {
+    const project = this.project;
+    if (project === null) return;
+    for (const effect of [...(project.effects ?? [])]) {
+      if (effect.target === undefined || findGroup(this.groups, effect.target) !== null) continue;
+      const byType = new Map<number, number[] | null>();
+      for (const clip of project.clips) {
+        if (clip.group !== effect.id || clip.target !== undefined) continue;
+        const have = byType.get(clip.type);
+        byType.set(clip.type, clip.ids === null || have === null ? null : [...new Set([...(have ?? []), ...clip.ids])]);
+      }
+      delete effect.target;
+      [...byType].forEach(([type, ids], at) => {
+        if (at === 0) {
+          effect.type = type;
+          effect.ids = ids;
+          return;
+        }
+        const part: Effect = { ...structuredClone(effect), id: newId('e'), type, ids };
+        (project.effects ??= []).push(part);
+        for (const clip of project.clips) if (clip.group === effect.id && clip.type === type) clip.group = part.id;
+      });
+    }
+  }
+
+  /** What each group lit when its effects were last made (its lights, in order). */
+  private groupLit = new Map<string, string>();
+
   private groupChanged() {
+    // (a group's lights changed: the effects running over it are made anew for what it is now —
+    // else their events stay on lights the group no longer has, and can't be reached)
+    const project = this.project;
+    if (project !== null) {
+      const lit = new Map<string, string>();
+      const walk = (group: LightGroup) => {
+        lit.set(group.id, JSON.stringify(group.items.map((item) => (item.kind === 'group' ? item.id : lightKey(item.type, item.id)))) + groupLights(group).map((light) => lightKey(light.type, light.id)).join(','));
+        for (const item of group.items) if (item.kind === 'group') walk(item);
+      };
+      for (const group of this.groups) walk(group);
+      for (const effect of project.effects ?? []) {
+        if (effect.target === undefined || !lit.has(effect.target)) continue;
+        const before = this.groupLit.get(effect.target);
+        if (before !== undefined && before !== lit.get(effect.target)) this.regenerate(effect);
+      }
+      this.groupLit = lit;
+    }
     this.buildRows();
     this.changed(true);
     this.emit('rows');
@@ -1989,6 +2190,32 @@ export class Editor {
     };
     if (keepItems) doomed.add(id);
     else collect(found.group);
+    // the effects running over it: over its lights directly (one an event type; none left: gone)
+    const moved: Effect[] = [];
+    const split = new Map<string, Map<number, string>>();
+    for (const effect of [...(project.effects ?? [])]) {
+      if (effect.target === undefined || !doomed.has(effect.target)) continue;
+      const group = findGroup(groups, effect.target)?.group;
+      const byType = new Map<number, number[]>();
+      for (const light of group === undefined ? [] : groupLights(group)) byType.set(light.type, [...(byType.get(light.type) ?? []), light.id]);
+      delete effect.target;
+      if (byType.size === 0) {
+        project.effects = (project.effects ?? []).filter((item) => item !== effect);
+        project.clips = project.clips.filter((clip) => clip.group !== effect.id);
+        project.raw = project.raw.filter((event) => event.group !== effect.id);
+        continue;
+      }
+      const ids = new Map<number, string>();
+      [...byType].forEach(([type, list], at) => {
+        const one: Effect = at === 0 ? effect : { ...structuredClone(effect), id: newId('e') };
+        one.type = type;
+        one.ids = list;
+        if (at > 0) (project.effects ??= []).push(one);
+        ids.set(type, one.id);
+        moved.push(one);
+      });
+      split.set(effect.id, ids);
+    }
     // the clips drawn on it: onto its lights directly
     const replaced: LightClip[] = [];
     project.clips = project.clips.filter((clip) => {
@@ -2002,6 +2229,11 @@ export class Editor {
       return false;
     });
     project.clips.push(...replaced);
+    // (a hand-changed effect split by event type: its events go with the part of their type)
+    for (const clip of project.clips) {
+      const part = clip.group === undefined ? undefined : split.get(clip.group)?.get(clip.type);
+      if (part !== undefined) clip.group = part;
+    }
     // the light groups it stood in for: their rows back where it was
     const standIns = Object.entries(project.replacedTypes ?? {}).filter(([, groupId]) => doomed.has(groupId));
     if (standIns.length > 0) {
@@ -2019,6 +2251,7 @@ export class Editor {
       holder.items.splice(at, 1, ...(keepItems && found.depth > 1 ? found.group.items : []));
     }
     if (this.focus !== null && doomed.has(this.focus)) this.focus = null;
+    for (const effect of moved) this.regenerate(effect);
     this.groupChanged();
   }
 
@@ -2241,7 +2474,7 @@ export class Editor {
     const made = new Set((project.effects ?? []).filter((effect) => effect.custom !== true).map((effect) => effect.id));
     const clips = made.size === 0 ? project.clips : project.clips.filter((clip) => clip.group === undefined || !made.has(clip.group));
     const raw = made.size === 0 ? project.raw : project.raw.filter((event) => event.group === undefined || !made.has(event.group));
-    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null, scene: project.environmentMods?.scene ?? [], sceneObjects: project.environmentMods?.objects ?? [], sceneMaterials: project.environmentMods?.materials ?? {} });
+    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null, scene: project.environmentMods?.scene ?? [], sceneObjects: project.environmentMods?.objects ?? [], sceneMaterials: project.environmentMods?.materials ?? {}, sceneAnims: project.environmentMods?.anims ?? [] });
   }
 
   /** Call before a change (one undo step). */
@@ -2298,10 +2531,11 @@ export class Editor {
   private restore(state: string, notify = true) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null; scene?: SceneEdit[]; sceneObjects?: SceneObject[]; sceneMaterials?: Record<string, SceneMaterial> };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null; scene?: SceneEdit[]; sceneObjects?: SceneObject[]; sceneMaterials?: Record<string, SceneMaterial>; sceneAnims?: SceneAnim[] };
     project.bookmarks = data.bookmarks ?? [];
     // (the scene editor's changes: as they were, shown again)
-    if (JSON.stringify([project.environmentMods?.scene ?? [], project.environmentMods?.objects ?? [], project.environmentMods?.materials ?? {}]) !== JSON.stringify([data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {}])) {
+    if (JSON.stringify([project.environmentMods?.scene ?? [], project.environmentMods?.objects ?? [], project.environmentMods?.materials ?? {}, project.environmentMods?.anims ?? []]) !== JSON.stringify([data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {}, data.sceneAnims ?? []])) {
+      this.putAnims(data.sceneAnims ?? [], false);
       this.putScene(data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {});
       const uids = new Set((data.sceneObjects ?? []).map((object) => object.uid));
       this.envSelection = this.envSelection.filter((key) => !key.startsWith('o:') || uids.has(key.slice(2)));
