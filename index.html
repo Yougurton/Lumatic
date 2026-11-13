@@ -333,6 +333,16 @@
       .env-fold > summary em { font-style: normal; color: var(--text, #dfe2ea); margin-left: auto; }
       .env-fold-body { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; }
       .env-code { margin: 0; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; }
+      .env-line-one { grid-template-columns: 118px minmax(0, 1fr) auto; }
+      .env-link-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .env-link-children { font-size: 11px; margin-top: -4px; }
+      .env-warning { border-left: 3px solid #ffb45a; padding-left: 8px; }
+      .curve-dialog { max-width: calc(100vw - 32px); }
+      .curve-canvas { display: block; border-radius: 4px; cursor: pointer; max-width: 100%; }
+      .curve-tools { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 8px; font-size: 12px; }
+      .curve-tool { display: flex; align-items: center; gap: 5px; color: var(--dim); }
+      .curve-tool input[type='number'] { width: 64px; }
+      .curve-hint { font-size: 11px; margin-top: 6px; }
       .env-gap {
         width: 10px;
       }

@@ -1,6 +1,9 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import catalog from './custom-environments.json';
-import { animEvents, animTrack, hasKeys, type SceneAnim } from './env-anim';
+import { Matrix4 } from 'three';
+import { environmentLookupIds } from '../engine/renderer/environment/chroma-environment';
+import { animEvents, animTrack, hasKeys, linkEvents, linkTrack, offsetAnim, type Placing, type SceneAnim } from './env-anim';
+import { localOf, worldMatrix } from './env-scene';
 import { arrayPlacings, type SceneArray } from './env-array';
 import { GEOMETRY_RING_MATERIALS, geometryRingFragment } from './geometry-rings';
 
@@ -26,6 +29,12 @@ export interface EnvironmentMods {
   objects?: SceneObject[];
   /** The scene editor's animations: keys on beats, an object each. */
   anims?: SceneAnim[];
+  /** Objects hung on others: they go along with their parent's motion. */
+  links?: SceneLink[];
+  /** The fog, as the scene editor sets it (what's not set: as the environment has it). */
+  fog?: FogValues;
+  /** The player: whether its turns and uneven moves are allowed (they make people sick). */
+  player?: { risky?: boolean };
   /** The materials its shapes are made of, by name. */
   materials?: Record<string, SceneMaterial>;
 }
@@ -80,6 +89,8 @@ export interface SceneObject {
   /** A copy standing where the game's original does and not written itself: only its array's others
    *  are (the original is the array's first). */
   ghost?: boolean;
+  /** A lamp: its own settings. */
+  tube?: TubeValues;
   /** One of an array's others (made by `expandObjects`, never kept): the uid of the object it's of. */
   of?: string;
 }
@@ -110,7 +121,10 @@ export function objectCommand(object: SceneObject, materials: Record<string, Sce
     const material = object.material === undefined ? undefined : materials[object.material];
     if (object.shape === undefined || object.material === undefined || material === undefined) return null;
     Object.assign(command, { geometry: { type: object.shape, material: object.material }, position: object.position.map(round), rotation: object.rotation.map(round), scale: object.scale.map(round) });
-    if (isLightShader(material.shader) && object.light !== undefined) command.components = { ILightWithId: { type: object.light.type, lightID: object.light.id } };
+    if (isLightShader(material.shader) && object.light !== undefined) {
+      const tube = tubeComponent(object.tube);
+      command.components = { ILightWithId: { type: object.light.type, lightID: object.light.id }, ...(tube === null ? {} : { TubeBloomPrePassLight: tube }) };
+    }
   }
   if (object.hidden === true) command.active = false;
   return command;
@@ -121,28 +135,71 @@ export function objectsFragment(mods: EnvironmentMods): { environment: Record<st
   const materials = mods.materials ?? {};
   const environment: Record<string, unknown>[] = [];
   const used = new Set<string>();
-  const animated = new Set((mods.anims ?? []).filter((anim) => hasKeys(anim)).map((anim) => anim.target));
+  const tracked = trackedTargets(mods);
   for (const object of expandObjects(mods.objects ?? [])) {
     const command = objectCommand(object, materials);
     if (command === null) continue;
-    // (an animated object: on a track of its own — not its array's others: they'd all go to one place)
-    if (object.of === undefined && animated.has(`o:${object.uid}`)) command.track = animTrack(`o:${object.uid}`);
+    // (an animated or hung object: on a track of its own — its array's others too, each its own)
+    if (tracked.has(`o:${object.of ?? object.uid}`)) command.track = animTrack(`o:${object.uid}`);
     environment.push(command);
     if (object.kind === 'shape' && object.material !== undefined) used.add(object.material);
   }
-  return { environment, materials: Object.fromEntries([...used].map((name) => [name, materialCommand(materials[name]!)])) };
+  // (a material whose colour is animated: on its track)
+  const out = Object.fromEntries([...used].map((name) => [name, materialCommand(materials[name]!)]));
+  for (const name of used) if (tracked.has(`m:${name}`)) out[name]!.track = materialTrack(name, materials[name]!);
+  return { environment, materials: out };
+}
+
+/** The track a material's colour is animated on: its own, or one made for it. */
+export const materialTrack = (name: string, material: SceneMaterial) => material.track ?? animTrack(`m:${name}`);
+
+/** The things that need a track: the animated ones, and the ones hung on others. */
+export function trackedTargets(mods: EnvironmentMods): Set<string> {
+  const out = new Set((mods.anims ?? []).filter((anim) => hasKeys(anim)).map((anim) => anim.target));
+  for (const link of mods.links ?? []) out.add(link.child);
+  return out;
 }
 
 /**
  * One object of the environment changed in the scene editor: found by its exact Chroma id; hidden, or
  * put, turned and sized (its own — local — values, as Chroma's: metres, degrees x/y/z).
  */
+/** One thing hung on another ("o:<uid>" or a game object's Chroma id, both). */
+export interface SceneLink {
+  child: string;
+  parent: string;
+}
+
+export interface FogValues {
+  attenuation?: number;
+  offset?: number;
+  startY?: number;
+  height?: number;
+}
+
+/** A lamp's own settings: how bright its colour is, how much it glows in the fog (1: as it is). */
+export interface TubeValues {
+  alpha?: number;
+  bloom?: number;
+}
+
+/** The Chroma component of a lamp's settings (null: none set). */
+export function tubeComponent(tube: TubeValues | undefined): Record<string, number> | null {
+  if (tube === undefined || (tube.alpha === undefined && tube.bloom === undefined)) return null;
+  return { ...(tube.alpha === undefined ? {} : { colorAlphaMultiplier: round(tube.alpha) }), ...(tube.bloom === undefined ? {} : { bloomFogIntensityMultiplier: round(tube.bloom) }) };
+}
+
+/** The environment's root object — the one the fog is on (any environment's). */
+export const FOG_ID = '^[^.\\[]+\\.\\[0\\]Environment$';
+
 export interface SceneEdit {
   id: string;
   hidden?: boolean;
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: [number, number, number];
+  /** A lamp of the game: its own settings. */
+  tube?: TubeValues;
 }
 
 /** A scene edit as Chroma's environment command (null: it changes nothing). */
@@ -152,6 +209,8 @@ export function sceneCommand(edit: SceneEdit): Record<string, unknown> | null {
   if (edit.position !== undefined) command.localPosition = edit.position.map(round);
   if (edit.rotation !== undefined) command.localRotation = edit.rotation.map(round);
   if (edit.scale !== undefined) command.scale = edit.scale.map(round);
+  const tube = tubeComponent(edit.tube);
+  if (tube !== null) command.components = { TubeBloomPrePassLight: tube };
   return Object.keys(command).length > 2 ? command : null;
 }
 
@@ -362,20 +421,8 @@ export function modsFragment(mods: EnvironmentMods | undefined, data: Environmen
     const command = sceneCommand(edit);
     if (command !== null) fragment.environment.push(command);
   }
-  // the animations: a track on each animated thing, its keys as AnimateTrack events
-  for (const anim of mods.anims ?? []) {
-    if (!hasKeys(anim)) continue;
-    if (anim.target.startsWith('o:')) {
-      const object = (mods.objects ?? []).find((item) => `o:${item.uid}` === anim.target);
-      if (object === undefined || object.ghost === true) continue;
-      fragment.customEvents.push(...animEvents(anim, object.kind === 'shape'));
-      continue;
-    }
-    const own = fragment.environment.find((entry) => entry.id === anim.target && entry.lookupMethod === 'Exact' && entry.duplicate === undefined && entry.track === undefined);
-    if (own !== undefined) own.track = animTrack(anim.target);
-    else fragment.environment.push({ id: anim.target, lookupMethod: 'Exact', track: animTrack(anim.target) });
-    fragment.customEvents.push(...animEvents(anim, false));
-  }
+  // the animations and the links: a track on each such thing of the game, their events
+  sceneMotion(fragment, mods, data);
   if (data === null) {
     addObjects(fragment, mods);
     return fragment;
@@ -406,6 +453,86 @@ export function modsFragment(mods: EnvironmentMods | undefined, data: Environmen
   }
   addObjects(fragment, mods);
   return fragment;
+}
+
+/**
+ * The scene's motion: tracks on the game's things that are animated or hung on others; the fog and the
+ * lamps' settings; the events — animations (an array's others each as far aside), the player, the
+ * links (a parent's motion onto the track its children hang on).
+ */
+function sceneMotion(fragment: EnvironmentFragment, mods: EnvironmentMods, data: EnvironmentData | null) {
+  const objects = mods.objects ?? [];
+  const tracked = trackedTargets(mods);
+  const anims = new Map((mods.anims ?? []).filter((anim) => hasKeys(anim)).map((anim) => [anim.target, anim]));
+  // (where the game's things stand: their own values, and the space those are in)
+  const ids = new Map<string, number>();
+  if (data !== null) for (const [index, list] of environmentLookupIds(data)) for (const id of list) if (!ids.has(id)) ids.set(id, index);
+  const placeOf = (target: string): { base: Placing; outer?: Matrix4; world: boolean } | null => {
+    if (target.startsWith('o:')) {
+      const object = objects.find((item) => `o:${item.uid}` === target);
+      if (object === undefined) return null;
+      if (object.kind === 'shape') return { base: object, world: true };
+      const index = object.source === undefined ? undefined : ids.get(object.source);
+      const parent = index === undefined || data === null ? -1 : data.objects[index]!.parent;
+      return { base: object, world: false, ...(parent >= 0 ? { outer: worldMatrix(data!, parent) } : {}) };
+    }
+    const index = ids.get(target);
+    const own = index === undefined || data === null ? null : localOf(data, index);
+    const edit = (mods.scene ?? []).find((item) => item.id === target);
+    const base = { position: edit?.position ?? own?.position ?? [0, 0, 0], rotation: edit?.rotation ?? own?.rotation ?? [0, 0, 0], scale: edit?.scale ?? own?.scale ?? [1, 1, 1] };
+    const parent = index === undefined || data === null ? -1 : data.objects[index]!.parent;
+    return { base, world: false, ...(parent >= 0 ? { outer: worldMatrix(data!, parent) } : {}) };
+  };
+  // the game's things on tracks
+  for (const target of tracked) {
+    if (target.startsWith('o:') || target.startsWith('m:') || target === 'fog' || target === 'player') continue;
+    const own = fragment.environment.find((entry) => entry.id === target && entry.lookupMethod === 'Exact' && entry.duplicate === undefined && entry.track === undefined);
+    if (own !== undefined) own.track = animTrack(target);
+    else fragment.environment.push({ id: target, lookupMethod: 'Exact', track: animTrack(target) });
+  }
+  // the fog
+  const fog = Object.fromEntries(Object.entries(mods.fog ?? {}).filter(([, value]) => value !== undefined).map(([key, value]) => [key, round(value)]));
+  if (Object.keys(fog).length > 0 || anims.has('fog')) fragment.environment.push({ id: FOG_ID, lookupMethod: 'Regex', ...(Object.keys(fog).length > 0 ? { components: { BloomFogEnvironment: fog } } : {}), ...(anims.has('fog') ? { track: animTrack('fog') } : {}) });
+  // the animations
+  for (const anim of anims.values()) {
+    if (anim.target.startsWith('m:')) {
+      const name = anim.target.slice(2);
+      const material = mods.materials?.[name];
+      if (material !== undefined) fragment.customEvents.push(...animEvents(anim, true, materialTrack(name, material)));
+      continue;
+    }
+    if (anim.target === 'fog') {
+      fragment.customEvents.push(...animEvents(anim, true));
+      continue;
+    }
+    if (anim.target === 'player') {
+      fragment.customEvents.push({ b: 0, t: 'AssignPlayerToTrack', d: { track: animTrack('player'), target: 'Root' } }, ...animEvents(anim, true));
+      continue;
+    }
+    const place = placeOf(anim.target);
+    if (place === null) continue;
+    const object = anim.target.startsWith('o:') ? objects.find((item) => `o:${item.uid}` === anim.target) : undefined;
+    if (object?.ghost !== true) fragment.customEvents.push(...animEvents(anim, place.world));
+    // (an array's others: each its own track, as far aside as it stands)
+    if (object?.array !== undefined) for (const other of expandObjects([object]).filter((item) => item.of !== undefined)) fragment.customEvents.push(...animEvents(offsetAnim(anim, object, other, `o:${other.uid}`), place.world));
+  }
+  // the links: each parent's children on a track of its own, that track carried by its motion
+  const byParent = new Map<string, string[]>();
+  for (const link of mods.links ?? []) byParent.set(link.parent, [...(byParent.get(link.parent) ?? []), link.child]);
+  const tracksOf = (target: string): string[] => {
+    const object = target.startsWith('o:') ? objects.find((item) => `o:${item.uid}` === target) : undefined;
+    if (object === undefined) return [animTrack(target)];
+    return expandObjects([object]).map((item) => animTrack(`o:${item.uid}`));
+  };
+  for (const [parent, children] of byParent) {
+    const track = linkTrack(parent);
+    const place = placeOf(parent);
+    fragment.customEvents.push({ b: 0, t: 'AssignTrackParent', d: { childrenTracks: children.flatMap(tracksOf), parentTrack: track, worldPositionStays: true } });
+    if (place !== null) fragment.customEvents.push(...linkEvents(anims.get(parent), place.base, track, place.outer));
+    // (a parent hung on another itself: its children's track goes along with that one too)
+    const above = (mods.links ?? []).find((link) => link.child === parent);
+    if (above !== undefined) fragment.customEvents.push({ b: 0, t: 'AssignTrackParent', d: { childrenTracks: [track], parentTrack: linkTrack(above.parent), worldPositionStays: true } });
+  }
 }
 
 /** The scene editor's own objects: the last of the fragment (the 3D view tells them by that). */
@@ -496,7 +623,8 @@ export function fragmentRequirements(mods: EnvironmentMods | undefined): string[
   const out = new Set<string>();
   if (preset !== undefined) for (const mod of ['Chroma', ...(preset.noodle ? ['Noodle Extensions'] : [])]) out.add(mod);
   if (geometrySystems(mods).length > 0) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
-  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim))) out.add('Chroma');
+  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)) || Object.keys(mods.fog ?? {}).length > 0) out.add('Chroma');
+  if ((mods.links ?? []).length > 0 || (mods.anims ?? []).some((anim) => anim.target === 'player' && hasKeys(anim))) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
   return [...out];
 }
 
@@ -506,6 +634,6 @@ export function geometrySystems(mods: EnvironmentMods | undefined): string[] {
 }
 
 export function hasMods(mods: EnvironmentMods | undefined) {
-  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)));
+  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)) || (mods.links ?? []).length > 0 || Object.values(mods.fog ?? {}).some((value) => value !== undefined));
 }
 

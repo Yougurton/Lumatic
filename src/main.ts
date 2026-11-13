@@ -101,6 +101,7 @@ const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
 const envPanel = new EnvPanel(editor, byId('env-scene'), byId('env-inspector'));
 const envView = new EnvView(editor, byId<HTMLCanvasElement>('preview'));
 envView.onPick = (key) => envPanel.reveal(key);
+editor.showMaterial = (name) => envPanel.openMaterial(name);
 editor.showInScene = (keys) => {
   setTab('lights', true);
   editor.selectEnv(keys);
@@ -139,7 +140,11 @@ window.addEventListener(
       if (editor.animSelection.size > 0) editor.removeAnimKeys(new Set(editor.animSelection));
       else envPanel.remove();
     } else if (!ctrl && event.code === 'KeyK' && editor.envSelection.length > 0) editor.addAnimKeys(editor.envSelection, [envView.mode === 'rotate' ? 'rotation' : envView.mode === 'scale' ? 'scale' : 'position']);
-    else if (!ctrl && event.code === 'Escape' && editor.animSelection.size > 0) editor.selectAnimKeys([]);
+    else if (!ctrl && event.code === 'Escape' && editor.linkPicking !== null) {
+      editor.linkPicking = null;
+      editor.setStatus(tr('Привязка отменена'));
+      editor.emit('selection');
+    } else if (!ctrl && event.code === 'Escape' && editor.animSelection.size > 0) editor.selectAnimKeys([]);
     else if (!ctrl && event.code === 'Escape' && editor.envSelection.length > 0) editor.selectEnv([]);
     else return;
     event.preventDefault();

@@ -48,10 +48,11 @@ import { lightGroupName, otherEventName, setEnvironmentTracks } from './names';
 import type { MapFolder } from './platform';
 import { choose } from './menu';
 import { tr, translate } from './i18n';
-import { expandObjects, isLightShader, sceneCommand, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
+import { expandObjects, isLightShader, sceneCommand, type FogValues, type SceneLink, type TubeValues, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
 import { arrayCount, type SceneArray } from './env-array';
-import { ANIM_PARTS, animValue, hasKeys, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
-import { localOf, sceneTree } from './env-scene';
+import { ALL_PARTS, animValue, hasKeys, linkDelta, partsOf, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
+import { localOf, sceneTree, worldMatrix } from './env-scene';
+import type { Matrix4 } from 'three';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
@@ -130,6 +131,9 @@ export interface GlsInspect {
   };
   render?: (root: HTMLElement) => void;
 }
+
+/** An object's place, turn and size. */
+const MOVES = ['position', 'rotation', 'scale'] as const;
 
 export class Editor {
   map: LoadedMap | null = null;
@@ -261,8 +265,10 @@ export class Editor {
 
   constructor(readonly preview: Preview) {}
 
+  /** Listens to changes (the result: stop listening). */
   onChange(listener: Listener) {
     this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
   }
 
   emit(what: Parameters<Listener>[0]) {
@@ -590,6 +596,8 @@ export class Editor {
     this.envPreviewBase = null;
     this.mapNoodle = difficulty.noodle;
     this.ringParentKey = '';
+    this.ringNoodle = [];
+    this.sceneNoodle = null;
     this.preview.setNoodle(difficulty.noodle);
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
@@ -952,6 +960,9 @@ export class Editor {
     const anims = (mods.anims ?? []).filter((anim) => hasKeys(anim) && (!anim.target.startsWith('o:') || uids.has(anim.target)));
     if (anims.length > 0) mods.anims = anims;
     else delete mods.anims;
+    const links = (mods.links ?? []).filter((link) => [link.child, link.parent].every((target) => !target.startsWith('o:') || uids.has(target)));
+    if (links.length > 0) mods.links = links;
+    else delete mods.links;
     project.environmentMods = hasMods(mods) || mods.materials !== undefined ? mods : undefined;
     this.tidyArrays();
   }
@@ -976,8 +987,12 @@ export class Editor {
     if (tidy) this.putScene(this.sceneEdits());
   }
 
-  /** What a picked thing's animation is kept under (null: it can't have one). */
+  /** What a picked thing's animation is kept under (null: it can't have one). "m:<name>": a material,
+   *  "f:fog": the fog, "p:player": the player. */
   animTarget(key: string): string | null {
+    if (key.startsWith('m:')) return this.sceneMaterials()[key.slice(2)] === undefined ? null : key;
+    if (key === 'f:fog') return 'fog';
+    if (key === 'p:player') return 'player';
     const now = this.sceneValues(key);
     if (now === null) return null;
     if (now.object !== undefined) return now.object.ghost === true ? null : key;
@@ -991,8 +1006,70 @@ export class Editor {
 
   /** The picked thing an animation is of (null: it's gone). */
   animKeyOf(anim: SceneAnim): string | null {
+    if (anim.target.startsWith('m:')) return this.sceneMaterials()[anim.target.slice(2)] === undefined ? null : anim.target;
+    if (anim.target === 'fog') return 'f:fog';
+    if (anim.target === 'player') return 'p:player';
     if (anim.target.startsWith('o:')) return this.sceneObjects().some((object) => `o:${object.uid}` === anim.target) ? anim.target : null;
     return this.gameKey(anim.target);
+  }
+
+  /** The name a thing is shown by. */
+  thingName(key: string): string {
+    if (key.startsWith('m:')) return tr('Материал «{0}»', key.slice(2));
+    if (key === 'f:fog') return tr('Туман');
+    if (key === 'p:player') return tr('Игрок');
+    if (key.startsWith('o:')) return this.sceneObjects().find((object) => `o:${object.uid}` === key)?.name ?? '';
+    return this.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? '';
+  }
+
+  /** Whether a picked object is a lamp with settings of its own (brightness, glow in the fog). */
+  isTube(key: string): boolean {
+    if (key.startsWith('o:')) {
+      const object = this.sceneObjects().find((item) => `o:${item.uid}` === key);
+      const material = object?.material === undefined ? undefined : this.sceneMaterials()[object.material];
+      return object?.kind === 'shape' && material !== undefined && isLightShader(material.shader);
+    }
+    if (!key.startsWith('g:')) return false;
+    const components = this.envSceneData?.objects[Number(key.slice(2))]?.components;
+    return (components?.ParametricBloomFogLightController ?? []).length > 0 || (components?.MaterialLightController ?? []).length > 0;
+  }
+
+  /** The parts a picked thing can have keys of. */
+  partsOfKey(key: string): readonly AnimPart[] {
+    const target = this.animTarget(key);
+    return target === null ? [] : partsOf(target, this.isTube(key));
+  }
+
+  /** The fog as it is set (what's not set: as the environment has it). */
+  fogValues(): Required<FogValues> {
+    const own = this.envSceneData?.fogParams;
+    const set = this.project?.environmentMods?.fog ?? {};
+    return { attenuation: set.attenuation ?? own?.attenuation ?? 0.002, offset: set.offset ?? own?.offset ?? 0, startY: set.startY ?? own?.startY ?? -300, height: set.height ?? own?.height ?? 10 };
+  }
+
+  /** A lamp's own settings (1: as it is). */
+  tubeValues(key: string): Required<TubeValues> {
+    const object = key.startsWith('o:') ? this.sceneObjects().find((item) => `o:${item.uid}` === key) : undefined;
+    const id = key.startsWith('g:') ? this.envTree()?.nodes.get(Number(key.slice(2)))?.id : undefined;
+    const tube = object?.tube ?? (id === undefined || id === null ? undefined : this.sceneEdits().find((edit) => edit.id === id)?.tube);
+    return { alpha: tube?.alpha ?? 1, bloom: tube?.bloom ?? 1 };
+  }
+
+  /** A part's value as the thing has it without animation (null: it has no such part). */
+  baseValue(key: string, part: AnimPart): number[] | null {
+    if (part === 'color') {
+      const material = key.startsWith('m:') ? this.sceneMaterials()[key.slice(2)] : undefined;
+      return material === undefined ? null : [...material.color];
+    }
+    if (part === 'attenuation' || part === 'offset' || part === 'startY' || part === 'height') return key === 'f:fog' ? [this.fogValues()[part]] : null;
+    if (part === 'alpha' || part === 'bloom') return this.isTube(key) ? [this.tubeValues(key)[part]] : null;
+    const now = this.sceneValues(key);
+    return now === null ? null : [...now[part]];
+  }
+
+  /** A part's value at a beat: as its keys have it, or as the thing has it without them. */
+  shownValue(key: string, part: AnimPart, beat = this.playhead()): number[] | null {
+    return animValue(this.animOf(key), part, beat) ?? this.baseValue(key, part);
   }
 
   /** Where a picked thing stands at the playhead: its own values, the animated parts as their keys
@@ -1003,13 +1080,95 @@ export class Editor {
     const anim = this.animOf(key);
     const keyed: AnimPart[] = [];
     const out = { ...now, keyed };
-    for (const part of ANIM_PARTS) {
+    for (const part of MOVES) {
       const value = animValue(anim, part, beat);
       if (value === null) continue;
-      out[part] = value;
+      out[part] = value as [number, number, number];
       keyed.push(part);
     }
     return out;
+  }
+
+  /**
+   * A part of a thing set to a value: a key at the playhead when the part is animated (or ⏺ is on, or
+   * it's the player — it has no place of its own), its own value otherwise. For the fog, the lamps'
+   * settings and the materials' colours (places, turns and sizes go through `applyScene`).
+   */
+  setPart(keys: readonly string[], part: AnimPart, value: (key: string, now: number[]) => number[], merge?: string) {
+    const project = this.project;
+    if (project === null || keys.length === 0) return;
+    const beat = this.snapBeat(this.playhead());
+    const anims = structuredClone(this.sceneAnims());
+    const mods: EnvironmentMods = structuredClone(project.environmentMods ?? {});
+    let keyed = false;
+    for (const key of keys) {
+      const target = this.animTarget(key);
+      const now = this.shownValue(key, part);
+      if (target === null || now === null) continue;
+      const next = value(key, now);
+      const anim = this.animOf(key);
+      if (target === 'player' || this.animAuto || (anim?.keys[part] ?? []).length > 0) {
+        this.keyAt(anims, target, part, beat).value = [...next];
+        keyed = true;
+        continue;
+      }
+      if (part === 'color') {
+        const material = mods.materials?.[key.slice(2)];
+        if (material !== undefined) material.color = next.slice(0, 4) as [number, number, number, number];
+      } else if (part === 'attenuation' || part === 'offset' || part === 'startY' || part === 'height') (mods.fog ??= {})[part] = next[0]!;
+      else if (part === 'alpha' || part === 'bloom') {
+        if (key.startsWith('o:')) {
+          const object = mods.objects?.find((item) => `o:${item.uid}` === key);
+          if (object !== undefined) object.tube = { ...(object.tube ?? {}), [part]: next[0]! };
+        } else if (target !== null) {
+          const scene = (mods.scene ??= []);
+          let edit = scene.find((item) => item.id === target);
+          if (edit === undefined) scene.push((edit = { id: target }));
+          edit.tube = { ...(edit.tube ?? {}), [part]: next[0]! };
+        }
+      }
+    }
+    this.sceneStep(merge);
+    if (keyed) mods.anims = anims;
+    project.environmentMods = mods;
+    this.putScene(mods.scene ?? [], mods.objects ?? [], mods.materials ?? {});
+    this.sceneChanged();
+  }
+
+  /** The fog back as the environment has it (its keys stay). */
+  resetFog() {
+    const project = this.project;
+    if (project?.environmentMods?.fog === undefined) return;
+    this.sceneStep();
+    const mods = { ...project.environmentMods };
+    delete mods.fog;
+    project.environmentMods = mods;
+    this.putScene(this.sceneEdits());
+    this.sceneChanged();
+  }
+
+  /** The player: whether its turns and uneven moves are allowed. */
+  playerRisky(): boolean {
+    return this.project?.environmentMods?.player?.risky === true;
+  }
+
+  setPlayerRisky(on: boolean) {
+    const project = this.project;
+    if (project === null) return;
+    this.sceneStep();
+    const mods = { ...(project.environmentMods ?? {}) };
+    if (on) mods.player = { risky: true };
+    else delete mods.player;
+    project.environmentMods = mods;
+    // (not allowed any more: its turns go, its moves become even)
+    if (!on)
+      for (const anim of mods.anims ?? []) {
+        if (anim.target !== 'player') continue;
+        delete anim.keys.rotation;
+        for (const key of anim.keys.position ?? []) delete key.easing;
+      }
+    this.putScene(this.sceneEdits());
+    this.sceneChanged();
   }
 
   /** Changes the animations (one undo step). */
@@ -1018,8 +1177,15 @@ export class Editor {
     this.sceneStep(merge);
     const anims = structuredClone(this.sceneAnims());
     patch(anims);
+    // (the player: even moves only, no turns — unless the risk is taken)
+    if (!this.playerRisky())
+      for (const anim of anims) {
+        if (anim.target !== 'player') continue;
+        delete anim.keys.rotation;
+        for (const key of anim.keys.position ?? []) delete key.easing;
+      }
     this.putAnims(anims);
-    const left = new Set(this.sceneAnims().flatMap((anim) => ANIM_PARTS.flatMap((part) => (anim.keys[part] ?? []).map((key) => key.id))));
+    const left = new Set(this.sceneAnims().flatMap((anim) => ALL_PARTS.flatMap((part) => (anim.keys[part] ?? []).map((key) => key.id))));
     this.animSelection = new Set([...this.animSelection].filter((id) => left.has(id)));
     this.sceneChanged();
   }
@@ -1030,21 +1196,26 @@ export class Editor {
     if (anim === undefined) anims.push((anim = { target, keys: {} }));
     const keys = (anim.keys[part] ??= []);
     let key = keys.find((item) => Math.abs(item.beat - beat) < 1e-3);
-    if (key === undefined) keys.push((key = { id: newId('k'), beat, value: [0, 0, 0] }));
+    if (key === undefined) keys.push((key = { id: newId('k'), beat, value: [] }));
     return key;
   }
 
   /** A key of these parts at a beat for each picked thing, with what it has there now (picked after). */
   addAnimKeys(keys: readonly string[], parts: readonly AnimPart[], beat = this.snapBeat(this.playhead())) {
     const made: string[] = [];
-    const targets = keys.map((key) => ({ key, target: this.animTarget(key), now: this.sceneShown(key, beat) })).filter((item) => item.target !== null && item.now !== null);
+    const targets = keys.map((key) => ({ key, target: this.animTarget(key) })).filter((item) => item.target !== null);
     if (targets.length === 0) return;
+    // (the player, at first: what moving it means)
+    if (targets.some((item) => item.target === 'player') && this.sceneAnims().every((anim) => anim.target !== 'player' || !hasKeys(anim)) && !window.confirm(tr('Движение игрока легко вызывает укачивание в VR. Lumatic разрешает только равномерное движение без поворотов; повороты и плавность включаются галочкой «Я понимаю риск». Двигайте игрока редко и медленно. Поставить ключ?'))) return;
     this.changeAnims((anims) => {
-      for (const { target, now } of targets) {
+      for (const { key, target } of targets) {
         for (const part of parts) {
-          const key = this.keyAt(anims, target!, part, beat);
-          key.value = [...now![part]];
-          made.push(key.id);
+          if (!this.partsOfKey(key).includes(part)) continue;
+          const now = this.shownValue(key, part, beat);
+          if (now === null) continue;
+          const made_ = this.keyAt(anims, target!, part, beat);
+          made_.value = [...now];
+          made.push(made_.id);
         }
       }
     });
@@ -1053,17 +1224,17 @@ export class Editor {
   }
 
   /** Changes keys by their ids (one undo step). */
-  changeAnimKeys(ids: ReadonlySet<string>, patch: (key: AnimKey, part: AnimPart) => void, merge?: string) {
+  changeAnimKeys(ids: ReadonlySet<string>, patch: (key: AnimKey, part: AnimPart, anim: SceneAnim) => void, merge?: string) {
     if (ids.size === 0) return;
     this.changeAnims((anims) => {
-      for (const anim of anims) for (const part of ANIM_PARTS) for (const key of anim.keys[part] ?? []) if (ids.has(key.id)) patch(key, part);
+      for (const anim of anims) for (const part of ALL_PARTS) for (const key of anim.keys[part] ?? []) if (ids.has(key.id)) patch(key, part, anim);
     }, merge);
   }
 
   removeAnimKeys(ids: ReadonlySet<string>) {
     if (ids.size === 0) return;
     this.changeAnims((anims) => {
-      for (const anim of anims) for (const part of ANIM_PARTS) if (anim.keys[part] !== undefined) anim.keys[part] = anim.keys[part]!.filter((key) => !ids.has(key.id));
+      for (const anim of anims) for (const part of ALL_PARTS) if (anim.keys[part] !== undefined) anim.keys[part] = anim.keys[part]!.filter((key) => !ids.has(key.id));
     });
   }
 
@@ -1079,11 +1250,22 @@ export class Editor {
     }, `anim:runs:${part}`);
   }
 
+  /** A part going along a smooth curve through its keys, or straight from one to the next. */
+  setAnimSpline(target: string, part: AnimPart, on: boolean) {
+    this.changeAnims((anims) => {
+      const anim = anims.find((item) => item.target === target);
+      if (anim === undefined) return;
+      anim.spline = { ...(anim.spline ?? {}), [part]: on };
+      if (!on) delete anim.spline[part];
+      if (Object.keys(anim.spline).length === 0) delete anim.spline;
+    });
+  }
+
   /** The keys copied (their beats from the first of them). */
-  private animClipboard: { target: string; part: AnimPart; beat: number; value: [number, number, number]; easing?: string }[] = [];
+  private animClipboard: { target: string; part: AnimPart; beat: number; value: number[]; easing?: string }[] = [];
 
   copyAnimKeys(): boolean {
-    const picked = this.sceneAnims().flatMap((anim) => ANIM_PARTS.flatMap((part) => (anim.keys[part] ?? []).filter((key) => this.animSelection.has(key.id)).map((key) => ({ target: anim.target, part, beat: key.beat, value: [...key.value] as [number, number, number], ...(key.easing === undefined ? {} : { easing: key.easing }) }))));
+    const picked = this.sceneAnims().flatMap((anim) => ALL_PARTS.flatMap((part) => (anim.keys[part] ?? []).filter((key) => this.animSelection.has(key.id)).map((key) => ({ target: anim.target, part, beat: key.beat, value: [...key.value], ...(key.easing === undefined ? {} : { easing: key.easing }) }))));
     if (picked.length === 0) return false;
     const first = Math.min(...picked.map((item) => item.beat));
     this.animClipboard = picked.map((item) => ({ ...item, beat: item.beat - first }));
@@ -1092,18 +1274,19 @@ export class Editor {
   }
 
   /** The copied keys put at the playhead — on the things they were copied from, or (copied from one
-   *  thing, others picked now) on the picked ones. */
+   *  thing, others picked now) on the picked ones that have such parts. */
   pasteAnimKeys(): boolean {
     const copied = this.animClipboard;
     if (copied.length === 0) return false;
     const from = new Set(copied.map((item) => item.target));
-    const picked = this.envSelection.map((key) => this.animTarget(key)).filter((target): target is string => target !== null);
-    const onto = from.size === 1 && picked.length > 0 && !picked.includes([...from][0]!) ? picked : null;
+    const picked = this.envSelection.map((key) => ({ key, target: this.animTarget(key) })).filter((item): item is { key: string; target: string } => item.target !== null);
+    const onto = from.size === 1 && picked.length > 0 && !picked.some((item) => item.target === [...from][0]) ? picked : null;
     const start = this.snapBeat(this.playhead());
     const made: string[] = [];
     this.changeAnims((anims) => {
       for (const item of copied) {
-        for (const target of onto ?? [item.target]) {
+        for (const { key: thing, target } of onto ?? [{ key: '', target: item.target }]) {
+          if (thing !== '' && !this.partsOfKey(thing).includes(item.part)) continue;
           const key = this.keyAt(anims, target, item.part, Math.round((start + item.beat) * 10000) / 10000);
           key.value = [...item.value];
           if (item.easing === undefined) delete key.easing;
@@ -1125,6 +1308,7 @@ export class Editor {
         if (!targets.has(anim.target)) continue;
         anim.keys = {};
         delete anim.repeat;
+        delete anim.spline;
       }
     });
   }
@@ -1136,6 +1320,116 @@ export class Editor {
       else this.animSelection.add(id);
     }
     this.emit('selection');
+  }
+
+  // ----- links: things hung on others ------------------------------------------------------------------
+
+  sceneLinks(): SceneLink[] {
+    return this.project?.environmentMods?.links ?? [];
+  }
+
+  /** What a picked thing hangs on (its key; null: nothing). */
+  linkParentOf(key: string): string | null {
+    const target = this.animTarget(key);
+    const link = this.sceneLinks().find((item) => item.child === target);
+    return link === undefined ? null : this.animKeyOf({ target: link.parent, keys: {} });
+  }
+
+  /** The things hung on a picked one (their keys). */
+  linkChildrenOf(key: string): string[] {
+    const target = this.animTarget(key);
+    return this.sceneLinks().filter((item) => item.parent === target).map((item) => this.animKeyOf({ target: item.child, keys: {} })).filter((item): item is string => item !== null);
+  }
+
+  /** The material open on the Scene side's right panel (its colour's keys shown on the timeline). */
+  envMaterialOpen: string | null = null;
+  /** Opens a material on the right (set by main). */
+  showMaterial: (name: string) => void = () => {};
+
+  /** Waiting for the parent to be picked (the things to hang on it), or not. */
+  linkPicking: string[] | null = null;
+
+  startLinkPick(keys: readonly string[]) {
+    this.linkPicking = keys.filter((key) => key.startsWith('o:') || key.startsWith('g:'));
+    this.setStatus(tr('Выберите родителя: кликните по объекту в 3D-окне или в списке (Esc — отмена)'));
+    this.emit('selection');
+  }
+
+  /** Hangs things on a parent (null: on nothing any more). A thing can't hang on itself or on one of
+   *  those hung on it. */
+  setLinkParent(keys: readonly string[], parent: string | null) {
+    const project = this.project;
+    if (project === null) return;
+    this.linkPicking = null;
+    const parentTarget = parent === null ? null : this.animTarget(parent);
+    if (parent !== null && (parentTarget === null || parentTarget === 'player' || parentTarget === 'fog' || parentTarget.startsWith('m:'))) {
+      this.setStatus(tr('К этому привязать нельзя'));
+      this.emit('selection');
+      return;
+    }
+    const links = structuredClone(this.sceneLinks());
+    const above = (target: string): string[] => {
+      const out: string[] = [];
+      for (let at: string | undefined = target; at !== undefined; at = links.find((link) => link.child === at)?.parent) {
+        if (out.includes(at)) break;
+        out.push(at);
+      }
+      return out;
+    };
+    let refused = 0;
+    let next = links;
+    for (const key of keys) {
+      const child = this.animTarget(key);
+      if (child === null || child.startsWith('m:') || child === 'fog' || child === 'player') continue;
+      next = next.filter((link) => link.child !== child);
+      if (parentTarget === null) continue;
+      if (above(parentTarget).includes(child)) {
+        refused++;
+        continue;
+      }
+      next.push({ child, parent: parentTarget });
+    }
+    this.sceneStep();
+    const mods = { ...(project.environmentMods ?? {}) };
+    if (next.length > 0) mods.links = next;
+    else delete mods.links;
+    project.environmentMods = mods;
+    this.putScene(this.sceneEdits());
+    this.sceneChanged();
+    this.setStatus(refused > 0 ? tr('Объект нельзя привязать к тому, что привязано к нему самому') : parentTarget === null ? tr('Отвязано') : tr('Привязано: объект будет двигаться вместе с родителем (нужен Noodle Extensions)'));
+  }
+
+  /**
+   * How a picked thing is carried along by what it hangs on, at a beat — the motions of its parent, its
+   * parent's parent… (the 3D view's space; null: it isn't moved).
+   */
+  linkCarry(key: string, beat = this.playhead()): Matrix4 | null {
+    let out: Matrix4 | null = null;
+    const seen = new Set<string>();
+    for (let parent = this.linkParentOf(key); parent !== null && !seen.has(parent); parent = this.linkParentOf(parent)) {
+      seen.add(parent);
+      const base = this.sceneValues(parent);
+      if (base === null) break;
+      const delta = linkDelta(this.animOf(parent), base, beat, this.outerOf(parent) ?? undefined);
+      if (delta !== null) out = out === null ? delta : delta.multiply(out);
+    }
+    return out;
+  }
+
+  /** Where the space a picked thing's own values are in stands (null: the world). */
+  private outerOf(key: string): Matrix4 | null {
+    const data = this.envSceneData;
+    if (data === null) return null;
+    let index: number | undefined;
+    if (key.startsWith('g:')) index = Number(key.slice(2));
+    else {
+      const object = this.sceneObjects().find((item) => `o:${item.uid}` === key);
+      if (object?.kind !== 'copy' || object.source === undefined) return null;
+      const game = this.gameKey(object.source);
+      index = game === null ? undefined : Number(game.slice(2));
+    }
+    const parent = index === undefined ? -1 : (data.objects[index]?.parent ?? -1);
+    return parent < 0 ? null : worldMatrix(data, parent);
   }
 
   /** The added objects as they are shown and written: each, then its array's others. */
@@ -1394,6 +1688,9 @@ export class Editor {
       const object = this.sceneObjects().find((item) => item.uid === key.slice(2));
       return object === undefined ? null : { position: object.position, rotation: object.rotation, scale: object.scale, hidden: object.hidden === true, object };
     }
+    // (the player: where the game puts it — it's moved by keys only)
+    if (key === 'p:player') return { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], hidden: false };
+    if (!key.startsWith('g:')) return null;
     const data = this.envSceneData;
     const index = Number(key.slice(2));
     const own = data === null ? null : localOf(data, index);
@@ -1426,9 +1723,10 @@ export class Editor {
       const target = this.animTarget(key);
       if (next !== 'reset' && target !== null) {
         let keyedHere = false;
-        for (const part of ANIM_PARTS) {
+        for (const part of MOVES) {
           const value = next[part];
-          if (value === undefined || !(this.animAuto || now.keyed.includes(part))) continue;
+          if (value === undefined || !(this.animAuto || now.keyed.includes(part) || target === 'player')) continue;
+          if (target === 'player' && part === 'scale') continue;
           this.keyAt(anims, target, part, beat).value = [...value];
           delete next[part];
           keyedHere = true;
@@ -1600,6 +1898,7 @@ export class Editor {
       if (this.envPreviewBase === null) return;
       this.mapChroma = this.envPreviewBase;
       this.envPreviewBase = null;
+      this.sceneNoodle = null;
     } else {
       const original = await map.folder.readText(difficultyFile(row));
       const version = difficultyVersion(original);
@@ -1608,7 +1907,10 @@ export class Editor {
       if (token !== this.envPreviewToken) return;
       // (the file as saving would make it, read back as opening does)
       const root = JSON.parse(writeDifficulty(original, [], undefined, undefined, { previous: project.writtenEnvironment, next: fragment })) as Record<string, unknown>;
-      const parsed = (version === '2' ? parseV2ChromaEnvironment(root._customData as BeatmapCustomData) : parseV3ChromaEnvironment(root.customData as BeatmapCustomData)).chromaEnvironment;
+      const custom = version === '2' ? parseV2ChromaEnvironment(root._customData as BeatmapCustomData) : parseV3ChromaEnvironment(root.customData as BeatmapCustomData);
+      const parsed = custom.chromaEnvironment;
+      // (the scene's links and the player: Noodle's — shown from the same file)
+      this.sceneNoodle = version === '2' ? null : parseNoodleBeatmap(custom, 3);
       for (const animation of parsed.animations) {
         animation.songBpmTime = this.toSong(animation.jsonTime);
         animation.durationSongBpmTime = this.toSong(animation.jsonTime + animation.duration) - animation.songBpmTime;
@@ -1616,6 +1918,7 @@ export class Editor {
       if (this.envPreviewBase === null) this.envPreviewBase = this.mapChroma;
       this.mapChroma = parsed;
     }
+    this.pushNoodle();
     // (loaded again with the ring tracks on top, as usual)
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
@@ -3840,9 +4143,29 @@ export class Editor {
       const songBpmTime = this.toSong(event.jsonTime);
       return { ...event, order: 1e6 + index, songBpmTime, durationSongBpmTime: this.toSong(event.jsonTime + event.duration) - songBpmTime };
     });
+    this.ringNoodle = ours;
+    this.pushNoodle();
+  }
+
+  /** The ring parents' events (see `syncRingParents`). */
+  private ringNoodle: NoodleBeatmapData['trackEvents'] = [];
+  /** The Noodle data of the environment being tried (the scene's links, the player). */
+  private sceneNoodle: NoodleBeatmapData | null = null;
+
+  /** The 3D view's Noodle data: the file's, with the ring parents' and the scene's (being tried) in
+   *  place of the ones saved before. */
+  private pushNoodle() {
     const base = this.mapNoodle;
-    const trackEvents = [...base.trackEvents.filter((event) => !event.tracks.some((track) => track.startsWith(TRACK_PREFIX))), ...ours].sort((a, b) => a.songBpmTime - b.songBpmTime);
-    this.preview.setNoodle({ ...base, trackEvents });
+    if (base === null) return;
+    const ours = (tracks: readonly string[]) => tracks.some((track) => track.startsWith('lumatic'));
+    const scene = this.sceneNoodle;
+    const time = <T extends { jsonTime: number; songBpmTime: number; order?: number }>(list: readonly T[], index0: number): T[] =>
+      list.map((event, index) => ({ ...event, order: index0 + index, songBpmTime: this.toSong(event.jsonTime) }));
+    const sceneTracks = scene === null ? [] : time(scene.trackEvents.filter((event) => ours(event.tracks)), 2e6).map((event) => ({ ...event, durationSongBpmTime: this.toSong(event.jsonTime + event.duration) - event.songBpmTime }));
+    const trackEvents = [...base.trackEvents.filter((event) => !event.tracks.some((track) => track.startsWith(TRACK_PREFIX)) && (scene === null || !ours(event.tracks))), ...this.ringNoodle, ...sceneTracks].sort((a, b) => a.songBpmTime - b.songBpmTime);
+    const parentEvents = scene === null ? base.parentEvents : [...base.parentEvents.filter((event) => !ours([event.parentTrack])), ...time(scene.parentEvents.filter((event) => ours([event.parentTrack])), 3e6)].sort((a, b) => a.songBpmTime - b.songBpmTime);
+    const playerEvents = scene === null ? base.playerEvents : [...base.playerEvents.filter((event) => !ours([event.track])), ...time(scene.playerEvents.filter((event) => ours([event.track])), 4e6)].sort((a, b) => a.songBpmTime - b.songBpmTime);
+    this.preview.setNoodle({ ...base, trackEvents, parentEvents, playerEvents });
   }
 
   // ----- trying things out ----------------------------------------------------------------------------

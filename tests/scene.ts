@@ -1,8 +1,8 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { chromaRotation, dataRotation, flipZ, localFromWorld, rayBox } from '../src/editor/env-scene';
-import { expandObjects, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
+import { expandObjects, FOG_ID, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
 import { arrayCount, arrayPlacings, mirrored } from '../src/editor/env-array';
-import { animEvents, animTrack, animValue } from '../src/editor/env-anim';
+import { animEvents, animTrack, animValue, linkDelta, linkTrack, offsetAnim } from '../src/editor/env-anim';
 
 /**
  * The scene editor's numbers: Chroma's turns and places to the 3D view's and back, a click's ray
@@ -120,6 +120,58 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   const fragment = modsFragment(mods, null);
   check('in the fragment: tracks on both, three events, the game\'s thing by its own (local) names', fragment.customEvents.length === 3 && (fragment.environment.find((entry) => entry.id === 'Env.[1]Thing') as { track?: string }).track === animTrack('Env.[1]Thing') && (fragment.environment.at(-1) as { track?: string }).track === 'lumaticAnim_b', fragment);
   check('an animation alone needs Chroma', JSON.stringify(fragmentRequirements({ anims: [anim] })) === JSON.stringify(['Chroma']) && hasMods({ anims: [anim] }) && !hasMods({ anims: [{ target: 'x', keys: {} }] }));
+}
+
+// stage 4–5: materials, the fog, lamps, the player, links, arrays, smooth curves
+{
+  const v3 = (x: number, y: number, z: number) => [x, y, z];
+  const shape = { uid: 'p', name: 'cube', kind: 'shape' as const, shape: 'Cube' as const, material: 'm', position: [5, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
+  const child = { uid: 'c', name: 'child', kind: 'shape' as const, shape: 'Cube' as const, material: 'm', position: [6, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
+  const row = { ...child, uid: 'r', array: { kind: 'row' as const, count: 2, step: [0, 0, 3] as [number, number, number], turn: [0, 0, 0] as [number, number, number], grow: 1 } };
+  const mods = {
+    materials: { m: { shader: 'Standard' as const, color: [1, 1, 1, 1] as [number, number, number, number] } },
+    objects: [shape, child, row],
+    anims: [
+      { target: 'o:p', keys: { position: [{ id: 'a', beat: 0, value: v3(5, 0, 0) }, { id: 'b', beat: 4, value: v3(7, 0, 0) }] } },
+      { target: 'o:r', keys: { position: [{ id: 'c', beat: 0, value: v3(6, 0, 0) }, { id: 'd', beat: 2, value: v3(6, 1, 0) }] }, spline: { position: true } },
+      { target: 'm:m', keys: { color: [{ id: 'e', beat: 1, value: [1, 0, 0, 1] }, { id: 'f', beat: 3, value: [0, 0, 1, 1] }] } },
+      { target: 'fog', keys: { attenuation: [{ id: 'g', beat: 0, value: [0.01] }, { id: 'h', beat: 8, value: [0.05] }] }, repeat: { attenuation: 1 } },
+      { target: 'player', keys: { position: [{ id: 'i', beat: 2, value: v3(0, 0, 0) }, { id: 'j', beat: 6, value: v3(0, 3, 0) }] } },
+      { target: 'Env.[2]Lamp', keys: { alpha: [{ id: 'k', beat: 0, value: [1] }, { id: 'l', beat: 2, value: [3] }] } },
+    ],
+    links: [{ child: 'o:c', parent: 'o:p' }],
+    fog: { attenuation: 0.02 },
+    scene: [{ id: 'Env.[2]Lamp', tube: { bloom: 2 } }],
+  };
+  const fragment = modsFragment(mods, null);
+  const events = fragment.customEvents as { b: number; t: string; d: Record<string, unknown> }[];
+  const material = fragment.materials.m as { track?: string };
+  check('a material\'s colour: on its track', material.track === animTrack('m:m') && events.some((event) => event.t === 'AnimateTrack' && event.d.track === material.track && JSON.stringify(event.d.color) === JSON.stringify([[1, 0, 0, 1, 0], [0, 0, 1, 1, 1]])), events);
+  const fog = fragment.environment.find((entry) => entry.id === FOG_ID) as { lookupMethod?: string; components?: unknown; track?: string } | undefined;
+  check('the fog: the root found by a pattern, its density, its track', fog?.lookupMethod === 'Regex' && JSON.stringify(fog.components) === JSON.stringify({ BloomFogEnvironment: { attenuation: 0.02 } }) && fog.track === 'lumaticFog' && new RegExp(FOG_ID).test('TimbalandEnvironment.[0]Environment') && !new RegExp(FOG_ID).test('TimbalandEnvironment.[0]Environment.[3]Ring'), fog);
+  const fogEvent = events.find((event) => event.t === 'AnimateComponent' && event.d.track === 'lumaticFog');
+  check('the fog animated: AnimateComponent, played twice in one event', fogEvent !== undefined && fogEvent.d.duration === 16 && JSON.stringify((fogEvent.d.BloomFogEnvironment as { attenuation: unknown }).attenuation) === JSON.stringify([[0.01, 0], [0.05, 0.5], [0.01, 0.5], [0.05, 1]]), fogEvent);
+  const lamp = fragment.environment.find((entry) => entry.id === 'Env.[2]Lamp') as { components?: unknown; track?: string } | undefined;
+  check('a lamp of the game: its settings, its track, its brightness animated', JSON.stringify(lamp?.components) === JSON.stringify({ TubeBloomPrePassLight: { bloomFogIntensityMultiplier: 2 } }) && lamp?.track === animTrack('Env.[2]Lamp') && events.some((event) => event.t === 'AnimateComponent' && JSON.stringify(event.d.TubeBloomPrePassLight) === JSON.stringify({ colorAlphaMultiplier: [[1, 0], [3, 1]] })), lamp);
+  check('the player: put on its track, moved', events.some((event) => event.t === 'AssignPlayerToTrack' && event.d.track === 'lumaticPlayer' && event.d.target === 'Root') && events.some((event) => event.t === 'AnimateTrack' && event.d.track === 'lumaticPlayer' && event.b === 2 && JSON.stringify(event.d.position) === JSON.stringify([[0, 0, 0, 0], [0, 3, 0, 1]])));
+  const parent = events.find((event) => event.t === 'AssignTrackParent');
+  check('a link: the child on its own track, hung on its parent\'s link track, staying where it is', JSON.stringify(parent?.d) === JSON.stringify({ childrenTracks: [animTrack('o:c')], parentTrack: linkTrack('o:p'), worldPositionStays: true }) && (fragment.environment.find((entry) => (entry.geometry as { type?: string } | undefined) !== undefined && entry.position !== undefined && (entry.position as number[])[0] === 6 && entry.track !== undefined) as { track?: string } | undefined)?.track === animTrack('o:c'), parent);
+  const carried = events.find((event) => event.t === 'AnimateTrack' && event.d.track === linkTrack('o:p'));
+  const moves = carried?.d.position as number[][] | undefined;
+  check('the link track: how far the parent has gone (none at first, 2 m on at the end)', moves !== undefined && JSON.stringify(moves[0]) === JSON.stringify([0, 0, 0, 0]) && JSON.stringify(moves.at(-1)) === JSON.stringify([2, 0, 0, 1]), moves);
+  const others = events.filter((event) => event.t === 'AnimateTrack' && String(event.d.track).startsWith(animTrack('o:r')));
+  check('an array: the object and its other, each on its track, as far aside; a smooth curve flagged', others.length === 2 && JSON.stringify((others[1]!.d.position as unknown[])[1]) === JSON.stringify([6, 1, 3, 1, 'splineCatmullRom']), others);
+  check('links and the player need Noodle', JSON.stringify(fragmentRequirements(mods)) === JSON.stringify(['Chroma', 'Noodle Extensions']));
+  // a parent turned: its children go round it
+  const turn = { target: 'o:p', keys: { rotation: [{ id: 'a', beat: 0, value: v3(0, 0, 0) }, { id: 'b', beat: 4, value: v3(0, 90, 0) }] } };
+  const delta = linkDelta(turn, shape, 4)!;
+  const point = new Vector3(6, 0, 0).applyMatrix4(delta);
+  check('a turned parent carries its child round itself', Math.abs(point.distanceTo(new Vector3(5, 0, 0)) - 1) < 1e-6 && Math.abs(point.x - 5) < 1e-6, point);
+  check('before the parent moves: nothing', linkDelta(turn, shape, -1) === null);
+  // a smooth curve goes through its keys
+  const smooth = { target: 'x', keys: { position: [{ id: 'a', beat: 0, value: v3(0, 0, 0) }, { id: 'b', beat: 1, value: v3(1, 2, 0) }, { id: 'c', beat: 2, value: v3(2, 0, 0) }] }, spline: { position: true } };
+  check('a smooth curve: through its keys, rounder between them', JSON.stringify(animValue(smooth, 'position', 1)) === JSON.stringify([1, 2, 0]) && animValue(smooth, 'position', 0.5)![1]! > 1, animValue(smooth, 'position', 0.5));
+  check('an offset animation: as far aside, as many times bigger', JSON.stringify(offsetAnim({ target: 'o:a', keys: { position: [{ id: 'a', beat: 0, value: v3(1, 0, 0) }], scale: [{ id: 'b', beat: 0, value: v3(2, 2, 2) }] } }, { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, { position: [0, 0, 5], rotation: [0, 0, 0], scale: [2, 2, 2] }, 'o:b').keys) === JSON.stringify({ position: [{ id: 'a', beat: 0, value: [1, 0, 5] }], scale: [{ id: 'b', beat: 0, value: [4, 4, 4] }] }));
 }
 
 console.log('checks', checks, 'failures', failures);

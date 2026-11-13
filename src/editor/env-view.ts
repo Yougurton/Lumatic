@@ -2,7 +2,7 @@ import { BoxGeometry, BufferGeometry, EdgesGeometry, Float32BufferAttribute, Gro
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
-import { animRuns, animValue, sortedKeys } from './env-anim';
+import { animRuns, animValue, placingMatrix, sortedKeys } from './env-anim';
 import { childrenOf, dataRotation, generatedRootOf, generatedRoots, localFromWorld, objectBox, rayBox, shown, shownBoxes, worldMatrix } from './env-scene';
 import { tr } from './i18n';
 
@@ -165,11 +165,20 @@ export class EnvView {
   /** Where a picked thing stands in the world now — an animated one: as its keys have it at the
    *  playhead (the view's data knows only where it stands without them). */
   private placed(data: EnvironmentData, index: number, key: string): Matrix4 {
+    // (hung on another: carried along by its motion)
+    const carry = this.editor.linkCarry(key);
     const now = this.editor.sceneShown(key);
-    if (now === null || now.keyed.length === 0) return worldMatrix(data, index);
+    if (now === null || now.keyed.length === 0) return carry === null ? worldMatrix(data, index) : carry.multiply(worldMatrix(data, index));
     const local = new Matrix4().compose(new Vector3(now.position[0], now.position[1], -now.position[2]), new Quaternion().fromArray(dataRotation(now.rotation)), new Vector3().fromArray(now.scale));
     const parent = data.objects[index]!.parent;
-    return parent < 0 ? local : worldMatrix(data, parent).multiply(local);
+    const world = parent < 0 ? local : worldMatrix(data, parent).multiply(local);
+    return carry === null ? world : carry.multiply(world);
+  }
+
+  /** The player: where it stands at the playhead (it has no object of its own in the view). */
+  private playerMatrix(): Matrix4 {
+    const now = this.editor.sceneShown('p:player');
+    return placingMatrix({ position: now?.position ?? [0, 0, 0], rotation: now?.rotation ?? [0, 0, 0], scale: [1, 1, 1] });
   }
 
   /** Before each frame: the frames round the picked things, the handles on the first of them. */
@@ -180,11 +189,12 @@ export class EnvView {
     const camera = this.editor.preview.view.viewCamera;
     this.controls.camera = camera;
     const first = selection[0] === undefined ? null : this.renderedIndex(selection[0]);
-    const usable = data !== null && first !== null;
+    const player = selection[0] === 'p:player';
+    const usable = data !== null && (first !== null || player);
     this.controls.enabled = usable;
     this.controls.getHelper().visible = usable;
     if (data === null) return;
-    const moving = selection.some((item) => this.editor.animOf(item) !== undefined);
+    const moving = selection.some((item) => this.editor.animOf(item) !== undefined || this.editor.linkParentOf(item) !== null);
     const key = `${selection.join(',')}|${String(this.editor.version)}|${String(data.objects.length)}|${moving ? this.editor.playhead().toFixed(3) : ''}`;
     if ((key === this.framedKey && this.children?.data === data) || this.dragging !== null) return;
     this.framedKey = key;
@@ -199,19 +209,21 @@ export class EnvView {
       for (const other of this.othersOf(item)) for (const { box, matrix } of shownBoxes(data, other, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, 0x4fd6a0));
     });
     this.addPath(data, selection[0], first);
+    if (player) this.frames.add(frame(PLAYER_BOX.min, PLAYER_BOX.max, this.playerMatrix(), 0xffe27a));
     if (usable) {
-      this.placed(data, first, selection[0]!).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
+      (player ? this.playerMatrix() : this.placed(data, first!, selection[0]!)).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
       this.proxy.updateMatrixWorld(true);
     }
   }
 
   /** The way the first picked thing goes (its place's keys): a line through it, a dot a key. */
   private addPath(data: EnvironmentData, key: string | undefined, index: number | null) {
-    if (key === undefined || index === null) return;
+    this.pathKeys = [];
+    if (key === undefined || (index === null && key !== 'p:player')) return;
     const anim = this.editor.animOf(key);
     const keys = sortedKeys(anim?.keys.position);
     if (keys.length < 2) return;
-    const parent = data.objects[index]!.parent;
+    const parent = index === null ? -1 : data.objects[index]!.parent;
     const base = parent < 0 ? new Matrix4() : worldMatrix(data, parent);
     const at = (value: readonly number[]) => new Vector3(value[0]!, value[1]!, -value[2]!).applyMatrix4(base);
     const [from, to] = [keys[0]!.beat, keys[keys.length - 1]!.beat];
@@ -228,6 +240,7 @@ export class EnvView {
     // (a little cross a key)
     for (const item of keys) {
       const point = at(item.value);
+      this.pathKeys.push({ id: item.id, beat: item.beat, point });
       for (let k = 0; k < 3; k++) {
         const arm = [0, 0, 0];
         arm[k] = 0.12;
@@ -242,6 +255,9 @@ export class EnvView {
     this.frames.add(line);
   }
 
+  /** The keys of the drawn path (a click on one goes to it). */
+  private pathKeys: { id: string; beat: number; point: Vector3 }[] = [];
+
   private clearFrames() {
     for (const child of [...this.frames.children]) {
       this.frames.remove(child);
@@ -254,6 +270,12 @@ export class EnvView {
   private followProxy() {
     const data = this.data();
     const first = this.editor.envSelection[0] === undefined ? null : this.renderedIndex(this.editor.envSelection[0]);
+    if (data !== null && this.editor.envSelection[0] === 'p:player') {
+      this.clearFrames();
+      this.proxy.updateMatrixWorld(true);
+      this.frames.add(frame(PLAYER_BOX.min, PLAYER_BOX.max, this.proxy.matrixWorld.clone(), 0xffe27a));
+      return;
+    }
     if (data === null || first === null) return;
     this.clearFrames();
     this.proxy.updateMatrixWorld(true);
@@ -271,6 +293,13 @@ export class EnvView {
     const keys = editor.envSelection;
     const first = keys[0] === undefined ? null : this.renderedIndex(keys[0]);
     this.framedKey = '';
+    if (data !== null && keys[0] === 'p:player') {
+      // (the player: its place and turn are keys — its size is the game's)
+      this.proxy.updateMatrixWorld(true);
+      const local = localFromWorld(this.proxy.matrixWorld, new Matrix4());
+      if (mode !== 'scale') editor.applyScene(['p:player'], () => (mode === 'translate' ? { position: local.position } : { rotation: local.rotation }));
+      return;
+    }
     if (data === null || first === null) return;
     const before = editor.sceneShown(keys[0]!);
     if (before === null || (before.object === undefined && (before.id === null || before.id === undefined))) {
@@ -279,7 +308,10 @@ export class EnvView {
     }
     this.proxy.updateMatrixWorld(true);
     const object = data.objects[first]!;
-    const local = localFromWorld(this.proxy.matrixWorld, object.parent < 0 ? new Matrix4() : worldMatrix(data, object.parent));
+    // (hung on another: where it would stand without that one's motion)
+    const carry = editor.linkCarry(keys[0]!);
+    const world = carry === null ? this.proxy.matrixWorld : carry.invert().multiply(this.proxy.matrixWorld);
+    const local = localFromWorld(world, object.parent < 0 ? new Matrix4() : worldMatrix(data, object.parent));
     const part = mode === 'translate' ? 'position' : mode === 'rotate' ? 'rotation' : 'scale';
     const was = before[part];
     const now = local[part];
@@ -310,6 +342,21 @@ export class EnvView {
     camera.updateMatrixWorld();
     this.raycaster.setFromCamera(new Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
     const { origin, direction } = this.raycaster.ray;
+    // (a key's cross on the path: the song taken to it, the key picked — the handles then change it)
+    if (!adding && this.editor.linkPicking === null) {
+      const near = this.pathKeys
+        .map((item) => {
+          const at = item.point.clone().project(camera);
+          return { item, far: Math.hypot(rect.left + ((at.x + 1) / 2) * rect.width - clientX, rect.top + ((1 - at.y) / 2) * rect.height - clientY), behind: at.z > 1 };
+        })
+        .filter((item) => !item.behind && item.far <= 9)
+        .sort((a, b) => a.far - b.far)[0];
+      if (near !== undefined) {
+        this.editor.seek(near.item.beat);
+        this.editor.selectAnimKeys([near.item.id]);
+        return;
+      }
+    }
     const hits = new Map<string, number>();
     data.objects.forEach((object, index) => {
       if (object.mesh === undefined || object.rendererEnabled === false || !shown(data, index)) return;
@@ -330,6 +377,11 @@ export class EnvView {
     const at = again ? (last.at + 1) % order.length : 0;
     this.lastPick = { x: clientX, y: clientY, order, at };
     const key = order[at]!;
+    // (the parent being picked: this one)
+    if (this.editor.linkPicking !== null) {
+      this.editor.setLinkParent(this.editor.linkPicking, key);
+      return;
+    }
     this.editor.selectEnv([key], adding ? 'toggle' : 'replace');
     this.onPick?.(key);
   }
@@ -347,6 +399,9 @@ export class EnvView {
     return [round(at.x), Math.max(0, round(at.y)), round(-at.z)];
   }
 }
+
+/** The player's frame: as tall as a person, on the floor. */
+const PLAYER_BOX = { min: [-0.35, 0, -0.35], max: [0.35, 1.8, 0.35] };
 
 const UNIT_EDGES = new EdgesGeometry(new BoxGeometry(1, 1, 1)).getAttribute('position');
 

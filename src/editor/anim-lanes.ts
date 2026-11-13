@@ -1,5 +1,6 @@
 import type { Editor } from './editor';
-import { ANIM_PARTS, animRuns, sortedKeys, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
+import { openCurveEditor, PART_COLOURS, PART_NAMES } from './curve-editor';
+import { ALL_PARTS, animRuns, sortedKeys, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
 import { tr } from './i18n';
 import { showMenu } from './menu';
 import type { LaneHost } from './notes-timeline';
@@ -7,8 +8,6 @@ import { EASINGS } from './rings';
 
 const TITLE_H = 20;
 const PART_H = 22;
-const PART_NAMES: Record<AnimPart, string> = { position: 'положение', rotation: 'поворот', scale: 'масштаб' };
-const PART_COLOURS: Record<AnimPart, string> = { position: '#6aa6ff', rotation: '#ffb45a', scale: '#7fdc9a' };
 
 interface Line {
   kind: 'title' | 'part';
@@ -51,11 +50,13 @@ export class AnimLanes {
     const block = (key: string, anim: SceneAnim | undefined) => {
       if (seen.has(key)) return;
       seen.add(key);
-      const now = editor.sceneValues(key);
-      const name = now?.object?.name ?? editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? '';
+      const name = editor.thingName(key);
       out.push({ kind: 'title', key, name, anim, top, height: TITLE_H });
       top += TITLE_H;
-      for (const part of ANIM_PARTS) {
+      // (a lamp's settings: only once they have keys, or the lamp is picked)
+      const picked = editor.envSelection.includes(key);
+      for (const part of editor.partsOfKey(key)) {
+        if ((part === 'alpha' || part === 'bloom') && !picked && (anim?.keys[part] ?? []).length === 0) continue;
         out.push({ kind: 'part', key, name, part, anim, top, height: PART_H });
         top += PART_H;
       }
@@ -66,6 +67,8 @@ export class AnimLanes {
       if (key !== null) block(key, anim);
     }
     for (const key of editor.envSelection) if (editor.animTarget(key) !== null) block(key, editor.animOf(key));
+    // (the material open on the right)
+    if (editor.envMaterialOpen !== null) block(`m:${editor.envMaterialOpen}`, editor.animOf(`m:${editor.envMaterialOpen}`));
     return out;
   }
 
@@ -211,13 +214,19 @@ export class AnimLanes {
       return;
     }
     if (found.line.kind === 'title') {
-      editor.selectEnv([found.line.key], additive ? 'toggle' : 'replace');
+      if (found.line.key.startsWith('m:')) editor.showMaterial(found.line.key.slice(2));
+      else editor.selectEnv([found.line.key], additive ? 'toggle' : 'replace');
+      return;
+    }
+    // (a double click between two keys: the curve)
+    if (event.detail >= 2 && found.bar !== null) {
+      openCurveEditor(editor, found.line.key, found.line.part!);
       return;
     }
     if (found.key !== null) {
       if (!editor.animSelection.has(found.key.id)) editor.selectAnimKeys([found.key.id], additive ? 'add' : 'replace');
       const origin = new Map<string, number>();
-      for (const anim of editor.sceneAnims()) for (const part of ANIM_PARTS) for (const key of anim.keys[part] ?? []) if (editor.animSelection.has(key.id)) origin.set(key.id, key.beat);
+      for (const anim of editor.sceneAnims()) for (const part of ALL_PARTS) for (const key of anim.keys[part] ?? []) if (editor.animSelection.has(key.id)) origin.set(key.id, key.beat);
       this.drag = { kind: 'move', grab: editor.snapBeat(this.host.xToBeat(x)), origin, moved: false, id: found.key.id, additive };
       return;
     }
@@ -265,7 +274,7 @@ export class AnimLanes {
       const beat = drag.origin.get(drag.id);
       if (beat !== undefined) editor.seek(beat);
       for (const anim of editor.sceneAnims()) {
-        if (!ANIM_PARTS.some((part) => (anim.keys[part] ?? []).some((key) => key.id === drag.id))) continue;
+        if (!ALL_PARTS.some((part) => (anim.keys[part] ?? []).some((key) => key.id === drag.id))) continue;
         const key = editor.animKeyOf(anim);
         if (key !== null && !editor.envSelection.includes(key)) editor.selectEnv([key]);
       }
@@ -309,6 +318,9 @@ export class AnimLanes {
     if (found.key !== null && !editor.animSelection.has(key.id)) editor.selectAnimKeys([key.id]);
     const ids = found.key !== null ? new Set(editor.animSelection) : new Set([key.id]);
     showMenu(clientX, clientY, [
+      { label: '〰 Кривая…', hint: 'двойной клик по переходу', action: () => openCurveEditor(editor, found.line.key, found.line.part!) },
+      ...(found.line.part !== 'rotation' && found.line.anim !== undefined ? [{ label: `${found.line.anim.spline?.[found.line.part!] === true ? '● ' : ''}${tr('Плавная кривая через ключи')}`, action: () => editor.setAnimSpline(found.line.anim!.target, found.line.part!, found.line.anim!.spline?.[found.line.part!] !== true) }] : []),
+      null,
       { label: 'Как приходит к ключу', heading: true },
       ...EASINGS.map(([id, name]) => ({ label: `${(key.easing ?? 'easeLinear') === id ? '● ' : ''}${tr(name)}`, action: () => editor.changeAnimKeys(ids, (item) => (id === 'easeLinear' ? delete item.easing : (item.easing = id))) })),
       null,
