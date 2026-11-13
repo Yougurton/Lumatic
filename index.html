@@ -313,6 +313,26 @@
       .env-tile span { display: block; height: 26px; border-radius: 3px; }
       .env-tile em { font-style: normal; font-size: 10px; line-height: 1.15; white-space: normal; overflow: hidden; height: 23px; }
       .env-tile.active { outline: 2px solid #6aa6ff; }
+      .env-headline { display: flex; align-items: center; gap: 4px; }
+      .env-headline h3, .env-headline .env-name-input { flex: 1; min-width: 0; }
+      .env-icon { padding: 2px 7px; min-width: 28px; flex-shrink: 0; }
+      .env-key { color: var(--dim); }
+      .env-key.keyed { color: #6aa6ff; }
+      .env-key.here { color: #ffe27a; }
+      .env-line { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+      .env-line-wide { grid-template-columns: 76px minmax(0, 1fr); }
+      .env-line-keys { grid-template-columns: 76px minmax(0, 1fr) auto; background: rgba(255, 226, 122, 0.07); border-radius: 4px; padding: 3px 4px; margin: 0 -4px; }
+      .env-line-free { grid-template-columns: minmax(0, 1fr) auto; }
+      .env-line-name { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .env-line .env-pair select { min-width: 0; flex: 1; }
+      .env-mini { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--dim); flex-shrink: 0; }
+      .env-fold { border-top: 1px solid var(--line); padding-top: 5px; }
+      .env-fold > summary { cursor: pointer; font-size: 12px; color: var(--dim); display: flex; gap: 8px; align-items: baseline; list-style: none; }
+      .env-fold > summary::before { content: '▸'; }
+      .env-fold[open] > summary::before { content: '▾'; }
+      .env-fold > summary em { font-style: normal; color: var(--text, #dfe2ea); margin-left: auto; }
+      .env-fold-body { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; }
+      .env-code { margin: 0; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; }
       .env-gap {
         width: 10px;
       }

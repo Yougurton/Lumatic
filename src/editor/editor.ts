@@ -1067,11 +1067,65 @@ export class Editor {
     });
   }
 
+  /** How many times a part of an animation plays (1: once). */
+  setAnimRuns(target: string, part: AnimPart, runs: number) {
+    this.changeAnims((anims) => {
+      const anim = anims.find((item) => item.target === target);
+      if (anim === undefined) return;
+      const more = Math.max(0, Math.min(999, Math.round(runs) - 1));
+      anim.repeat = { ...(anim.repeat ?? {}), [part]: more };
+      if (more === 0) delete anim.repeat[part];
+      if (Object.keys(anim.repeat).length === 0) delete anim.repeat;
+    }, `anim:runs:${part}`);
+  }
+
+  /** The keys copied (their beats from the first of them). */
+  private animClipboard: { target: string; part: AnimPart; beat: number; value: [number, number, number]; easing?: string }[] = [];
+
+  copyAnimKeys(): boolean {
+    const picked = this.sceneAnims().flatMap((anim) => ANIM_PARTS.flatMap((part) => (anim.keys[part] ?? []).filter((key) => this.animSelection.has(key.id)).map((key) => ({ target: anim.target, part, beat: key.beat, value: [...key.value] as [number, number, number], ...(key.easing === undefined ? {} : { easing: key.easing }) }))));
+    if (picked.length === 0) return false;
+    const first = Math.min(...picked.map((item) => item.beat));
+    this.animClipboard = picked.map((item) => ({ ...item, beat: item.beat - first }));
+    this.setStatus(tr('Скопировано ключей: {0}', picked.length));
+    return true;
+  }
+
+  /** The copied keys put at the playhead — on the things they were copied from, or (copied from one
+   *  thing, others picked now) on the picked ones. */
+  pasteAnimKeys(): boolean {
+    const copied = this.animClipboard;
+    if (copied.length === 0) return false;
+    const from = new Set(copied.map((item) => item.target));
+    const picked = this.envSelection.map((key) => this.animTarget(key)).filter((target): target is string => target !== null);
+    const onto = from.size === 1 && picked.length > 0 && !picked.includes([...from][0]!) ? picked : null;
+    const start = this.snapBeat(this.playhead());
+    const made: string[] = [];
+    this.changeAnims((anims) => {
+      for (const item of copied) {
+        for (const target of onto ?? [item.target]) {
+          const key = this.keyAt(anims, target, item.part, Math.round((start + item.beat) * 10000) / 10000);
+          key.value = [...item.value];
+          if (item.easing === undefined) delete key.easing;
+          else key.easing = item.easing;
+          made.push(key.id);
+        }
+      }
+    });
+    this.animSelection = new Set(made);
+    this.emit('selection');
+    return true;
+  }
+
   /** All the animation of the picked things taken away. */
   clearAnims(keys: readonly string[]) {
     const targets = new Set(keys.map((key) => this.animTarget(key)));
     this.changeAnims((anims) => {
-      for (const anim of anims) if (targets.has(anim.target)) anim.keys = {};
+      for (const anim of anims) {
+        if (!targets.has(anim.target)) continue;
+        anim.keys = {};
+        delete anim.repeat;
+      }
     });
   }
 

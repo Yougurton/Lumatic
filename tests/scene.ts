@@ -110,6 +110,11 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   check('a turn half way', Math.abs(turn[1] - 45) < 1e-3 && Math.abs(turn[0]) < 1e-3, turn);
   const events = animEvents(anim, true);
   check('written: an event a part, beats as shares of its length', JSON.stringify(events) === JSON.stringify([{ b: 4, t: 'AnimateTrack', d: { track: 'lumaticAnim_b', duration: 4, position: [[0, 0, 0, 0], [4, 0, 0, 1, 'easeInQuad']] } }, { b: 2, t: 'AnimateTrack', d: { track: 'lumaticAnim_b', duration: 0, rotation: [[0, 90, 0, 0]] } }]), events);
+  const loop = { target: 'o:b', keys: { position: [{ id: 'a', beat: 4, value: [0, 0, 0] as [number, number, number] }, { id: 'b', beat: 8, value: [4, 0, 0] as [number, number, number] }], rotation: [{ id: 'c', beat: 0, value: [0, 0, 0] as [number, number, number] }, { id: 'd', beat: 4, value: [0, 360, 0] as [number, number, number] }] }, repeat: { position: 2 } };
+  check('played three times: the beat taken back into the first run, then it stays', JSON.stringify(animValue(loop, 'position', 13)) === JSON.stringify([1, 0, 0]) && JSON.stringify(animValue(loop, 'position', 16.5)) === JSON.stringify([4, 0, 0]), animValue(loop, 'position', 13));
+  check('a whole round: gone axis by axis', JSON.stringify(animValue(loop, 'rotation', 1)) === JSON.stringify([0, 90, 0]), animValue(loop, 'rotation', 1));
+  const looped = animEvents(loop, true);
+  check('written: repeat, a whole round as quarter rounds', (looped[0]!.d as { repeat?: number }).repeat === 2 && JSON.stringify((looped[1]!.d as { rotation: unknown }).rotation) === JSON.stringify([[0, 0, 0, 0], [0, 90, 0, 0.25], [0, 180, 0, 0.5], [0, 270, 0, 0.75], [0, 360, 0, 1]]), looped);
   const shape = { uid: 'b', name: 'cube', kind: 'shape' as const, shape: 'Cube' as const, material: 'm', position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
   const mods = { materials: { m: { shader: 'Standard' as const, color: [1, 1, 1, 1] as [number, number, number, number] } }, objects: [shape], anims: [anim, { target: 'Env.[1]Thing', keys: { scale: [{ id: 's', beat: 1, value: [2, 2, 2] as [number, number, number] }] } }, { target: 'o:gone', keys: {} }] };
   const fragment = modsFragment(mods, null);

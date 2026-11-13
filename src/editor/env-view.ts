@@ -2,6 +2,7 @@ import { BoxGeometry, BufferGeometry, EdgesGeometry, Float32BufferAttribute, Gro
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
+import { animRuns, animValue, sortedKeys } from './env-anim';
 import { childrenOf, dataRotation, generatedRootOf, generatedRoots, localFromWorld, objectBox, rayBox, shown, shownBoxes, worldMatrix } from './env-scene';
 import { tr } from './i18n';
 
@@ -197,10 +198,48 @@ export class EnvView {
       }
       for (const other of this.othersOf(item)) for (const { box, matrix } of shownBoxes(data, other, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, 0x4fd6a0));
     });
+    this.addPath(data, selection[0], first);
     if (usable) {
       this.placed(data, first, selection[0]!).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
       this.proxy.updateMatrixWorld(true);
     }
+  }
+
+  /** The way the first picked thing goes (its place's keys): a line through it, a dot a key. */
+  private addPath(data: EnvironmentData, key: string | undefined, index: number | null) {
+    if (key === undefined || index === null) return;
+    const anim = this.editor.animOf(key);
+    const keys = sortedKeys(anim?.keys.position);
+    if (keys.length < 2) return;
+    const parent = data.objects[index]!.parent;
+    const base = parent < 0 ? new Matrix4() : worldMatrix(data, parent);
+    const at = (value: readonly number[]) => new Vector3(value[0]!, value[1]!, -value[2]!).applyMatrix4(base);
+    const [from, to] = [keys[0]!.beat, keys[keys.length - 1]!.beat];
+    const points: number[] = [];
+    const steps = Math.min(256, Math.max(16, keys.length * 16));
+    let before: Vector3 | null = null;
+    for (let n = 0; n <= steps; n++) {
+      const value = animValue({ target: '', keys: { position: keys } }, 'position', from + ((to - from) * n) / steps);
+      if (value === null) continue;
+      const point = at(value);
+      if (before !== null) points.push(before.x, before.y, before.z, point.x, point.y, point.z);
+      before = point;
+    }
+    // (a little cross a key)
+    for (const item of keys) {
+      const point = at(item.value);
+      for (let k = 0; k < 3; k++) {
+        const arm = [0, 0, 0];
+        arm[k] = 0.12;
+        points.push(point.x - arm[0]!, point.y - arm[1]!, point.z - arm[2]!, point.x + arm[0]!, point.y + arm[1]!, point.z + arm[2]!);
+      }
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
+    const line = new LineSegments(geometry, new LineBasicMaterial({ color: animRuns(anim, 'position') > 1 ? 0x9fd0ff : 0x6aa6ff, depthTest: false, transparent: true, opacity: 0.85 }));
+    line.renderOrder = 9;
+    line.frustumCulled = false;
+    this.frames.add(line);
   }
 
   private clearFrames() {

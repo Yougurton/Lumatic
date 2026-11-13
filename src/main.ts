@@ -131,7 +131,9 @@ window.addEventListener(
     const target = event.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
     const ctrl = event.ctrlKey || event.metaKey;
-    if (ctrl && event.code === 'KeyD') envPanel.copy();
+    if (ctrl && event.code === 'KeyC' && editor.animSelection.size > 0) editor.copyAnimKeys();
+    else if (ctrl && event.code === 'KeyV' && editor.pasteAnimKeys()) void 0;
+    else if (ctrl && event.code === 'KeyD') envPanel.copy();
     else if (!ctrl && (event.code === 'Delete' || event.code === 'Backspace')) {
       // (keys picked on the timeline: they go first, not the object)
       if (editor.animSelection.size > 0) editor.removeAnimKeys(new Set(editor.animSelection));

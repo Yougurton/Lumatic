@@ -1,5 +1,5 @@
 import type { Editor } from './editor';
-import { ANIM_PARTS, sortedKeys, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
+import { ANIM_PARTS, animRuns, sortedKeys, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
 import { tr } from './i18n';
 import { showMenu } from './menu';
 import type { LaneHost } from './notes-timeline';
@@ -122,9 +122,23 @@ export class AnimLanes {
             ctx.fillText(tr(EASINGS.find(([id]) => id === easing)?.[1] ?? easing), x0 + 10, middle - 9 < line.top ? middle : middle);
           }
         }
-        // after the last key: it stays so
+        // after the last key: it stays so — or plays again, so many times
         const last = keys[keys.length - 1];
-        if (last !== undefined) {
+        const runs = animRuns(line.anim, line.part!);
+        if (last !== undefined && runs > 1 && keys.length > 1) {
+          const length = last.beat - keys[0]!.beat;
+          const x0 = host.beatToX(last.beat);
+          const x1 = host.beatToX(last.beat + length * (runs - 1));
+          ctx.globalAlpha = 0.16;
+          ctx.fillStyle = colour;
+          ctx.fillRect(x0, middle - 3, x1 - x0, 6);
+          ctx.globalAlpha = 0.5;
+          for (let run = 1; run < runs; run++) ctx.fillRect(host.beatToX(last.beat + length * run) - 1, middle - 6, 2, 12);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#c9ccd6';
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.fillText(`↻×${String(runs)}`, x0 + 10, middle);
+        } else if (last !== undefined) {
           ctx.globalAlpha = 0.18;
           ctx.fillStyle = colour;
           ctx.fillRect(host.beatToX(last.beat), middle - 1, host.width, 2);
@@ -283,7 +297,13 @@ export class AnimLanes {
     const key = found.key ?? found.bar;
     if (key === null) {
       const beat = Math.max(0, editor.snapBeat(this.host.xToBeat(x)));
-      showMenu(clientX, clientY, [{ label: '◆ Ключ здесь', action: () => editor.addAnimKeys([found.line.key], [found.line.part!], beat) }]);
+      showMenu(clientX, clientY, [
+        { label: '◆ Ключ здесь', action: () => editor.addAnimKeys([found.line.key], [found.line.part!], beat) },
+        { label: 'Вставить ключи здесь', hint: 'Ctrl+V', action: () => {
+          editor.seek(beat);
+          editor.pasteAnimKeys();
+        } },
+      ]);
       return;
     }
     if (found.key !== null && !editor.animSelection.has(key.id)) editor.selectAnimKeys([key.id]);
@@ -292,6 +312,10 @@ export class AnimLanes {
       { label: 'Как приходит к ключу', heading: true },
       ...EASINGS.map(([id, name]) => ({ label: `${(key.easing ?? 'easeLinear') === id ? '● ' : ''}${tr(name)}`, action: () => editor.changeAnimKeys(ids, (item) => (id === 'easeLinear' ? delete item.easing : (item.easing = id))) })),
       null,
+      { label: 'Сколько раз подряд', heading: true },
+      ...[1, 2, 4, 8, 16].map((runs) => ({ label: `${animRuns(found.line.anim, found.line.part!) === runs ? '● ' : ''}${runs === 1 ? tr('Один раз') : `↻ ×${String(runs)}`}`, action: () => found.line.anim !== undefined && editor.setAnimRuns(found.line.anim.target, found.line.part!, runs) })),
+      null,
+      ...(found.key !== null ? [{ label: '⧉ Копировать ключи', hint: 'Ctrl+C', action: () => void editor.copyAnimKeys() }] : []),
       ...(found.key !== null ? [{ label: '🗑 Удалить ключи', hint: 'Delete', action: () => editor.removeAnimKeys(ids) }] : []),
     ]);
   }

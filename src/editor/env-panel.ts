@@ -1,7 +1,7 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
 import type { SceneNode } from './env-scene';
-import { ANIM_PARTS, type AnimPart } from './env-anim';
+import { ANIM_PARTS, animRuns, type AnimPart } from './env-anim';
 import { EASINGS } from './rings';
 import { ARRAY_KINDS, arrayCount, defaultArray, mirrored, type ArrayKind, type SceneArray } from './env-array';
 import { expandObjects, isLightShader, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
@@ -426,6 +426,28 @@ export class EnvPanel {
     else this.renderObjects(root);
   }
 
+  /** The sections open on the right (they stay as they were left). */
+  private readonly folds = new Set<string>();
+  private readonly arrayShown = new Set<string>();
+
+  /** A section that opens and closes: its title, a word of what's in it; its inside is returned. */
+  private fold(root: HTMLElement, id: string, title: string, about = ''): HTMLElement {
+    const box = document.createElement('details');
+    box.className = 'env-fold';
+    box.open = this.folds.has(id);
+    const summary = document.createElement('summary');
+    summary.append(Object.assign(document.createElement('span'), { textContent: title }), Object.assign(document.createElement('em'), { textContent: about }));
+    box.addEventListener('toggle', () => {
+      if (box.open) this.folds.add(id);
+      else this.folds.delete(id);
+    });
+    const body = document.createElement('div');
+    body.className = 'env-fold-body';
+    box.append(summary, body);
+    root.append(box);
+    return body;
+  }
+
   private renderObjects(root: HTMLElement) {
     const editor = this.editor;
     const keys = editor.envSelection.filter((key) => editor.sceneValues(key) !== null);
@@ -437,28 +459,57 @@ export class EnvPanel {
     }
     const object = now.object;
     const node = object === undefined ? editor.envTree()?.nodes.get(Number(first.slice(2))) : undefined;
-    const title = keys.length === 1 ? (object?.name ?? node?.name ?? '') : tr('Выбрано объектов: {0}', keys.length);
+    const able = keys.filter((key) => editor.animTarget(key) !== null);
+    const anim = editor.animOf(first);
+
+    // the name, and what can be done with the picked — small buttons beside it
+    const head = document.createElement('div');
+    head.className = 'env-headline';
     if (object !== undefined && keys.length === 1) {
       const name = Object.assign(document.createElement('input'), { type: 'text', value: object.name, className: 'env-name-input' });
       name.addEventListener('change', () => editor.changeObjects([object.uid], (item) => (item.name = name.value.trim() || item.name)));
-      root.append(name);
-    } else root.append(Object.assign(document.createElement('h3'), { textContent: title }));
+      head.append(name);
+    } else {
+      const title = Object.assign(document.createElement('h3'), { textContent: keys.length === 1 ? (node?.name ?? '') : tr('Выбрано объектов: {0}', keys.length) });
+      title.title = keys.length === 1 ? (now.id ?? '') : tr('Выбрано несколько: барабаны и ручки в 3D меняют все выбранные на одну и ту же величину (числа показаны для первого).');
+      head.append(title);
+    }
+    const icon = (text: string, title: string, run: (event: MouseEvent) => void) => {
+      const item = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: text, title });
+      item.addEventListener('click', run);
+      head.append(item);
+    };
+    const game = keys.filter((key) => key.startsWith('g:'));
+    const own = keys.filter((key) => key.startsWith('o:'));
+    icon(now.hidden ? '◌' : '👁', 'Скрыть выбранные объекты в игре (вместе со всем, что внутри них)', () => editor.applyScene(keys, () => ({ hidden: !now.hidden })));
+    icon('⧉', 'Ещё один такой же объект рядом (Ctrl+D)', () => this.copy(keys));
+    icon('⇋', 'Копия на другой стороне: слева направо', () => this.mirror(keys));
+    if (game.length > 0) icon('↺', 'Убрать все изменения выбранных объектов игры', () => editor.applyScene(keys, () => 'reset'));
+    if (own.length > 0) icon('🗑', 'Удалить выбранные свои объекты (Delete)', () => this.remove(own));
+    icon('⋯', 'Ещё', (event) => {
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      setTimeout(() =>
+        showMenu(rect.left, rect.bottom + 2, [
+          ...(game.length === 1 && keys.length === 1 ? [{ label: 'Выбрать все такие же', hint: 'соседи с тем же именем', action: () => editor.selectEnv(this.alike(first)) }] : []),
+          { label: '◆ Ключ всего сразу', hint: 'положение, поворот, масштаб', disabled: able.length === 0, action: () => editor.addAnimKeys(able, ANIM_PARTS) },
+          { label: '✕ Убрать анимацию', hint: 'все ключи выбранных', disabled: !able.some((key) => editor.animOf(key) !== undefined), action: () => editor.clearAnims(able) },
+        ]),
+      );
+    });
+    root.append(head);
     if (object === undefined && (now.id === null || now.id === undefined)) {
       root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('У этого объекта нет id для Chroma — изменить можно только объект выше или ниже по дереву.') }));
       return;
     }
+
+    // where it stands: a line a part — its three numbers, its key, back as the game has it
     const axes = ['X', 'Y', 'Z'];
-    const line = (label: string, part: 'position' | 'rotation' | 'scale', step: number, min: number, max: number, hint: string) => {
-      const section = document.createElement('div');
-      section.className = 'env-row';
-      const head = this.section(label);
-      head.title = hint;
-      if (now.own !== undefined) {
-        const back = Object.assign(document.createElement('button'), { type: 'button', className: 'env-back', textContent: '↺', title: 'Вернуть как в игре' });
-        back.disabled = now[part].every((value, k) => Math.abs(value - now.own![part][k]!) < 1e-6);
-        back.addEventListener('click', () => editor.applyScene(keys, (_key, values) => (values.own === undefined ? {} : { [part]: values.own[part] })));
-        head.append(back);
-      }
+    const here = editor.snapBeat(editor.playhead());
+    const line = (label: string, part: AnimPart, step: number, min: number, max: number, hint: string) => {
+      const row = document.createElement('div');
+      row.className = 'env-line';
+      const name = Object.assign(document.createElement('span'), { className: 'env-line-name', textContent: label });
+      name.title = hint;
       const drums = document.createElement('div');
       drums.className = 'env-drums';
       now[part].forEach((value, axis) => {
@@ -475,46 +526,47 @@ export class EnvPanel {
         );
         drums.append(cell);
       });
-      section.append(head, drums);
-      root.append(section);
+      row.append(name, drums);
+      if (able.length > 0) {
+        // (◆: hollow — no keys; blue — animated; yellow — a key on this very beat)
+        const all = anim?.keys[part] ?? [];
+        const at = all.find((key) => Math.abs(key.beat - here) < 1e-3);
+        const key = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon env-key', textContent: all.length === 0 ? '◇' : '◆' });
+        key.classList.toggle('keyed', all.length > 0);
+        key.classList.toggle('here', at !== undefined);
+        key.title = at !== undefined ? tr('На этой доле стоит ключ. Нажмите, чтобы убрать его') : all.length > 0 ? tr('Ключей: {0}. Нажмите, чтобы поставить ключ на текущей доле', all.length) : tr('Поставить ключ анимации на текущей доле (K — ключ того, что меняют ручки)');
+        key.addEventListener('click', () => (at !== undefined ? editor.removeAnimKeys(new Set([at.id])) : editor.addAnimKeys(able, [part])));
+        row.append(key);
+      }
+      if (now.own !== undefined) {
+        const back = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '↺', title: 'Вернуть как в игре' });
+        back.disabled = now[part].every((value, k) => Math.abs(value - now.own![part][k]!) < 1e-6);
+        back.addEventListener('click', () => editor.applyScene(keys, (_key, values) => (values.own === undefined ? {} : { [part]: values.own[part] })));
+        row.append(back);
+      }
+      root.append(row);
     };
     const world = object?.kind === 'shape';
     if (object?.ghost === true) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Размноженный объект игры: первый в ряду — сам объект игры ({0}). Чтобы сдвинуть всё, двигайте его; здесь — число и шаг копий.', object.source ?? '') }));
     else {
-    line(world ? 'Положение в мире, м' : 'Положение, м', 'position', 0.1, -500, 500, world ? 'Положение в мире, в метрах: X — вправо, Y — вверх, Z — вперёд' : 'Своё положение объекта относительно родителя, в метрах: X — вправо, Y — вверх, Z — вперёд');
-    line('Поворот, °', 'rotation', 1, -360, 360, 'Поворот объекта вокруг осей X, Y, Z, в градусах');
-    line('Масштаб', 'scale', 0.05, 0, 200, 'Размер объекта по осям (1 — как в игре; у фигуры — метры)');
+      line('Положение', 'position', 0.1, -500, 500, world ? 'Положение в мире, в метрах: X — вправо, Y — вверх, Z — вперёд' : 'Своё положение объекта относительно родителя, в метрах: X — вправо, Y — вверх, Z — вперёд');
+      line('Поворот', 'rotation', 1, -360, 360, 'Поворот объекта вокруг осей X, Y, Z, в градусах');
+      line('Масштаб', 'scale', 0.05, 0, 200, 'Размер объекта по осям (1 — как в игре; у фигуры — метры)');
     }
-    this.renderAnim(root, keys);
-    this.renderArray(root, keys, object);
-
+    this.renderKeys(root);
     if (object?.kind === 'shape') this.renderShape(root, object, keys);
-    if (object?.kind === 'copy' && object.ghost !== true) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Копия объекта игры: {0}', object.source ?? '') }));
 
-    const buttons = document.createElement('div');
-    buttons.className = 'ins-buttons';
-    const button = (text: string, title: string, run: () => void, disabled = false) => {
-      const item = Object.assign(document.createElement('button'), { type: 'button', textContent: text, title });
-      item.disabled = disabled;
-      item.addEventListener('click', run);
-      buttons.append(item);
-    };
-    button(now.hidden ? '👁 Показать' : '◌ Скрыть', 'Скрыть выбранные объекты в игре (вместе со всем, что внутри них)', () => editor.applyScene(keys, () => ({ hidden: !now.hidden })));
-    button('⧉ Копия', 'Ещё один такой же объект рядом (Ctrl+D)', () => this.copy(keys));
-    button('⇋ Зеркало', 'Копия на другой стороне: слева направо', () => this.mirror(keys));
-    if (keys.some((key) => key.startsWith('g:'))) {
-      button('↺ Вернуть как было', 'Убрать все изменения выбранных объектов игры', () => editor.applyScene(keys, () => 'reset'));
-      if (keys.length === 1) button('Все такие же', 'Выбрать соседние объекты с тем же именем (ряд колец, лазеров…)', () => editor.selectEnv(this.alike(first)));
+    const array = object?.array;
+    if (array !== undefined && !this.arrayShown.has(object!.uid)) {
+      // (a thing just made many: its numbers shown at once)
+      this.arrayShown.add(object!.uid);
+      this.folds.add('array');
     }
-    if (keys.some((key) => key.startsWith('o:'))) button('🗑 Удалить', 'Удалить выбранные свои объекты (Delete)', () => this.remove(keys.filter((key) => key.startsWith('o:'))));
-    root.append(buttons);
-    if (first.startsWith('g:')) this.renderRule(root, first);
-    if (keys.length > 1) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Выбрано несколько: барабаны и ручки в 3D меняют все выбранные на одну и ту же величину (числа показаны для первого).') }));
+    this.renderArray(this.fold(root, 'array', tr('Размножение'), array === undefined ? '' : `${tr(ARRAY_NAMES[array.kind])} ×${String(arrayCount(array))}`), keys, object);
+    if (first.startsWith('g:') && keys.length === 1) this.renderRule(root, first);
 
     // how it's written into the map
-    const written = document.createElement('details');
-    written.className = 'env-written';
-    written.append(Object.assign(document.createElement('summary'), { textContent: tr('Как это записано в карту') }));
+    const written = this.fold(root, 'written', tr('Как это записано в карту'));
     const commands = keys.flatMap((key) => {
       const values = editor.sceneValues(key);
       if (values === null) return [];
@@ -523,9 +575,9 @@ export class EnvPanel {
       return [edit === undefined ? null : sceneCommand(edit)];
     }).filter((command) => command !== null);
     const code = document.createElement('pre');
+    code.className = 'env-code';
     code.textContent = commands.length === 0 ? tr('Объект не изменён — в карту ничего не пишется.\nid: {0}', now.id ?? '') : commands.map((command) => JSON.stringify(command, null, 2)).join(',\n');
     written.append(code);
-    root.append(written);
   }
 
   /** "By a rule": of the like ones — every N-th, from one to another. */
@@ -534,9 +586,9 @@ export class EnvPanel {
     const like = this.alike(key);
     if (like.length < 3) return;
     const rule = this.rule;
-    const box = document.createElement('div');
-    box.className = 'env-row';
-    box.append(this.section(tr('Выбрать по правилу — таких же: {0}', like.length)));
+    const body = this.fold(root, 'rule', tr('Выбрать по правилу'), tr('таких же: {0}', like.length));
+    const row = document.createElement('div');
+    row.className = 'env-line env-line-free';
     const drums = document.createElement('div');
     drums.className = 'env-drums';
     const cell = (label: string, name: 'every' | 'from' | 'to', min: number, hint: string) => {
@@ -553,64 +605,45 @@ export class EnvPanel {
       const to = rule.to === 0 ? like.length : rule.to;
       editor.selectEnv(like.filter((_item, at) => at + 1 >= rule.from && at + 1 <= to && (at + 1 - rule.from) % rule.every === 0));
     });
-    box.append(drums, pick);
-    root.append(box);
+    row.append(drums, pick);
+    body.append(row);
   }
 
-  /** The picked things' animation: a key here for a part, the picked key's easing, all of it away. */
-  private renderAnim(root: HTMLElement, keys: readonly string[]) {
+  /** The keys picked on the timeline: how it comes to them, their beat, how many times the part plays. */
+  private renderKeys(root: HTMLElement) {
     const editor = this.editor;
-    const able = keys.filter((key) => editor.animTarget(key) !== null);
-    if (able.length === 0) return;
-    const now = editor.sceneShown(able[0]!);
-    const anim = editor.animOf(able[0]!);
-    const box = document.createElement('div');
-    box.className = 'env-row';
-    const head = this.section(tr('Анимация'));
-    head.title = 'Ключ — каким объект должен быть на этой доле песни. Между ключами он движется сам. До первого ключа объект стоит как задано выше';
-    box.append(head);
-    const buttons = document.createElement('div');
-    buttons.className = 'ins-buttons';
-    const names: Record<AnimPart, string> = { position: '◆ Положение', rotation: '◆ Поворот', scale: '◆ Масштаб' };
-    for (const part of ANIM_PARTS) {
-      const count = (anim?.keys[part] ?? []).length;
-      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: `${tr(names[part])}${count > 0 ? ` · ${String(count)}` : ''}`, title: 'Поставить ключ на текущей доле с тем, что сейчас (K — ключ того, что меняют ручки)' });
-      button.classList.toggle('active', now?.keyed.includes(part) === true);
-      button.addEventListener('click', () => editor.addAnimKeys(able, [part]));
-      buttons.append(button);
+    const picked = editor.sceneAnims().flatMap((anim) => ANIM_PARTS.flatMap((part) => (anim.keys[part] ?? []).filter((key) => editor.animSelection.has(key.id)).map((key) => ({ key, part, anim }))));
+    const one = picked[0];
+    if (one === undefined) return;
+    const row = document.createElement('div');
+    row.className = 'env-line env-line-keys';
+    const name = Object.assign(document.createElement('span'), { className: 'env-line-name', textContent: picked.length === 1 ? tr('◆ Ключ') : tr('◆ Ключей: {0}', picked.length) });
+    const controls = document.createElement('div');
+    controls.className = 'env-pair';
+    const easing = document.createElement('select');
+    for (const [id, title] of EASINGS) easing.append(Object.assign(document.createElement('option'), { value: id, textContent: title }));
+    easing.value = one.key.easing ?? 'easeLinear';
+    easing.title = 'Как объект приходит к этому ключу от предыдущего';
+    easing.addEventListener('change', () => editor.changeAnimKeys(new Set(picked.map((item) => item.key.id)), (key) => (easing.value === 'easeLinear' ? delete key.easing : (key.easing = easing.value))));
+    controls.append(easing);
+    if (picked.length === 1) {
+      const beat = document.createElement('label');
+      beat.className = 'env-mini';
+      beat.title = 'Доля ключа';
+      beat.append(Object.assign(document.createElement('span'), { textContent: tr('доля') }), numberDrum(`env:key:${one.key.id}`, one.key.beat, (next) => editor.changeAnimKeys(new Set([one.key.id]), (key) => (key.beat = Math.max(0, next)), 'anim:beat'), { step: 0.25, min: 0, max: 100000, digits: 3 }));
+      controls.append(beat);
     }
-    const all = Object.assign(document.createElement('button'), { type: 'button', textContent: '◆ Всё', title: 'Ключи положения, поворота и масштаба сразу' });
-    all.addEventListener('click', () => editor.addAnimKeys(able, ANIM_PARTS));
-    buttons.append(all);
-    if (able.some((key) => editor.animOf(key) !== undefined)) {
-      const clear = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕ Убрать анимацию', title: 'Удалить все ключи выбранных объектов' });
-      clear.addEventListener('click', () => editor.clearAnims(able));
-      buttons.append(clear);
-    }
-    box.append(buttons);
-    // the picked keys: how it comes to them
-    const picked = editor.sceneAnims().flatMap((item) => ANIM_PARTS.flatMap((part) => (item.keys[part] ?? []).filter((key) => editor.animSelection.has(key.id))));
-    if (picked.length > 0) {
-      const line = document.createElement('label');
-      line.className = 'env-field';
-      const easing = document.createElement('select');
-      for (const [id, name] of EASINGS) easing.append(Object.assign(document.createElement('option'), { value: id, textContent: name }));
-      easing.value = picked[0]!.easing ?? 'easeLinear';
-      easing.title = 'Как объект приходит к этому ключу от предыдущего';
-      easing.addEventListener('change', () => editor.changeAnimKeys(new Set(picked.map((key) => key.id)), (key) => (easing.value === 'easeLinear' ? delete key.easing : (key.easing = easing.value))));
-      line.append(Object.assign(document.createElement('span'), { textContent: tr('Выбрано ключей: {0} — плавность', picked.length) }), easing);
-      box.append(line);
-      if (picked.length === 1) {
-        const beat = document.createElement('label');
-        beat.className = 'env-field';
-        beat.append(Object.assign(document.createElement('span'), { textContent: 'Доля ключа' }), numberDrum(`env:key:${picked[0]!.id}`, picked[0]!.beat, (next) => editor.changeAnimKeys(new Set([picked[0]!.id]), (key) => (key.beat = Math.max(0, next)), 'anim:beat'), { step: 0.25, min: 0, max: 100000, digits: 3 }));
-        box.append(beat);
-      }
-    }
-    if (now !== null && now.keyed.length > 0) box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr('Числа выше — на текущей доле. Изменение анимированного свойства ставит ключ здесь.') }));
-    if ((anim?.keys.rotation ?? []).length > 1) box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr('Поворот идёт кратчайшим путём: для полного оборота ставьте ключи через каждые 90–120°.') }));
-    root.append(box);
+    const runs = document.createElement('label');
+    runs.className = 'env-mini';
+    runs.title = 'Сколько раз подряд проигрываются ключи этого свойства (1 — один раз)';
+    runs.append(Object.assign(document.createElement('span'), { textContent: '↻' }), numberDrum(`env:runs:${one.anim.target}:${one.part}`, animRuns(one.anim, one.part), (next) => editor.setAnimRuns(one.anim.target, one.part, next), { step: 1, min: 1, max: 64, digits: 0 }));
+    controls.append(runs);
+    const remove = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '🗑', title: 'Удалить выбранные ключи (Delete)' });
+    remove.addEventListener('click', () => editor.removeAnimKeys(new Set(picked.map((item) => item.key.id))));
+    row.append(name, controls, remove);
+    root.append(row);
   }
+
 
   /** Many of the picked: none, or a row, a round, a grid, a line, a scatter — and its numbers. */
   private renderArray(root: HTMLElement, keys: readonly string[], object: SceneObject | undefined) {
@@ -618,7 +651,6 @@ export class EnvPanel {
     const array = object?.array;
     const box = document.createElement('div');
     box.className = 'env-row';
-    box.append(this.section(tr('Размножение')));
     const kind = document.createElement('select');
     kind.append(Object.assign(document.createElement('option'), { value: '', textContent: 'Нет — один объект' }));
     for (const item of ARRAY_KINDS) kind.append(Object.assign(document.createElement('option'), { value: item, textContent: ARRAY_NAMES[item] }));
@@ -693,17 +725,20 @@ export class EnvPanel {
     const shapes = editor.sceneObjects().filter((item) => uids.includes(item.uid) && item.kind === 'shape');
     const shapeUids = shapes.map((item) => item.uid);
     const materials = editor.sceneMaterials();
-    const row = (label: string, control: HTMLElement) => {
-      const line = document.createElement('label');
-      line.className = 'env-field';
-      line.append(Object.assign(document.createElement('span'), { textContent: label }), control);
+    const row = (label: string, ...controls: HTMLElement[]) => {
+      const line = document.createElement('div');
+      line.className = 'env-line env-line-wide';
+      const pair = document.createElement('div');
+      pair.className = 'env-pair';
+      pair.append(...controls);
+      line.append(Object.assign(document.createElement('span'), { className: 'env-line-name', textContent: label }), pair);
       root.append(line);
     };
     const shape = document.createElement('select');
     for (const item of SHAPES) shape.append(Object.assign(document.createElement('option'), { value: item, textContent: SHAPE_NAMES[item] }));
     shape.value = object.shape ?? 'Cube';
     shape.addEventListener('change', () => editor.changeObjects(shapeUids, (item) => (item.shape = shape.value as Shape)));
-    row('Фигура', shape);
+    shape.title = 'Фигура';
 
     const material = document.createElement('select');
     for (const name of Object.keys(materials)) material.append(Object.assign(document.createElement('option'), { value: name, textContent: name }));
@@ -728,20 +763,17 @@ export class EnvPanel {
       this.material = name;
       this.render();
     });
-    const edit = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Изменить', title: 'Вид и цвет материала (меняется у всех объектов из него)' });
+    material.title = 'Материал';
+    const edit = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '✎', title: 'Вид и цвет материала (меняется у всех объектов из него)' });
     edit.addEventListener('click', () => {
       this.material = object.material ?? null;
       this.render();
     });
-    const pair = document.createElement('span');
-    pair.className = 'env-pair';
-    pair.append(material, edit);
-    row('Материал', pair);
+    row('Фигура', shape, material, edit);
 
     const made = object.material === undefined ? undefined : materials[object.material];
     if (made === undefined || !isLightShader(made.shader)) return;
     // a lamp: which lights' events drive it, and its light ID
-    root.append(this.section(tr('Свет')));
     const light = object.light ?? { type: 0, id: 0 };
     const types = [...new Set([0, 1, 2, 3, 4, ...editor.lightsByType.keys()])].sort((a, b) => a - b);
     const type = document.createElement('select');
@@ -757,9 +789,11 @@ export class EnvPanel {
         item.light = { type: next, id };
       });
     });
-    row('Группа света', type);
-    if (shapes.length === 1) row('Номер лампы (light ID)', numberDrum(`env:${object.uid}:light`, light.id, (next) => editor.changeObjects([object.uid], (item) => (item.light = { type: light.type, id: Math.max(0, Math.round(next)) }), 'env:light-id'), { step: 1, min: 0, max: 5000, digits: 0 }));
-    const group = Object.assign(document.createElement('button'), { type: 'button', textContent: '💡 Сделать группой света', title: 'Выбранные лампы — отдельной строкой на вкладке «Свет»: на неё ставятся события и эффекты' });
+    const id = document.createElement('label');
+    id.className = 'env-mini';
+    id.title = 'Номер лампы (light ID)';
+    if (shapes.length === 1) id.append(Object.assign(document.createElement('span'), { textContent: 'ID' }), numberDrum(`env:${object.uid}:light`, light.id, (next) => editor.changeObjects([object.uid], (item) => (item.light = { type: light.type, id: Math.max(0, Math.round(next)) }), 'env:light-id'), { step: 1, min: 0, max: 5000, digits: 0 }));
+    const group = Object.assign(document.createElement('button'), { type: 'button', textContent: '💡 В группу', title: 'Выбранные лампы — отдельной строкой на вкладке «Свет»: на неё ставятся события и эффекты' });
     group.addEventListener('click', () => {
       const lamps = shapes.filter((item) => item.light !== undefined);
       if (lamps.length === 0) return;
@@ -767,7 +801,7 @@ export class EnvPanel {
       editor.addGroup(lamps.length === 1 ? lamps[0]!.name : tr('Лампы сцены ({0})', all.length), all.map((item) => ({ kind: 'light' as const, type: item.light!.type, id: item.light!.id })));
       editor.setStatus(tr('Группа света создана: она появилась строкой на вкладке «Свет»'));
     });
-    root.append(group);
+    row('Свет', type, ...(shapes.length === 1 ? [id] : []), group);
   }
 
   /** A material: its name, look and colour (all the shapes made of it change with it). */

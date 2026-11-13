@@ -26,7 +26,16 @@ export interface SceneAnim {
   /** "o:<uid>": an added object; otherwise a game object's Chroma id. */
   target: string;
   keys: Partial<Record<AnimPart, AnimKey[]>>;
+  /** How many more times a part's keys play, one run after another (none: once). */
+  repeat?: Partial<Record<AnimPart, number>>;
 }
+
+/** How many times a part plays in all. */
+export const animRuns = (anim: SceneAnim | undefined, part: AnimPart) => 1 + Math.max(0, Math.round(anim?.repeat?.[part] ?? 0));
+
+/** A turn from one key to the next that is half a round or more about an axis: the game would take it
+ *  the short way (a whole round: not at all), so it is taken axis by axis instead. */
+const longTurn = (from: readonly number[], to: readonly number[]) => from.some((value, k) => Math.abs(to[k]! - value) >= 180 - 1e-6);
 
 export const sortedKeys = (keys: readonly AnimKey[] | undefined) => [...(keys ?? [])].sort((a, b) => a.beat - b.beat);
 
@@ -43,13 +52,17 @@ export function animValue(anim: SceneAnim | undefined, part: AnimPart, beat: num
   const keys = sortedKeys(anim?.keys[part]);
   const first = keys[0];
   if (first === undefined || beat < first.beat - 1e-6) return null;
+  // (played again and again: the beat is taken back into the first run)
+  const length = keys[keys.length - 1]!.beat - first.beat;
+  const runs = animRuns(anim, part);
+  if (runs > 1 && length > 1e-9 && beat < first.beat + length * runs - 1e-6) beat = first.beat + ((beat - first.beat) % length);
   let at = 0;
   while (at + 1 < keys.length && keys[at + 1]!.beat <= beat + 1e-6) at++;
   const from = keys[at]!;
   const to = keys[at + 1];
   if (to === undefined || to.beat - from.beat < 1e-9) return [...from.value];
   const t = easingFromName(to.easing)(Math.min(1, Math.max(0, (beat - from.beat) / (to.beat - from.beat))));
-  if (part === 'rotation') {
+  if (part === 'rotation' && !longTurn(from.value, to.value)) {
     // (turns go the short way round, as the game takes them)
     const a = new Quaternion().fromArray(dataRotation(from.value));
     const b = new Quaternion().fromArray(dataRotation(to.value));
@@ -79,8 +92,27 @@ export function animEvents(anim: SceneAnim, world: boolean): Record<string, unkn
     const last = keys[keys.length - 1];
     if (first === undefined || last === undefined) continue;
     const length = last.beat - first.beat;
-    const points = keys.map((key, at) => [...key.value.map(round), length <= 0 ? 0 : round((key.beat - first.beat) / length), ...(at > 0 && key.easing !== undefined && key.easing !== 'easeLinear' ? [key.easing] : [])]);
-    out.push({ b: round(first.beat), t: 'AnimateTrack', d: { track: animTrack(anim.target), duration: round(length), [names[part]]: length <= 0 ? [points[0]!] : points } });
+    const share = (beat: number) => (length <= 0 ? 0 : round((beat - first.beat) / length));
+    const points: (number | string)[][] = [];
+    keys.forEach((key, at) => {
+      const before = keys[at - 1];
+      if (part === 'rotation' && before !== undefined && longTurn(before.value, key.value) && key.beat > before.beat) {
+        // (a long turn: points on the way — a quarter round apart at most, more when it's eased, the
+        // easing being in where they stand)
+        const most = Math.max(...key.value.map((value, k) => Math.abs(value - before.value[k]!)));
+        const eased = key.easing !== undefined && key.easing !== 'easeLinear';
+        const pieces = Math.max(Math.ceil(most / 90), eased ? 12 : 1);
+        const ease = easingFromName(key.easing);
+        for (let n = 1; n <= pieces; n++) {
+          const t = ease(n / pieces);
+          points.push([...key.value.map((value, k) => round(before.value[k]! + (value - before.value[k]!) * t)), share(before.beat + ((key.beat - before.beat) * n) / pieces)]);
+        }
+        return;
+      }
+      points.push([...key.value.map(round), share(key.beat), ...(at > 0 && key.easing !== undefined && key.easing !== 'easeLinear' ? [key.easing] : [])]);
+    });
+    const runs = animRuns(anim, part);
+    out.push({ b: round(first.beat), t: 'AnimateTrack', d: { track: animTrack(anim.target), duration: round(length), ...(runs > 1 && length > 0 ? { repeat: runs - 1 } : {}), [names[part]]: length <= 0 ? [points[0]!] : points } });
   }
   return out;
 }
