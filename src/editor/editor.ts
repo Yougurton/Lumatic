@@ -50,7 +50,7 @@ import { choose } from './menu';
 import { tr, translate } from './i18n';
 import { expandObjects, isLightShader, sceneCommand, type FogValues, type SceneLink, type TubeValues, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
 import { arrayCount, type SceneArray } from './env-array';
-import { ALL_PARTS, animValue, hasKeys, linkDelta, partsOf, type AnimKey, type AnimPart, type SceneAnim } from './env-anim';
+import { ALL_PARTS, animValue, defaultMotion, hasKeys, isPeriodic, linkDelta, motionParts, movedValue, partsOf, type AnimKey, type AnimPart, type MotionKind, type SceneAnim, type SceneMotion } from './env-anim';
 import { localOf, sceneTree, worldMatrix } from './env-scene';
 import type { Matrix4 } from 'three';
 import type { LightInfo, Preview } from './preview';
@@ -130,6 +130,11 @@ export interface GlsInspect {
     remove: () => void;
   };
   render?: (root: HTMLElement) => void;
+}
+
+/** The scene's parts besides its edits, objects, materials and animations (for undo). */
+function sceneExtras(mods: EnvironmentMods | undefined) {
+  return { links: mods?.links, fog: mods?.fog, player: mods?.player, motions: mods?.motions };
 }
 
 /** An object's place, turn and size. */
@@ -960,6 +965,9 @@ export class Editor {
     const anims = (mods.anims ?? []).filter((anim) => hasKeys(anim) && (!anim.target.startsWith('o:') || uids.has(anim.target)));
     if (anims.length > 0) mods.anims = anims;
     else delete mods.anims;
+    const motions = (mods.motions ?? []).filter((motion) => !motion.target.startsWith('o:') || uids.has(motion.target));
+    if (motions.length > 0) mods.motions = motions;
+    else delete mods.motions;
     const links = (mods.links ?? []).filter((link) => [link.child, link.parent].every((target) => !target.startsWith('o:') || uids.has(target)));
     if (links.length > 0) mods.links = links;
     else delete mods.links;
@@ -1074,17 +1082,19 @@ export class Editor {
 
   /** Where a picked thing stands at the playhead: its own values, the animated parts as their keys
    *  have them there (`keyed`: those parts). */
-  sceneShown(key: string, beat = this.playhead()) {
+  sceneShown(key: string, beat = this.playhead(), withMotions = true) {
     const now = this.sceneValues(key);
     if (now === null) return null;
     const anim = this.animOf(key);
     const keyed: AnimPart[] = [];
     const out = { ...now, keyed };
+    const motions = withMotions ? this.motionsOf(key) : [];
     for (const part of MOVES) {
-      const value = animValue(anim, part, beat);
+      // (keyed: by keys — a motion on top of them is shown, but changes go to the keys or its own value)
+      if (animValue(anim, part, beat) !== null) keyed.push(part);
+      const value = motions.length === 0 ? animValue(anim, part, beat) : movedValue(anim, motions, now, part, beat);
       if (value === null) continue;
       out[part] = value as [number, number, number];
-      keyed.push(part);
     }
     return out;
   }
@@ -1322,6 +1332,96 @@ export class Editor {
     this.emit('selection');
   }
 
+  // ----- ready motions: blocks on an object's timeline ---------------------------------------------------
+
+  sceneMotions(): SceneMotion[] {
+    return this.project?.environmentMods?.motions ?? [];
+  }
+
+  /** The motions of a picked thing. */
+  motionsOf(key: string): SceneMotion[] {
+    const target = this.animTarget(key);
+    return target === null ? [] : this.sceneMotions().filter((motion) => motion.target === target);
+  }
+
+  /** The motion picked on the timeline (its settings on the right). */
+  motionSelection: string | null = null;
+
+  private putMotions(motions: SceneMotion[]) {
+    const project = this.project;
+    if (project === null) return;
+    const mods: EnvironmentMods = { ...(project.environmentMods ?? {}) };
+    if (motions.length > 0) mods.motions = motions;
+    else delete mods.motions;
+    project.environmentMods = mods;
+    this.putScene(this.sceneEdits());
+  }
+
+  /** A ready motion on a picked thing from a beat (picked after). */
+  addMotion(key: string, kind: MotionKind, start = this.snapBeat(this.playhead())) {
+    const target = this.animTarget(key);
+    if (target === null || target.startsWith('m:') || target === 'fog' || target === 'player') return;
+    this.sceneStep();
+    const motion = defaultMotion(kind, target, Math.max(0, start), newId('m'));
+    this.putMotions([...structuredClone(this.sceneMotions()), motion]);
+    this.motionSelection = motion.id;
+    if (!this.envSelection.includes(key)) this.envSelection = [key];
+    this.sceneChanged();
+    if (kind === 'follow' || kind === 'depends') this.setStatus(tr('Пока идёт этот блок, он заменяет ключи своего свойства. В окне просмотра голова, руки и значения игры показаны условно — проверьте в игре.'));
+  }
+
+  changeMotion(id: string, patch: (motion: SceneMotion) => void, merge?: string) {
+    this.sceneStep(merge);
+    const motions = structuredClone(this.sceneMotions());
+    const motion = motions.find((item) => item.id === id);
+    if (motion === undefined) return;
+    patch(motion);
+    motion.end = Math.max(motion.start + 0.0625, motion.end);
+    this.putMotions(motions);
+    this.sceneChanged();
+  }
+
+  removeMotion(id: string) {
+    this.sceneStep();
+    this.putMotions(this.sceneMotions().filter((motion) => motion.id !== id));
+    if (this.motionSelection === id) this.motionSelection = null;
+    this.sceneChanged();
+  }
+
+  selectMotion(id: string | null) {
+    this.motionSelection = id;
+    if (id !== null) this.animSelection = new Set();
+    this.emit('selection');
+  }
+
+  /** A ready motion made keys: one every quarter of a beat (with the keys there were), the block gone. */
+  bakeMotion(id: string) {
+    const motion = this.sceneMotions().find((item) => item.id === id);
+    if (motion === undefined || !isPeriodic(motion)) return;
+    const key = this.animKeyOf({ target: motion.target, keys: {} });
+    const base = key === null ? null : this.sceneValues(key);
+    if (base === null) return;
+    const anim = this.animOf(key!);
+    this.sceneStep();
+    const anims = structuredClone(this.sceneAnims());
+    for (const part of motionParts(motion)) {
+      const step = Math.min(0.25, Math.max(1 / 16, motion.period / 16));
+      const beats: number[] = [];
+      for (let beat = motion.start; beat < motion.end - 1e-6; beat += step) beats.push(Math.round(beat * 10000) / 10000);
+      beats.push(motion.end);
+      const values = beats.map((beat) => movedValue(anim, [motion], base, part, Math.min(beat, motion.end - 1e-4)) ?? [...base[part as 'position']]);
+      // (the keys inside the block: in the made ones now)
+      const own = anims.find((item) => item.target === motion.target);
+      if (own?.keys[part] !== undefined) own.keys[part] = own.keys[part]!.filter((item) => item.beat < motion.start - 1e-6 || item.beat > motion.end + 1e-6);
+      beats.forEach((beat, at) => (this.keyAt(anims, motion.target, part, beat).value = [...values[at]!]));
+    }
+    this.putAnims(anims, false);
+    this.putMotions(this.sceneMotions().filter((item) => item.id !== id));
+    if (this.motionSelection === id) this.motionSelection = null;
+    this.sceneChanged();
+    this.setStatus(tr('Движение разобрано в ключи'));
+  }
+
   // ----- links: things hung on others ------------------------------------------------------------------
 
   sceneLinks(): SceneLink[] {
@@ -1339,6 +1439,21 @@ export class Editor {
   linkChildrenOf(key: string): string[] {
     const target = this.animTarget(key);
     return this.sceneLinks().filter((item) => item.parent === target).map((item) => this.animKeyOf({ target: item.child, keys: {} })).filter((item): item is string => item !== null);
+  }
+
+  /** The parts' lines opened on the timeline (their curves shown): "<key>|<part>" → how tall. */
+  curveRows = new Map<string, number>();
+
+  /** A part's line opened on the timeline (its curves), or closed. */
+  toggleCurve(key: string, part: AnimPart, open = !this.curveRows.has(`${key}|${part}`)) {
+    if (open) this.curveRows.set(`${key}|${part}`, this.curveRows.get(`${key}|${part}`) ?? 110);
+    else this.curveRows.delete(`${key}|${part}`);
+    this.emit('selection');
+  }
+
+  setCurveHeight(key: string, part: AnimPart, height: number) {
+    this.curveRows.set(`${key}|${part}`, Math.round(height));
+    this.emit('selection');
   }
 
   /** The material open on the Scene side's right panel (its colour's keys shown on the timeline). */
@@ -1715,7 +1830,7 @@ export class Editor {
     const beat = this.snapBeat(this.playhead());
     let keyedAny = false;
     for (const key of keys) {
-      const now = this.sceneShown(key);
+      const now = this.sceneShown(key, this.playhead(), false);
       if (now === null) continue;
       const next = change(key, now);
       // (an animated part — or any, with ⏺ on: the change is a key at the playhead, not the thing's
@@ -2831,7 +2946,7 @@ export class Editor {
     const made = new Set((project.effects ?? []).filter((effect) => effect.custom !== true).map((effect) => effect.id));
     const clips = made.size === 0 ? project.clips : project.clips.filter((clip) => clip.group === undefined || !made.has(clip.group));
     const raw = made.size === 0 ? project.raw : project.raw.filter((event) => event.group === undefined || !made.has(event.group));
-    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null, scene: project.environmentMods?.scene ?? [], sceneObjects: project.environmentMods?.objects ?? [], sceneMaterials: project.environmentMods?.materials ?? {}, sceneAnims: project.environmentMods?.anims ?? [] });
+    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null, scene: project.environmentMods?.scene ?? [], sceneObjects: project.environmentMods?.objects ?? [], sceneMaterials: project.environmentMods?.materials ?? {}, sceneAnims: project.environmentMods?.anims ?? [], sceneMore: sceneExtras(project.environmentMods) });
   }
 
   /** Call before a change (one undo step). */
@@ -2888,10 +3003,18 @@ export class Editor {
   private restore(state: string, notify = true) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null; scene?: SceneEdit[]; sceneObjects?: SceneObject[]; sceneMaterials?: Record<string, SceneMaterial>; sceneAnims?: SceneAnim[] };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null; scene?: SceneEdit[]; sceneObjects?: SceneObject[]; sceneMaterials?: Record<string, SceneMaterial>; sceneAnims?: SceneAnim[]; sceneMore?: ReturnType<typeof sceneExtras> };
     project.bookmarks = data.bookmarks ?? [];
     // (the scene editor's changes: as they were, shown again)
-    if (JSON.stringify([project.environmentMods?.scene ?? [], project.environmentMods?.objects ?? [], project.environmentMods?.materials ?? {}, project.environmentMods?.anims ?? []]) !== JSON.stringify([data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {}, data.sceneAnims ?? []])) {
+    if (JSON.stringify([project.environmentMods?.scene ?? [], project.environmentMods?.objects ?? [], project.environmentMods?.materials ?? {}, project.environmentMods?.anims ?? [], sceneExtras(project.environmentMods)]) !== JSON.stringify([data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {}, data.sceneAnims ?? [], data.sceneMore ?? sceneExtras(undefined)])) {
+      // (the links, the fog, the player, the motions: as they were)
+      const more = data.sceneMore ?? sceneExtras(undefined);
+      const mods: EnvironmentMods = { ...(project.environmentMods ?? {}) };
+      for (const name of ['links', 'fog', 'player', 'motions'] as const) {
+        if (more[name] === undefined) delete mods[name];
+        else (mods as Record<string, unknown>)[name] = structuredClone(more[name]);
+      }
+      project.environmentMods = mods;
       this.putAnims(data.sceneAnims ?? [], false);
       this.putScene(data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {});
       const uids = new Set((data.sceneObjects ?? []).map((object) => object.uid));

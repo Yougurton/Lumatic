@@ -2,7 +2,7 @@ import type { EnvironmentData } from '../engine/renderer/environment/types';
 import catalog from './custom-environments.json';
 import { Matrix4 } from 'three';
 import { environmentLookupIds } from '../engine/renderer/environment/chroma-environment';
-import { animEvents, animTrack, hasKeys, linkEvents, linkTrack, offsetAnim, type Placing, type SceneAnim } from './env-anim';
+import { animEvents, animTrack, baseMotionEvents, hasKeys, linkEvents, linkTrack, motionEvents, offsetAnim, type Placing, type SceneAnim, type SceneMotion } from './env-anim';
 import { localOf, worldMatrix } from './env-scene';
 import { arrayPlacings, type SceneArray } from './env-array';
 import { GEOMETRY_RING_MATERIALS, geometryRingFragment } from './geometry-rings';
@@ -29,6 +29,8 @@ export interface EnvironmentMods {
   objects?: SceneObject[];
   /** The scene editor's animations: keys on beats, an object each. */
   anims?: SceneAnim[];
+  /** Ready motions: blocks on objects' timelines. */
+  motions?: SceneMotion[];
   /** Objects hung on others: they go along with their parent's motion. */
   links?: SceneLink[];
   /** The fog, as the scene editor sets it (what's not set: as the environment has it). */
@@ -56,6 +58,9 @@ export interface SceneMaterial {
   track?: string;
   /** The shader's keywords instead of its own (for those who know them). */
   keywords?: string[];
+  /** Coloured as the player's notes, sabers, walls or lights are ("baseNote0Color"…): its own colour's
+   *  alpha still says how bright. */
+  playerColor?: string;
 }
 
 /** A material as Chroma has it. */
@@ -157,6 +162,8 @@ export const materialTrack = (name: string, material: SceneMaterial) => material
 export function trackedTargets(mods: EnvironmentMods): Set<string> {
   const out = new Set((mods.anims ?? []).filter((anim) => hasKeys(anim)).map((anim) => anim.target));
   for (const link of mods.links ?? []) out.add(link.child);
+  for (const motion of mods.motions ?? []) out.add(motion.target);
+  for (const [name, material] of Object.entries(mods.materials ?? {})) if (material.playerColor !== undefined) out.add(`m:${name}`);
   return out;
 }
 
@@ -493,7 +500,14 @@ function sceneMotion(fragment: EnvironmentFragment, mods: EnvironmentMods, data:
   // the fog
   const fog = Object.fromEntries(Object.entries(mods.fog ?? {}).filter(([, value]) => value !== undefined).map(([key, value]) => [key, round(value)]));
   if (Object.keys(fog).length > 0 || anims.has('fog')) fragment.environment.push({ id: FOG_ID, lookupMethod: 'Regex', ...(Object.keys(fog).length > 0 ? { components: { BloomFogEnvironment: fog } } : {}), ...(anims.has('fog') ? { track: animTrack('fog') } : {}) });
+  // the materials coloured as the player's things
+  for (const [name, material] of Object.entries(mods.materials ?? {})) {
+    if (material.playerColor === undefined) continue;
+    fragment.customEvents.push({ b: 0, t: 'AnimateTrack', d: { track: materialTrack(name, material), duration: 0, color: [material.playerColor, [1, 1, 1, round(material.color[3]), 'opMul']] } });
+  }
   // the animations
+  const motions = mods.motions ?? [];
+  for (const motion of motions) if (!anims.has(motion.target)) anims.set(motion.target, { target: motion.target, keys: {} });
   for (const anim of anims.values()) {
     if (anim.target.startsWith('m:')) {
       const name = anim.target.slice(2);
@@ -512,9 +526,15 @@ function sceneMotion(fragment: EnvironmentFragment, mods: EnvironmentMods, data:
     const place = placeOf(anim.target);
     if (place === null) continue;
     const object = anim.target.startsWith('o:') ? objects.find((item) => `o:${item.uid}` === anim.target) : undefined;
-    if (object?.ghost !== true) fragment.customEvents.push(...animEvents(anim, place.world));
+    const own = motions.filter((motion) => motion.target === anim.target);
+    // (keys and ready motions: the parts with motions sampled together, the rest as keys)
+    const write = (thing: SceneAnim, base: Placing, track: string) => {
+      const moved = motionEvents(thing, own, base, place.world, track);
+      fragment.customEvents.push(...animEvents(thing, place.world, track, moved.parts), ...moved.events, ...baseMotionEvents(own, base, place.world, track));
+    };
+    if (object?.ghost !== true) write(anim, place.base, animTrack(anim.target));
     // (an array's others: each its own track, as far aside as it stands)
-    if (object?.array !== undefined) for (const other of expandObjects([object]).filter((item) => item.of !== undefined)) fragment.customEvents.push(...animEvents(offsetAnim(anim, object, other, `o:${other.uid}`), place.world));
+    if (object?.array !== undefined) for (const other of expandObjects([object]).filter((item) => item.of !== undefined)) write(offsetAnim(anim, object, other, `o:${other.uid}`), other, animTrack(`o:${other.uid}`));
   }
   // the links: each parent's children on a track of its own, that track carried by its motion
   const byParent = new Map<string, string[]>();
@@ -623,7 +643,7 @@ export function fragmentRequirements(mods: EnvironmentMods | undefined): string[
   const out = new Set<string>();
   if (preset !== undefined) for (const mod of ['Chroma', ...(preset.noodle ? ['Noodle Extensions'] : [])]) out.add(mod);
   if (geometrySystems(mods).length > 0) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
-  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)) || Object.keys(mods.fog ?? {}).length > 0) out.add('Chroma');
+  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)) || Object.keys(mods.fog ?? {}).length > 0 || (mods.motions ?? []).length > 0) out.add('Chroma');
   if ((mods.links ?? []).length > 0 || (mods.anims ?? []).some((anim) => anim.target === 'player' && hasKeys(anim))) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
   return [...out];
 }
@@ -634,6 +654,6 @@ export function geometrySystems(mods: EnvironmentMods | undefined): string[] {
 }
 
 export function hasMods(mods: EnvironmentMods | undefined) {
-  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)) || (mods.links ?? []).length > 0 || Object.values(mods.fog ?? {}).some((value) => value !== undefined));
+  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0 || (mods.anims ?? []).some((anim) => hasKeys(anim)) || (mods.links ?? []).length > 0 || (mods.motions ?? []).length > 0 || Object.values(mods.fog ?? {}).some((value) => value !== undefined));
 }
 

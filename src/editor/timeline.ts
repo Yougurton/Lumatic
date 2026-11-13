@@ -2210,7 +2210,7 @@ export class Timeline {
       const hint = document.createElement('div');
       hint.className = 'nm-dim';
       hint.style.cssText = 'padding:8px 10px;font-size:11px;line-height:1.5;white-space:normal';
-      hint.textContent = 'Ромбы — ключи. Клик — выбрать и перейти к нему, тянуть — сдвинуть, двойной клик по строке — новый ключ, ПКМ — плавность, Delete — удалить. Shift + колесо — листать строки.';
+      hint.textContent = 'Ромбы — ключи: клик — выбрать и перейти, тянуть — сдвинуть, двойной клик по строке — новый ключ, ПКМ — плавность и повтор, Delete — удалить. ▸ слева от строки — кривые: точки тянутся вверх-вниз (Shift — только значение), нижний край строки — высота. Строка «движения»: двойной клик или ПКМ — добавить, блоки тянутся и растягиваются. Shift + колесо — листать строки.';
       list.append(hint);
     } else box.append(this.headerTools());
     if (this.alt === null) {
@@ -2888,6 +2888,7 @@ export class Timeline {
       const { x, y } = local(event);
       this.hover = { x, y };
       if (event.isTrusted) this.lastMove = event;
+      this.anim.shift = event.shiftKey;
       if (this.alt !== null && this.alt.mouseMove(x, y)) {
         canvas.style.cursor = this.alt.cursor(x, y);
         return;

@@ -1,8 +1,8 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
 import type { SceneNode } from './env-scene';
-import { openCurveEditor } from './curve-editor';
-import { ANIM_PARTS, ALL_PARTS, animRuns, hasKeys, type AnimPart } from './env-anim';
+import { MOTION_NAMES } from './anim-lanes';
+import { ANIM_PARTS, ALL_PARTS, animRuns, hasKeys, isPeriodic, MOTION_KINDS, type AnimPart, type SceneMotion } from './env-anim';
 import { EASINGS } from './rings';
 import { ARRAY_KINDS, arrayCount, defaultArray, mirrored, type ArrayKind, type SceneArray } from './env-array';
 import { expandObjects, isLightShader, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
@@ -40,6 +40,19 @@ const SHADER_LOOK: Record<Shader, string> = {
   InterscopeConcrete: 'repeating-linear-gradient(45deg, #6c6a66 0 4px, #605e5a 4px 8px)',
   InterscopeCar: 'linear-gradient(160deg, #c02030, #50080f 60%, #ff8090)',
 };
+
+/** The player's colours a material can take. */
+const PLAYER_COLORS: [string, string][] = [
+  ['', 'нет — свой цвет'],
+  ['baseNote0Color', 'левые ноты'],
+  ['baseNote1Color', 'правые ноты'],
+  ['baseSaberAColor', 'левая сабля'],
+  ['baseSaberBColor', 'правая сабля'],
+  ['baseObstaclesColor', 'стены'],
+  ['baseEnvironmentColor0', 'левый свет'],
+  ['baseEnvironmentColor1', 'правый свет'],
+  ['baseEnvironmentColorW', 'белый свет'],
+];
 
 const hex = (color: readonly number[]) => `#${color.slice(0, 3).map((value) => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, '0')).join('')}`;
 const fromHex = (value: string): [number, number, number] => [1, 3, 5].map((at) => Math.round((Number.parseInt(value.slice(at, at + 2), 16) / 255) * 1000) / 1000) as [number, number, number];
@@ -139,8 +152,8 @@ export class EnvPanel {
     if (this.material !== null && editor.sceneMaterials()[this.material] === undefined) this.material = null;
     editor.envMaterialOpen = this.material;
     // (an animated thing picked: its numbers follow the song — when it stands still)
-    const moving = !editor.isPlaying() && [...editor.envSelection, ...(this.material === null ? [] : [`m:${this.material}`])].some((item) => editor.animOf(item) !== undefined || editor.linkParentOf(item) !== null) ? editor.playhead().toFixed(3) : '';
-    const key = `${moving}|${String(editor.linkPicking)}|${[...editor.animSelection].join(',')}|${JSON.stringify(editor.envSelection)}|${JSON.stringify(editor.project.environmentMods ?? {})}|${this.search}|${String(this.changedOnly)}|${[...this.open].join(',')}|${String(this.material)}|${JSON.stringify([...editor.lightsByType.keys()])}`;
+    const moving = !editor.isPlaying() && [...editor.envSelection, ...(this.material === null ? [] : [`m:${this.material}`])].some((item) => editor.animOf(item) !== undefined || editor.linkParentOf(item) !== null || editor.motionsOf(item).length > 0) ? editor.playhead().toFixed(3) : '';
+    const key = `${moving}|${String(editor.motionSelection)}|${[...editor.curveRows.keys()].join(',')}|${String(editor.linkPicking)}|${[...editor.animSelection].join(',')}|${JSON.stringify(editor.envSelection)}|${JSON.stringify(editor.project.environmentMods ?? {})}|${this.search}|${String(this.changedOnly)}|${[...this.open].join(',')}|${String(this.material)}|${JSON.stringify([...editor.lightsByType.keys()])}`;
     if (key === this.shownKey) return;
     this.shownKey = key;
     // (drawn anew: left scrolled where they were)
@@ -358,7 +371,7 @@ export class EnvPanel {
     button.addEventListener('click', () => (at !== undefined ? editor.removeAnimKeys(new Set([at.id])) : editor.addAnimKeys(keys, [part])));
     button.addEventListener('dblclick', (event) => {
       event.preventDefault();
-      if (all.length > 1) openCurveEditor(editor, keys[0]!, part);
+      editor.toggleCurve(keys[0]!, part, true);
     });
     return button;
   }
@@ -645,6 +658,7 @@ export class EnvPanel {
           ...(game.length === 1 && keys.length === 1 ? [{ label: 'Выбрать все такие же', hint: 'соседи с тем же именем', action: () => editor.selectEnv(this.alike(first)) }] : []),
           { label: '◆ Ключ всего сразу', hint: 'положение, поворот, масштаб', disabled: able.length === 0, action: () => editor.addAnimKeys(able, ANIM_PARTS) },
           { label: '✕ Убрать анимацию', hint: 'все ключи выбранных', disabled: !able.some((key) => editor.animOf(key) !== undefined), action: () => editor.clearAnims(able) },
+          ...(able.length > 0 && !first.startsWith('p:') ? [null, { label: tr('＋ Движение с текущей доли'), heading: true }, ...MOTION_KINDS.map((kind) => ({ label: tr(MOTION_NAMES[kind]), action: () => editor.addMotion(able[0]!, kind) }))] : []),
         ]),
       );
     });
@@ -703,6 +717,8 @@ export class EnvPanel {
     }
     this.renderLink(root, able);
     this.renderKeys(root);
+    const motion = editor.motionsOf(first).find((item) => item.id === editor.motionSelection);
+    if (motion !== undefined) this.renderMotion(root, motion);
     if (object?.kind === 'shape') this.renderShape(root, object, keys);
 
     const array = object?.array;
@@ -727,6 +743,101 @@ export class EnvPanel {
     code.className = 'env-code';
     code.textContent = commands.length === 0 ? tr('Объект не изменён — в карту ничего не пишется.\nid: {0}', now.id ?? '') : commands.map((command) => JSON.stringify(command, null, 2)).join(',\n');
     written.append(code);
+  }
+
+  /** A ready motion's settings: when, and what it does. */
+  private renderMotion(root: HTMLElement, motion: SceneMotion) {
+    const editor = this.editor;
+    const box = document.createElement('div');
+    box.className = 'env-motion';
+    const head = document.createElement('div');
+    head.className = 'env-headline';
+    head.append(Object.assign(document.createElement('h3'), { textContent: `▶ ${tr(MOTION_NAMES[motion.kind])}` }));
+    if (isPeriodic(motion)) {
+      const bake = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '◆', title: tr('Разобрать в ключи: движение станет обычными ключами (каждая четверть доли)') });
+      bake.addEventListener('click', () => editor.bakeMotion(motion.id));
+      head.append(bake);
+    }
+    const remove = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '🗑', title: tr('Удалить движение (Delete)') });
+    remove.addEventListener('click', () => editor.removeMotion(motion.id));
+    head.append(remove);
+    box.append(head);
+    const set = (patch: (item: SceneMotion) => void, merge: string) => editor.changeMotion(motion.id, patch, `motion:${motion.id}:${merge}`);
+    const row = (label: string, hint: string, ...controls: HTMLElement[]) => {
+      const line = document.createElement('div');
+      line.className = 'env-line env-line-wide';
+      const name = Object.assign(document.createElement('span'), { className: 'env-line-name', textContent: tr(label) });
+      name.title = tr(hint);
+      const pair = document.createElement('div');
+      pair.className = 'env-pair';
+      pair.append(...controls);
+      line.append(name, pair);
+      box.append(line);
+    };
+    const drum = (name: string, value: number, put: (item: SceneMotion, next: number) => void, options: { step: number; min: number; max: number; digits: number }) => numberDrum(`motion:${motion.id}:${name}`, value, (next) => set((item) => put(item, next), name), options);
+    const choice = (options: [string, string][], value: string, put: (item: SceneMotion, next: string) => void) => {
+      const select = document.createElement('select');
+      for (const [id, text] of options) select.append(Object.assign(document.createElement('option'), { value: id, textContent: tr(text) }));
+      select.value = value;
+      select.addEventListener('change', () => set((item) => put(item, select.value), 'choice'));
+      return select;
+    };
+    const check = (text: string, value: boolean, put: (item: SceneMotion, next: boolean) => void) => {
+      const label = document.createElement('label');
+      label.className = 'adjust-check';
+      const input = Object.assign(document.createElement('input'), { type: 'checkbox', checked: value });
+      input.addEventListener('change', () => set((item) => put(item, input.checked), 'check'));
+      label.append(input, ` ${tr(text)}`);
+      return label;
+    };
+    const axes: [string, string][] = [['0', 'X'], ['1', 'Y'], ['2', 'Z']];
+    row('Доли', 'С какой доли и сколько долей длится движение', drum('start', motion.start, (item, next) => (item.start = Math.max(0, next), item.end = item.start + (motion.end - motion.start)), { step: 0.25, min: 0, max: 100000, digits: 3 }), drum('length', motion.end - motion.start, (item, next) => (item.end = item.start + Math.max(0.25, next)), { step: 0.25, min: 0.25, max: 10000, digits: 3 }));
+    const axis = (label: string, all = false) => row(label, 'Ось движения', choice(all ? [...axes, ['3', 'все']] : axes, String(motion.axis), (item, next) => (item.axis = Number(next))));
+    const period = (hint: string) => row('Период, доли', hint, drum('period', motion.period, (item, next) => (item.period = Math.max(0.0625, next)), { step: 0.25, min: 0.0625, max: 1000, digits: 3 }));
+    const reverse = () => box.append(check('В другую сторону', motion.reverse === true, (item, next) => (item.reverse = next || undefined)));
+    if (motion.kind === 'orbit') {
+      axis('Вокруг оси');
+      row('Радиус, м', 'Как далеко центр круга от объекта (объект начинает с того места, где стоит)', drum('size', motion.size, (item, next) => (item.size = next), { step: 0.25, min: 0, max: 500, digits: 2 }));
+      period('За сколько долей полный круг');
+      reverse();
+    } else if (motion.kind === 'swing') {
+      axis('Вокруг оси');
+      row('Угол, °', 'Насколько качается в каждую сторону', drum('size', motion.size, (item, next) => (item.size = next), { step: 5, min: 0, max: 360, digits: 1 }));
+      period('За сколько долей туда и обратно');
+      reverse();
+    } else if (motion.kind === 'spin') {
+      axis('Вокруг оси');
+      period('За сколько долей полный оборот');
+      reverse();
+    } else if (motion.kind === 'bob') {
+      axis('Вдоль оси');
+      row('Размах, м', 'Насколько поднимается и опускается', drum('size', motion.size, (item, next) => (item.size = next), { step: 0.1, min: 0, max: 100, digits: 2 }));
+      period('За сколько долей вверх и вниз');
+      reverse();
+    } else if (motion.kind === 'pulse') {
+      axis('По оси', true);
+      row('Рост, ×', 'Насколько больше становится в самой большой точке (0,3 — на 30 %)', drum('size', motion.size, (item, next) => (item.size = next), { step: 0.05, min: 0, max: 20, digits: 2 }));
+      period('За сколько долей вырасти и вернуться');
+    } else if (motion.kind === 'follow') {
+      row('За кем', 'Чьё положение повторяет объект', choice([['head', 'голова'], ['left', 'левая рука'], ['right', 'правая рука']], motion.source ?? 'head', (item, next) => (item.source = next)));
+      row('Плавность', 'Насколько плавно догоняет (меньше — плавнее, 0 — без сглаживания)', drum('smooth', motion.smooth ?? 0, (item, next) => (item.smooth = Math.max(0, next)), { step: 1, min: 0, max: 100, digits: 1 }));
+      row('Сдвиг, м', 'Где объект относительно головы или руки (оси мира: X — вправо, Y — вверх, Z — вперёд)', ...[0, 1, 2].map((k) => drum(`offset${String(k)}`, motion.offset?.[k] ?? 0, (item, next) => {
+        const offset = [...(item.offset ?? [0, 0, 0])];
+        offset[k] = next;
+        item.offset = offset;
+      }, { step: 0.1, min: -100, max: 100, digits: 2 })));
+      box.append(check('И поворачиваться так же', motion.turn === true, (item, next) => (item.turn = next || undefined)));
+    } else {
+      row('От чего', 'Какое значение игры двигает объект', choice([['energy', 'энергия (0–1)'], ['score', 'процент очков (0–1)'], ['combo', 'комбо (÷100)'], ['progress', 'ход песни (0–1)']], motion.source ?? 'energy', (item, next) => (item.source = next)));
+      row('Что меняется', 'Какое свойство объекта зависит от значения', choice([['scale', 'масштаб'], ['position', 'положение'], ['rotation', 'поворот']], motion.part ?? 'scale', (item, next) => {
+        item.part = next as SceneMotion['part'];
+        if (next !== 'scale' && item.axis >= 3) item.axis = 1;
+      }));
+      axis('По оси', (motion.part ?? 'scale') === 'scale');
+      row('Сколько', (motion.part ?? 'scale') === 'scale' ? 'Во сколько раз больше при значении 1' : (motion.part ?? 'scale') === 'position' ? 'На сколько метров сдвинется при значении 1' : 'На сколько градусов повернётся при значении 1', drum('size', motion.size, (item, next) => (item.size = next), { step: 0.1, min: -1000, max: 1000, digits: 2 }));
+    }
+    box.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr(isPeriodic(motion) ? 'Движение складывается с ключами объекта.' : 'Пока идёт блок, он заменяет ключи этого свойства. Голова, руки и значения игры в окне просмотра показаны условно — проверьте в игре.') }));
+    root.append(box);
   }
 
   /** What the picked hang on: its name (a click picks it), 📌 pick another, ✕ unhook. */
@@ -826,11 +937,19 @@ export class EnvPanel {
     controls.append(runs);
     const remove = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '🗑', title: 'Удалить выбранные ключи (Delete)' });
     remove.addEventListener('click', () => editor.removeAnimKeys(new Set(picked.map((item) => item.key.id))));
-    const curve = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '〰', title: tr('Кривая: как меняется значение между ключами') });
+    // (the curves: opened in the part's line on the timeline; the smooth curve through the keys)
     const thing = editor.animKeyOf(one.anim);
+    const curve = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '〰', title: tr('Кривые этого свойства — в его строке на таймлайне') });
     curve.disabled = thing === null;
-    curve.addEventListener('click', () => thing !== null && openCurveEditor(editor, thing, one.part));
+    curve.classList.toggle('active', thing !== null && editor.curveRows.has(`${thing}|${one.part}`));
+    curve.addEventListener('click', () => thing !== null && editor.toggleCurve(thing, one.part));
     controls.append(curve);
+    if (one.part !== 'rotation') {
+      const smooth = Object.assign(document.createElement('button'), { type: 'button', className: 'env-icon', textContent: '∿', title: tr('Плавная кривая через ключи') });
+      smooth.classList.toggle('active', one.anim.spline?.[one.part] === true);
+      smooth.addEventListener('click', () => editor.setAnimSpline(one.anim.target, one.part, one.anim.spline?.[one.part] !== true));
+      controls.append(smooth);
+    }
     row.append(name, controls, remove);
     root.append(row);
   }
@@ -1054,6 +1173,15 @@ export class EnvPanel {
     colorPair.className = 'env-pair';
     colorPair.append(color, this.keyButton([thing], 'color'));
     row('Цвет', colorPair);
+    const player = document.createElement('select');
+    for (const [id, text] of PLAYER_COLORS) player.append(Object.assign(document.createElement('option'), { value: id, textContent: tr(text) }));
+    player.value = material.playerColor ?? '';
+    player.title = tr('Красить как вещи игрока: цвет берётся из его цветовой схемы (свой цвет выше — до начала песни и в редакторах без схемы)');
+    player.addEventListener('change', () => {
+      const { playerColor: _old, ...rest } = material;
+      editor.setSceneMaterial(name, player.value === '' ? rest : { ...rest, playerColor: player.value });
+    });
+    row('Как у игрока', player);
     row(isLightShader(material.shader) ? 'Яркость (альфа)' : 'Альфа', numberDrum(`env:alpha:${name}`, shownColor[3] ?? 1, (next) => editor.setPart([thing], 'color', (_key, now) => [now[0]!, now[1]!, now[2]!, next], `env:alpha:${name}`), { step: 0.05, min: 0, max: 5, digits: 2 }));
     this.renderKeys(root);
     if (isLightShader(material.shader)) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Лампа: объектом из этого материала управляют события света. «Прозрачная» не видна, пока не горит. Цвет в игре задают события; здесь — только вид в редакторе до первого события.') }));

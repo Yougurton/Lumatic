@@ -163,10 +163,11 @@ function partPoints(anim: SceneAnim, part: AnimPart, keys: AnimKey[], spanFrom: 
  * The events of an animation, on `track`. `world`: the thing is placed in the world (a shape, the
  * player) — its place and turn are written as such; otherwise as its own (local) ones.
  */
-export function animEvents(anim: SceneAnim, world: boolean, track = animTrack(anim.target)): Record<string, unknown>[] {
+export function animEvents(anim: SceneAnim, world: boolean, track = animTrack(anim.target), skip: ReadonlySet<AnimPart> = new Set()): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   const names: Partial<Record<AnimPart, string>> = { position: world ? 'position' : 'localPosition', rotation: world ? 'rotation' : 'localRotation', scale: 'scale', color: 'color' };
   for (const part of ALL_PARTS) {
+    if (skip.has(part)) continue;
     const keys = sortedKeys(anim.keys[part]);
     const first = keys[0];
     const span = partSpan(anim, part);
@@ -263,6 +264,175 @@ export function offsetAnim(anim: SceneAnim, base: Placing, other: Placing, targe
       });
       return { ...key, value };
     });
+  }
+  return out;
+}
+
+// ----- ready motions: blocks on an object's timeline ------------------------------------------------------
+
+/**
+ * A ready motion: a block of beats on an object's timeline, over its keys. Round and round (orbit), to and
+ * fro (swing), turning (spin), up and down (bob), growing and shrinking (pulse) — added to what its keys
+ * have it do; or following the player's head or a hand, or a part going with a game value (energy,
+ * combo, score, how far the song is) — in place of its keys while the block lasts.
+ */
+export type MotionKind = 'orbit' | 'swing' | 'spin' | 'bob' | 'pulse' | 'follow' | 'depends';
+export const MOTION_KINDS: readonly MotionKind[] = ['orbit', 'swing', 'spin', 'bob', 'pulse', 'follow', 'depends'];
+
+export interface SceneMotion {
+  id: string;
+  /** What it moves: "o:<uid>" or a game object's Chroma id. */
+  target: string;
+  kind: MotionKind;
+  start: number;
+  end: number;
+  /** The axis it goes round, along or about (x, y, z); `depends`: 3 — all of them (a size). */
+  axis: number;
+  /** Beats a round, a swing there and back, a pulse. */
+  period: number;
+  /** How far: an orbit's radius (m), a swing's angle (°), a bob's distance (m), a pulse's growth (×);
+   *  `depends`: how much the value makes. */
+  size: number;
+  /** The other way round. */
+  reverse?: boolean;
+  /** `follow`: 'head', 'left', 'right'; `depends`: 'energy', 'combo', 'score', 'progress'. */
+  source?: string;
+  /** `follow`: how smoothly (0: not at all; lower — smoother). */
+  smooth?: number;
+  /** `follow`: how far from the head or hand (m, the world's axes). */
+  offset?: number[];
+  /** `follow`: turned as the head or hand is too. */
+  turn?: boolean;
+  /** `depends`: which part goes with the value. */
+  part?: 'position' | 'rotation' | 'scale';
+}
+
+/** What a new motion of a kind starts as. */
+export function defaultMotion(kind: MotionKind, target: string, start: number, id: string): SceneMotion {
+  const base = { id, target, kind, start, end: start + 8 };
+  if (kind === 'orbit') return { ...base, axis: 1, period: 8, size: 2 };
+  if (kind === 'swing') return { ...base, axis: 2, period: 4, size: 30 };
+  if (kind === 'spin') return { ...base, axis: 1, period: 8, size: 0 };
+  if (kind === 'bob') return { ...base, axis: 1, period: 4, size: 0.5 };
+  if (kind === 'pulse') return { ...base, axis: 3, period: 2, size: 0.3 };
+  if (kind === 'follow') return { ...base, axis: 1, period: 1, size: 0, source: 'head', smooth: 10, offset: [0, 0, 3], turn: false };
+  return { ...base, axis: 3, period: 1, size: 1, source: 'energy', part: 'scale' };
+}
+
+/** The motions added to an object's keys (the rest take their place). */
+export const isPeriodic = (motion: SceneMotion) => motion.kind !== 'follow' && motion.kind !== 'depends';
+
+/** The parts a motion changes. */
+export function motionParts(motion: SceneMotion): AnimPart[] {
+  if (motion.kind === 'orbit' || motion.kind === 'bob') return ['position'];
+  if (motion.kind === 'swing' || motion.kind === 'spin') return ['rotation'];
+  if (motion.kind === 'pulse') return ['scale'];
+  if (motion.kind === 'follow') return motion.turn === true ? ['position', 'rotation'] : ['position'];
+  return [motion.part ?? 'scale'];
+}
+
+/** How far a ready motion has taken a part at a beat (null: it isn't on then, or isn't one added). */
+function motionStep(motion: SceneMotion, part: AnimPart, beat: number, value: number[]): number[] {
+  const t = beat - motion.start;
+  const period = Math.max(1e-3, motion.period);
+  const turn = (2 * Math.PI * t) / period;
+  const way = motion.reverse === true ? -1 : 1;
+  const axis = Math.min(2, Math.max(0, Math.round(motion.axis)));
+  const out = [...value];
+  if (motion.kind === 'orbit' && part === 'position') {
+    // (round a centre `size` away: it starts where it stands)
+    const [u, v] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
+    out[u!] = out[u!]! + motion.size * (Math.cos(turn * way) - 1);
+    out[v!] = out[v!]! + motion.size * Math.sin(turn * way);
+  } else if (motion.kind === 'bob' && part === 'position') out[axis] = out[axis]! + motion.size * Math.sin(turn) * way;
+  else if (motion.kind === 'swing' && part === 'rotation') out[axis] = out[axis]! + motion.size * Math.sin(turn) * way;
+  else if (motion.kind === 'spin' && part === 'rotation') out[axis] = out[axis]! + ((360 * t) / period) * way;
+  else if (motion.kind === 'pulse' && part === 'scale') {
+    const grow = 1 + motion.size * (0.5 - 0.5 * Math.cos(turn));
+    for (let k = 0; k < 3; k++) if (motion.axis >= 3 || k === axis) out[k] = out[k]! * grow;
+  }
+  return out.map(round);
+}
+
+/** A part's value at a beat with its keys and the ready motions on then (null: neither — the thing's
+ *  own value). `base`: its own values. */
+export function movedValue(anim: SceneAnim | undefined, motions: readonly SceneMotion[], base: Placing, part: AnimPart, beat: number): number[] | null {
+  const keyed = animValue(anim, part, beat);
+  const on = motions.filter((motion) => isPeriodic(motion) && beat >= motion.start - 1e-6 && beat < motion.end - 1e-6 && motionParts(motion).includes(part));
+  if (on.length === 0 || (part !== 'position' && part !== 'rotation' && part !== 'scale')) return keyed;
+  let value = keyed ?? [...base[part]];
+  for (const motion of on) value = motionStep(motion, part, beat, value);
+  return value;
+}
+
+/**
+ * The parts with ready motions written as one event each: sampled — keys and motions together — from
+ * the first of them to the last (and just after a motion ends: back to the keys). Returns the events and
+ * the parts it wrote (`animEvents` leaves those out).
+ */
+export function motionEvents(anim: SceneAnim | undefined, motions: readonly SceneMotion[], base: Placing, world: boolean, track: string): { events: Record<string, unknown>[]; parts: Set<AnimPart> } {
+  const events: Record<string, unknown>[] = [];
+  const parts = new Set<AnimPart>();
+  const periodic = motions.filter(isPeriodic);
+  for (const part of ANIM_PARTS) {
+    const own = periodic.filter((motion) => motionParts(motion).includes(part) && motion.end > motion.start);
+    if (own.length === 0) continue;
+    parts.add(part);
+    const span = partSpan(anim, part);
+    const from = Math.min(...own.map((motion) => motion.start), span?.from ?? Infinity);
+    const to = Math.max(...own.map((motion) => motion.end), span?.to ?? -Infinity);
+    const step = Math.max(1 / 16, Math.min(...own.map((motion) => Math.max(1e-3, motion.period) / 16)), (to - from) / 1500);
+    const beats = new Set<number>();
+    for (let beat = from; beat < to; beat += step) beats.add(round(beat));
+    for (const motion of own) {
+      beats.add(round(motion.start));
+      beats.add(round(Math.max(motion.start, motion.end - 1e-3)));
+      beats.add(round(motion.end));
+    }
+    for (const key of anim?.keys[part] ?? []) if (key.beat >= from && key.beat <= to) beats.add(round(key.beat));
+    beats.add(round(to));
+    const length = to - from;
+    const points = [...beats]
+      .filter((beat) => beat >= from - 1e-6 && beat <= to + 1e-6)
+      .sort((a, b) => a - b)
+      .map((beat) => [...(movedValue(anim, motions, base, part, beat) ?? [...base[part as 'position']]).map(round), length <= 0 ? 0 : round((beat - from) / length)]);
+    const name = part === 'scale' ? 'scale' : world ? part : part === 'position' ? 'localPosition' : 'localRotation';
+    events.push({ b: round(from), t: 'AnimateTrack', d: { track, duration: round(length), [name]: points } });
+  }
+  return { events, parts };
+}
+
+const FOLLOWED: Record<string, string> = { head: 'Head', left: 'LeftHand', right: 'RightHand' };
+const DEPENDS: Record<string, (string | (string | number)[])[]> = {
+  energy: ['baseEnergy.xxx'],
+  score: ['baseRelativeScore.xxx'],
+  combo: ['baseCombo.xxx', [0.01, 0.01, 0.01, 'opMul']],
+  progress: ['baseSongTime.xxx', ['baseSongLength.xxx', 'opDiv']],
+};
+
+/** The events of the motions that follow the player or a game value: one each, for its block. */
+export function baseMotionEvents(motions: readonly SceneMotion[], base: Placing, world: boolean, track: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const motion of motions) {
+    if (isPeriodic(motion) || motion.end <= motion.start) continue;
+    const d: Record<string, unknown> = { track, duration: round(motion.end - motion.start) };
+    if (motion.kind === 'follow') {
+      const who = FOLLOWED[motion.source ?? 'head'] ?? 'Head';
+      const smooth = (motion.smooth ?? 0) > 0 ? `.s${String(Math.round((motion.smooth ?? 0) * 100) / 100).replace('.', '_')}` : '';
+      const offset = (motion.offset ?? [0, 0, 0]).map(round);
+      d.position = [`base${who}Position${smooth}`, ...(offset.some((value) => value !== 0) ? [[...offset, 'opAdd']] : [])];
+      if (motion.turn === true) d.rotation = [`base${who}Rotation${smooth}`];
+    } else {
+      const part = motion.part ?? 'scale';
+      const own = base[part].map(round);
+      const all = motion.axis >= 3;
+      const axis = Math.min(2, Math.max(0, Math.round(motion.axis)));
+      // (scale: as many times bigger as the value says; place and turn: so far on, so much more)
+      const by = own.map((value, k) => (all || k === axis ? round(part === 'scale' ? value * motion.size : motion.size) : 0));
+      const name = part === 'scale' ? 'scale' : world ? part : part === 'position' ? 'localPosition' : 'localRotation';
+      d[name] = [...(DEPENDS[motion.source ?? 'energy'] ?? DEPENDS.energy!), [...by, 'opMul'], [...own, 'opAdd']];
+    }
+    out.push({ b: round(motion.start), t: 'AnimateTrack', d });
   }
   return out;
 }

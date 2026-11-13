@@ -168,7 +168,7 @@ export class EnvView {
     // (hung on another: carried along by its motion)
     const carry = this.editor.linkCarry(key);
     const now = this.editor.sceneShown(key);
-    if (now === null || now.keyed.length === 0) return carry === null ? worldMatrix(data, index) : carry.multiply(worldMatrix(data, index));
+    if (now === null || (now.keyed.length === 0 && this.editor.motionsOf(key).length === 0)) return carry === null ? worldMatrix(data, index) : carry.multiply(worldMatrix(data, index));
     const local = new Matrix4().compose(new Vector3(now.position[0], now.position[1], -now.position[2]), new Quaternion().fromArray(dataRotation(now.rotation)), new Vector3().fromArray(now.scale));
     const parent = data.objects[index]!.parent;
     const world = parent < 0 ? local : worldMatrix(data, parent).multiply(local);
@@ -194,7 +194,7 @@ export class EnvView {
     this.controls.enabled = usable;
     this.controls.getHelper().visible = usable;
     if (data === null) return;
-    const moving = selection.some((item) => this.editor.animOf(item) !== undefined || this.editor.linkParentOf(item) !== null);
+    const moving = selection.some((item) => this.editor.animOf(item) !== undefined || this.editor.linkParentOf(item) !== null || this.editor.motionsOf(item).length > 0);
     const key = `${selection.join(',')}|${String(this.editor.version)}|${String(data.objects.length)}|${moving ? this.editor.playhead().toFixed(3) : ''}`;
     if ((key === this.framedKey && this.children?.data === data) || this.dragging !== null) return;
     this.framedKey = key;
@@ -326,7 +326,8 @@ export class EnvView {
       }
     }
     editor.applyScene(keys, (key, values) => {
-      if (key === keys[0]) return { [part]: now };
+      // (the first: where the handle left it — a ready motion on it: by as much, its own place kept)
+      if (key === keys[0] && editor.motionsOf(key).length === 0) return { [part]: now };
       // (the others: by as much — sizes by as many times)
       const own = values[part];
       return { [part]: own.map((value, axis) => tidy(part === 'scale' ? (Math.abs(was[axis]!) < 1e-9 ? value : (value * now[axis]!) / was[axis]!) : value + now[axis]! - was[axis]!)) as [number, number, number] };

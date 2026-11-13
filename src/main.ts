@@ -136,8 +136,9 @@ window.addEventListener(
     else if (ctrl && event.code === 'KeyV' && editor.pasteAnimKeys()) void 0;
     else if (ctrl && event.code === 'KeyD') envPanel.copy();
     else if (!ctrl && (event.code === 'Delete' || event.code === 'Backspace')) {
-      // (keys picked on the timeline: they go first, not the object)
+      // (keys or a motion picked on the timeline: they go first, not the object)
       if (editor.animSelection.size > 0) editor.removeAnimKeys(new Set(editor.animSelection));
+      else if (editor.motionSelection !== null) editor.removeMotion(editor.motionSelection);
       else envPanel.remove();
     } else if (!ctrl && event.code === 'KeyK' && editor.envSelection.length > 0) editor.addAnimKeys(editor.envSelection, [envView.mode === 'rotate' ? 'rotation' : envView.mode === 'scale' ? 'scale' : 'position']);
     else if (!ctrl && event.code === 'Escape' && editor.linkPicking !== null) {

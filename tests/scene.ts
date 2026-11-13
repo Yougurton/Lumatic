@@ -2,7 +2,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 import { chromaRotation, dataRotation, flipZ, localFromWorld, rayBox } from '../src/editor/env-scene';
 import { expandObjects, FOG_ID, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
 import { arrayCount, arrayPlacings, mirrored } from '../src/editor/env-array';
-import { animEvents, animTrack, animValue, linkDelta, linkTrack, offsetAnim } from '../src/editor/env-anim';
+import { animEvents, animTrack, animValue, baseMotionEvents, defaultMotion, linkDelta, linkTrack, motionEvents, movedValue, offsetAnim } from '../src/editor/env-anim';
 
 /**
  * The scene editor's numbers: Chroma's turns and places to the 3D view's and back, a click's ray
@@ -172,6 +172,31 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   const smooth = { target: 'x', keys: { position: [{ id: 'a', beat: 0, value: v3(0, 0, 0) }, { id: 'b', beat: 1, value: v3(1, 2, 0) }, { id: 'c', beat: 2, value: v3(2, 0, 0) }] }, spline: { position: true } };
   check('a smooth curve: through its keys, rounder between them', JSON.stringify(animValue(smooth, 'position', 1)) === JSON.stringify([1, 2, 0]) && animValue(smooth, 'position', 0.5)![1]! > 1, animValue(smooth, 'position', 0.5));
   check('an offset animation: as far aside, as many times bigger', JSON.stringify(offsetAnim({ target: 'o:a', keys: { position: [{ id: 'a', beat: 0, value: v3(1, 0, 0) }], scale: [{ id: 'b', beat: 0, value: v3(2, 2, 2) }] } }, { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }, { position: [0, 0, 5], rotation: [0, 0, 0], scale: [2, 2, 2] }, 'o:b').keys) === JSON.stringify({ position: [{ id: 'a', beat: 0, value: [1, 0, 5] }], scale: [{ id: 'b', beat: 0, value: [4, 4, 4] }] }));
+}
+
+// stage 6: ready motions, the player's colours
+{
+  const base = { position: [1, 2, 3], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const orbit = { ...defaultMotion('orbit', 'o:a', 4, 'm1'), period: 4, size: 2 };
+  const near = (a: readonly number[] | null, b: readonly number[]) => a !== null && a.every((value, k) => Math.abs(value - b[k]!) < 1e-3);
+  check('an orbit: starts where it stands, a quarter round on — 2 m aside and 2 m on', near(movedValue(undefined, [orbit], base, 'position', 4), [1, 2, 3]) && near(movedValue(undefined, [orbit], base, 'position', 5), [-1, 2, 5]), movedValue(undefined, [orbit], base, 'position', 5));
+  check('outside its block: nothing', movedValue(undefined, [orbit], base, 'position', 13) === null);
+  const spin = { ...defaultMotion('spin', 'o:a', 0, 'm2'), period: 8 };
+  check('a spin: half a round in half its period, added to the keys', near(movedValue({ target: 'o:a', keys: { rotation: [{ id: 'k', beat: 0, value: [0, 10, 0] }] } }, [spin], base, 'rotation', 4), [0, 190, 0]));
+  const pulse = { ...defaultMotion('pulse', 'o:a', 0, 'm3'), period: 2, size: 0.5 };
+  check('a pulse: biggest half way', near(movedValue(undefined, [pulse], base, 'scale', 1), [1.5, 1.5, 1.5]));
+  const written = motionEvents({ target: 'o:a', keys: { position: [{ id: 'k', beat: 0, value: [1, 2, 3] }, { id: 'l', beat: 2, value: [1, 4, 3] }] } }, [orbit], base, true, 't');
+  const points = (written.events[0]!.d as { position: number[][] }).position;
+  check('written: the part sampled from the first key to the motion\'s end, back to the keys after it', written.parts.has('position') && written.events.length === 1 && written.events[0]!.b === 0 && JSON.stringify(points.at(-1)) === JSON.stringify([1, 4, 3, 1]) && points.length > 30, points.length);
+  const follow = { ...defaultMotion('follow', 'o:a', 8, 'm4'), smooth: 10, offset: [0, 0, 2], turn: true };
+  check('follow: the head smoothed, so far in front, turned with it', JSON.stringify(baseMotionEvents([follow], base, true, 't')) === JSON.stringify([{ b: 8, t: 'AnimateTrack', d: { track: 't', duration: 8, position: ['baseHeadPosition.s10', [0, 0, 2, 'opAdd']], rotation: ['baseHeadRotation.s10'] } }]));
+  const depends = { ...defaultMotion('depends', 'o:a', 0, 'm5'), size: 2, source: 'progress' };
+  check('depends: as many times bigger as the song is on', JSON.stringify((baseMotionEvents([depends], { ...base, scale: [1, 2, 1] }, false, 't')[0]!.d as { scale: unknown }).scale) === JSON.stringify(['baseSongTime.xxx', ['baseSongLength.xxx', 'opDiv'], [2, 4, 2, 'opMul'], [1, 2, 1, 'opAdd']]));
+  const shape = { uid: 'a', name: 'cube', kind: 'shape' as const, shape: 'Cube' as const, material: 'm', position: [1, 2, 3] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
+  const fragment = modsFragment({ materials: { m: { shader: 'Standard', color: [1, 1, 1, 0.5], playerColor: 'baseNote0Color' } }, objects: [shape], motions: [orbit, follow] }, null);
+  const events = fragment.customEvents as { t: string; d: Record<string, unknown> }[];
+  check('a motion alone: the object on its track, sampled and following events', (fragment.environment.at(-1) as { track?: string }).track === animTrack('o:a') && events.filter((event) => event.d.track === animTrack('o:a')).length === 2);
+  check('a material coloured as the left notes, its alpha kept', events.some((event) => event.d.track === animTrack('m:m') && JSON.stringify(event.d.color) === JSON.stringify(['baseNote0Color', [1, 1, 1, 0.5, 'opMul']])) && (fragment.materials.m as { track?: string }).track === animTrack('m:m'));
 }
 
 console.log('checks', checks, 'failures', failures);
