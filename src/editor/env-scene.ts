@@ -173,7 +173,10 @@ export function rayBox(origin: Vector3, direction: Vector3, box: Box, matrix: Ma
     if (near > far) return null;
   }
   if (far < 0) return null;
-  const local = new Vector3(from[0]! + way[0]! * Math.max(near, 0), from[1]! + way[1]! * Math.max(near, 0), from[2]! + way[2]! * Math.max(near, 0));
+  // (from inside the box — a big thing the camera stands in: where the ray leaves it, so the things
+  // inside it come first)
+  const at = near < 0 ? far : near;
+  const local = new Vector3(from[0]! + way[0]! * at, from[1]! + way[1]! * at, from[2]! + way[2]! * at);
   return local.applyMatrix4(matrix).distanceTo(origin);
 }
 
@@ -186,4 +189,42 @@ export function localFromWorld(world: Matrix4, parentWorld: Matrix4): { position
   const scale = new Vector3();
   local.decompose(position, quaternion, scale);
   return { position: flipZ([position.x, position.y, position.z]), rotation: chromaRotation([quaternion.x, quaternion.y, quaternion.z, quaternion.w]), scale: [tidy(scale.x), tidy(scale.y), tidy(scale.z)] };
+}
+
+/**
+ * The roots of what Chroma added to an environment (copies of objects, shapes), in the order it made
+ * them: the objects past the game's own `count` that hang on one of the game's (or on nothing) — its
+ * own helpers (track holders, light effects) left out.
+ */
+export function generatedRoots(data: EnvironmentData, count: number): number[] {
+  const out: number[] = [];
+  for (let index = count; index < data.objects.length; index++) {
+    const object = data.objects[index]!;
+    if (object.chromaGenerated !== true || object.name.startsWith('__chroma')) continue;
+    // (hop out of track holders: a copy's parent may be one)
+    let parent = object.parent;
+    while (parent >= count && data.objects[parent]?.name.startsWith('__chroma_track_') === true) parent = data.objects[parent]!.parent;
+    if (parent < count) out.push(index);
+  }
+  return out;
+}
+
+/** The root of the added thing an object belongs to (itself, or above it; null: one of the game's). */
+export function generatedRootOf(data: EnvironmentData, count: number, index: number): number | null {
+  let at = index;
+  for (;;) {
+    const object = data.objects[at];
+    if (object === undefined || at < count) return null;
+    if (object.parent < count) return at;
+    at = object.parent;
+  }
+}
+
+/** The children of each object (for walking down from one). */
+export function childrenOf(data: EnvironmentData): Map<number, number[]> {
+  const out = new Map<number, number[]>();
+  data.objects.forEach((object, index) => {
+    if (object.parent >= 0) out.set(object.parent, [...(out.get(object.parent) ?? []), index]);
+  });
+  return out;
 }

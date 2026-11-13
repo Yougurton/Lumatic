@@ -307,6 +307,55 @@
         background: none;
         font-size: 12px;
       }
+      .env-gap {
+        width: 10px;
+      }
+      .env-section {
+        padding: 6px 6px 2px;
+        color: var(--dim);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .env-swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        flex-shrink: 0;
+      }
+      .env-empty {
+        padding: 4px 8px;
+      }
+      .env-field {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .env-field > span:first-child {
+        color: var(--dim);
+        flex-shrink: 0;
+      }
+      .env-field select,
+      .env-field input[type='text'] {
+        min-width: 0;
+        flex: 1;
+        max-width: 190px;
+      }
+      .env-pair {
+        display: flex;
+        gap: 4px;
+        min-width: 0;
+        flex: 1;
+        justify-content: flex-end;
+      }
+      .env-name-input {
+        font-size: 14px;
+        font-weight: 600;
+        width: 100%;
+      }
       .env-count {
         padding: 4px 6px;
         border-top: 1px solid var(--line);
@@ -3454,7 +3503,7 @@
         <span class="grow"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><div id="env-tools"><button data-mode="translate" class="active" title="Двигать (W)">↔ Двигать</button><button data-mode="rotate" title="Вращать (E)">⟳ Вращать</button><button data-mode="scale" title="Масштаб (R)">⤢ Масштаб</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><div id="env-tools"><button data-mode="all" class="active" title="Двигать и вращать сразу: стрелки и кольца (Q)">✥ Всё</button><button data-mode="translate" title="Двигать (W)">↔ Двигать</button><button data-mode="rotate" title="Вращать (E)">⟳ Вращать</button><button data-mode="scale" title="Масштаб (R)">⤢ Масштаб</button><button id="env-snap" title="Привязка ручек: шаг 0,1 м, 15°, 0,1 размера">⊞ Привязка</button><span class="env-gap"></span><button id="env-add" title="Новая фигура перед камерой: куб, сфера, цилиндр…">＋ Объект ▾</button><button id="env-add-light" title="Новая лампа перед камерой: ею управляют события света">＋ Свет</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
         <aside id="side">
           <div id="library"></div>
           <div id="note-panel"></div>

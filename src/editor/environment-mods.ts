@@ -20,6 +20,77 @@ export interface EnvironmentMods {
   rings?: Record<string, RingLook>;
   /** The scene editor's changes to single objects of the game's environment. */
   scene?: SceneEdit[];
+  /** Objects the scene editor added: copies of the game's objects and shapes of its own. */
+  objects?: SceneObject[];
+  /** The materials its shapes are made of, by name. */
+  materials?: Record<string, SceneMaterial>;
+}
+
+export const SHAPES = ['Cube', 'Sphere', 'Cylinder', 'Capsule', 'Plane', 'Quad', 'Triangle'] as const;
+export type Shape = (typeof SHAPES)[number];
+
+/** Chroma's shaders for a shape's material; the two "light" ones make it a lamp the lights' events
+ *  drive. */
+export const SHADERS = ['Standard', 'Glowing', 'OpaqueLight', 'TransparentLight', 'BaseWater', 'BTSPillar', 'BillieWater', 'WaterfallMirror', 'InterscopeConcrete', 'InterscopeCar'] as const;
+export type Shader = (typeof SHADERS)[number];
+export const isLightShader = (shader: string) => shader === 'OpaqueLight' || shader === 'TransparentLight';
+
+export interface SceneMaterial {
+  shader: Shader;
+  /** Red, green, blue, alpha (0…1). */
+  color: [number, number, number, number];
+}
+
+/**
+ * An object the scene editor added. A copy: another of a game's object (found by its exact Chroma id),
+ * placed by its own (local) values as the original is. A shape: one of Chroma's primitives, placed in
+ * the world (metres, degrees), made of a named material — a lamp when the material is a light one
+ * (`light`: the event type that drives it and its light ID).
+ */
+export interface SceneObject {
+  uid: string;
+  name: string;
+  kind: 'copy' | 'shape';
+  /** A copy: the original's Chroma id. */
+  source?: string;
+  shape?: Shape;
+  material?: string;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+  hidden?: boolean;
+  light?: { type: number; id: number };
+}
+
+/** An added object as Chroma's environment command (null: nothing to write — a shape without its
+ *  material). */
+export function objectCommand(object: SceneObject, materials: Record<string, SceneMaterial>): Record<string, unknown> | null {
+  const command: Record<string, unknown> = {};
+  if (object.kind === 'copy') {
+    if (object.source === undefined) return null;
+    Object.assign(command, { id: object.source, lookupMethod: 'Exact', duplicate: 1, localPosition: object.position.map(round), localRotation: object.rotation.map(round), scale: object.scale.map(round) });
+  } else {
+    const material = object.material === undefined ? undefined : materials[object.material];
+    if (object.shape === undefined || object.material === undefined || material === undefined) return null;
+    Object.assign(command, { geometry: { type: object.shape, material: object.material }, position: object.position.map(round), rotation: object.rotation.map(round), scale: object.scale.map(round) });
+    if (isLightShader(material.shader) && object.light !== undefined) command.components = { ILightWithId: { type: object.light.type, lightID: object.light.id } };
+  }
+  if (object.hidden === true) command.active = false;
+  return command;
+}
+
+/** The commands of the added objects and the materials they use. */
+export function objectsFragment(mods: EnvironmentMods): { environment: Record<string, unknown>[]; materials: Record<string, unknown> } {
+  const materials = mods.materials ?? {};
+  const environment: Record<string, unknown>[] = [];
+  const used = new Set<string>();
+  for (const object of mods.objects ?? []) {
+    const command = objectCommand(object, materials);
+    if (command === null) continue;
+    environment.push(command);
+    if (object.kind === 'shape' && object.material !== undefined) used.add(object.material);
+  }
+  return { environment, materials: Object.fromEntries([...used].map((name) => [name, { shader: materials[name]!.shader, color: materials[name]!.color.map(round) }])) };
 }
 
 /**
@@ -251,7 +322,10 @@ export function modsFragment(mods: EnvironmentMods | undefined, data: Environmen
     const command = sceneCommand(edit);
     if (command !== null) fragment.environment.push(command);
   }
-  if (data === null) return fragment;
+  if (data === null) {
+    addObjects(fragment, mods);
+    return fragment;
+  }
   const environment = data.id;
   for (const name of mods.hidden ?? []) fragment.environment.push({ id: partId(environment, name), lookupMethod: 'Regex', active: false });
   const systems = ringSystemParts(data);
@@ -276,7 +350,15 @@ export function modsFragment(mods: EnvironmentMods | undefined, data: Environmen
       fragment.environment.push({ id: ringLightId(environment, ring, light.name), lookupMethod: 'Regex', scale: [round(light.scale[0] * thickness), round(light.scale[1] * length), round(light.scale[2] * thickness)] });
     }
   }
+  addObjects(fragment, mods);
   return fragment;
+}
+
+/** The scene editor's own objects: the last of the fragment (the 3D view tells them by that). */
+function addObjects(fragment: EnvironmentFragment, mods: EnvironmentMods) {
+  const added = objectsFragment(mods);
+  fragment.environment.push(...added.environment);
+  Object.assign(fragment.materials, added.materials);
 }
 
 // ----- into a difficulty's custom data ------------------------------------------------------------------
@@ -360,7 +442,7 @@ export function fragmentRequirements(mods: EnvironmentMods | undefined): string[
   const out = new Set<string>();
   if (preset !== undefined) for (const mod of ['Chroma', ...(preset.noodle ? ['Noodle Extensions'] : [])]) out.add(mod);
   if (geometrySystems(mods).length > 0) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
-  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null)) out.add('Chroma');
+  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0) out.add('Chroma');
   return [...out];
 }
 
@@ -370,6 +452,6 @@ export function geometrySystems(mods: EnvironmentMods | undefined): string[] {
 }
 
 export function hasMods(mods: EnvironmentMods | undefined) {
-  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null));
+  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null) || (mods.objects ?? []).length > 0);
 }
 

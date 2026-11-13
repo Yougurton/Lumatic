@@ -48,7 +48,8 @@ import { lightGroupName, otherEventName, setEnvironmentTracks } from './names';
 import type { MapFolder } from './platform';
 import { choose } from './menu';
 import { tr, translate } from './i18n';
-import { sceneCommand, type SceneEdit } from './environment-mods';
+import { isLightShader, sceneCommand, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
+import { localOf, sceneTree } from './env-scene';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
 import { readPreview, writePreview } from './map-settings';
@@ -896,9 +897,9 @@ export class Editor {
 
   /** The Environment side is open: the scene's tree and an object's settings beside the 3D view. */
   envMode = false;
-  /** The picked objects of the environment (their places among its objects; the first: the one the
-   *  settings show). */
-  envSelection: number[] = [];
+  /** The picked things of the scene: "g:<index>" — a game's object (its place among the environment's
+   *  objects), "o:<uid>" — an added one. The first: the one the handles are on. */
+  envSelection: string[] = [];
   /** The environment as the game has it (the scene's tree is of it; set by the scene panel). */
   envSceneData: EnvironmentData | null = null;
 
@@ -911,9 +912,10 @@ export class Editor {
     this.emit('all');
   }
 
-  selectEnv(indices: readonly number[], mode: 'replace' | 'toggle' = 'replace') {
-    if (mode === 'replace') this.envSelection = [...indices];
-    else for (const index of indices) this.envSelection = this.envSelection.includes(index) ? this.envSelection.filter((item) => item !== index) : [...this.envSelection, index];
+  selectEnv(keys: readonly string[], mode: 'replace' | 'toggle' | 'add' = 'replace') {
+    if (mode === 'replace') this.envSelection = [...keys];
+    else if (mode === 'add') this.envSelection = [...this.envSelection, ...keys.filter((key) => !this.envSelection.includes(key))];
+    else for (const key of keys) this.envSelection = this.envSelection.includes(key) ? this.envSelection.filter((item) => item !== key) : [...this.envSelection, key];
     this.emit('selection');
   }
 
@@ -922,45 +924,99 @@ export class Editor {
     return this.project?.environmentMods?.scene ?? [];
   }
 
-  private putScene(scene: SceneEdit[]) {
+  /** The objects the scene editor added (copies, shapes). */
+  sceneObjects(): SceneObject[] {
+    return this.project?.environmentMods?.objects ?? [];
+  }
+
+  sceneMaterials(): Record<string, SceneMaterial> {
+    return this.project?.environmentMods?.materials ?? {};
+  }
+
+  /** The scene's part of the environment's changes put (what's empty dropped). */
+  private putScene(scene: SceneEdit[], objects: SceneObject[] = this.sceneObjects(), materials: Record<string, SceneMaterial> = this.sceneMaterials()) {
     const project = this.project;
     if (project === null) return;
     const kept = scene.filter((edit) => sceneCommand(edit) !== null);
     const mods: EnvironmentMods = { ...(project.environmentMods ?? {}) };
     if (kept.length > 0) mods.scene = kept;
     else delete mods.scene;
-    project.environmentMods = hasMods(mods) ? mods : undefined;
+    if (objects.length > 0) mods.objects = objects;
+    else delete mods.objects;
+    if (Object.keys(materials).length > 0) mods.materials = materials;
+    else delete mods.materials;
+    project.environmentMods = hasMods(mods) || mods.materials !== undefined ? mods : undefined;
   }
 
   private sceneTimer: number | null = null;
 
   /** The scene's changes shown in the 3D view (a moment after the last one: the environment is built
-   *  anew for it). */
+   *  anew for it); the lamps there are then counted again (shapes that are lamps get their rows). */
   private showScene(now = false) {
     if (this.sceneTimer !== null) window.clearTimeout(this.sceneTimer);
     const run = () => {
       this.sceneTimer = null;
-      void this.previewEnvironmentMods(this.project?.environmentMods ?? {}).then(() => this.emit('selection'));
+      const before = this.preview.environmentData();
+      void this.previewEnvironmentMods(this.project?.environmentMods ?? {}).then(() => {
+        this.emit('selection');
+        // (the view loads the environment on its own: looked at again once it has)
+        let tries = 0;
+        const look = () => {
+          if (this.preview.environmentData() === before && tries++ < 40) {
+            window.setTimeout(look, 150);
+            return;
+          }
+          this.recountLights();
+          this.emit('selection');
+        };
+        look();
+      });
     };
     if (now) run();
     else this.sceneTimer = window.setTimeout(run, 150);
   }
 
+  /** The environment's lamps counted again (the scene's lamps come and go). */
+  private recountLights() {
+    this.lightInfo = this.preview.lights();
+    const next = new Map<number, number[]>();
+    for (const light of this.lightInfo) {
+      if (!isLightType(light.type)) continue;
+      next.set(light.type, [...(next.get(light.type) ?? []), light.lightId]);
+    }
+    for (const list of next.values()) list.sort((a, b) => a - b);
+    if (JSON.stringify([...next]) === JSON.stringify([...this.lightsByType])) return;
+    this.lightsByType = next;
+    this.buildRows();
+    this.emit('rows');
+  }
+
   private sceneMerge: { key: string; at: number } | null = null;
 
-  /**
-   * Changes the objects with these Chroma ids (one undo step; `merge`: changes of one kind in a row —
-   * a drum turned — one step). An edit that changes nothing any more is dropped.
-   */
-  changeScene(ids: readonly string[], patch: (edit: SceneEdit) => void, merge?: string) {
-    const project = this.project;
-    if (project === null || ids.length === 0) return;
+  /** One undo step for a change to the scene (`merge`: changes of one kind in a row — one step). */
+  private sceneStep(merge?: string) {
     const now = performance.now();
     if (merge !== undefined && this.sceneMerge?.key === merge && now - this.sceneMerge.at < 1500) this.sceneMerge.at = now;
     else {
       this.checkpoint();
       this.sceneMerge = merge === undefined ? null : { key: merge, at: now };
     }
+  }
+
+  private sceneChanged() {
+    this.dirty = true;
+    this.version++;
+    this.showScene();
+    this.emit('selection');
+  }
+
+  /**
+   * Changes the game's objects with these Chroma ids (one undo step). An edit that changes nothing any
+   * more is dropped.
+   */
+  changeScene(ids: readonly string[], patch: (edit: SceneEdit) => void, merge?: string) {
+    if (this.project === null || ids.length === 0) return;
+    this.sceneStep(merge);
     const scene = structuredClone(this.sceneEdits());
     for (const id of ids) {
       let edit = scene.find((item) => item.id === id);
@@ -968,10 +1024,234 @@ export class Editor {
       patch(edit);
     }
     this.putScene(scene);
-    this.dirty = true;
-    this.version++;
-    this.showScene();
-    this.emit('selection');
+    this.sceneChanged();
+  }
+
+  /** Changes the added objects with these uids (one undo step). */
+  changeObjects(uids: readonly string[], patch: (object: SceneObject) => void, merge?: string) {
+    if (this.project === null || uids.length === 0) return;
+    this.sceneStep(merge);
+    const objects = structuredClone(this.sceneObjects());
+    for (const object of objects) if (uids.includes(object.uid)) patch(object);
+    this.putScene(this.sceneEdits(), objects);
+    this.sceneChanged();
+  }
+
+  /** Adds objects to the scene (picked after). */
+  addSceneObjects(added: SceneObject[], materials?: Record<string, SceneMaterial>) {
+    if (this.project === null || added.length === 0) return;
+    this.sceneStep();
+    this.putScene(this.sceneEdits(), [...structuredClone(this.sceneObjects()), ...added], { ...this.sceneMaterials(), ...(materials ?? {}) });
+    this.envSelection = added.map((object) => `o:${object.uid}`);
+    this.sceneChanged();
+  }
+
+  removeSceneObjects(uids: readonly string[]) {
+    if (this.project === null || uids.length === 0) return;
+    this.sceneStep();
+    this.putScene(this.sceneEdits(), this.sceneObjects().filter((object) => !uids.includes(object.uid)));
+    this.envSelection = this.envSelection.filter((key) => !uids.includes(key.slice(2)) || !key.startsWith('o:'));
+    this.sceneChanged();
+  }
+
+  /** A material set (new or changed; `rename`: its new name — the shapes made of it follow). */
+  setSceneMaterial(name: string, material: SceneMaterial | null, rename?: string, merge?: string) {
+    if (this.project === null) return;
+    this.sceneStep(merge);
+    const materials = structuredClone(this.sceneMaterials());
+    let objects = this.sceneObjects();
+    if (material === null) delete materials[name];
+    else if (rename !== undefined && rename !== name && rename.trim() !== '' && materials[rename] === undefined) {
+      delete materials[name];
+      materials[rename] = material;
+      objects = structuredClone(objects).map((object) => (object.material === name ? { ...object, material: rename } : object));
+    } else materials[name] = material;
+    this.putScene(this.sceneEdits(), objects, materials);
+    this.sceneChanged();
+  }
+
+  private envTreeCache: { data: EnvironmentData; tree: ReturnType<typeof sceneTree> } | null = null;
+
+  /** The game's environment as a tree (null: not loaded yet). */
+  envTree() {
+    const data = this.envSceneData;
+    if (data === null) return null;
+    if (this.envTreeCache?.data !== data) this.envTreeCache = { data, tree: sceneTree(data) };
+    return this.envTreeCache.tree;
+  }
+
+  /** Where a picked thing stands (its own values, as written) and whether it's hidden; `own`: a game
+   *  object's values as the game has them; `id`: its Chroma id (null: it can't be changed). */
+  sceneValues(key: string): { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; hidden: boolean; own?: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }; id?: string | null; object?: SceneObject } | null {
+    if (key.startsWith('o:')) {
+      const object = this.sceneObjects().find((item) => item.uid === key.slice(2));
+      return object === undefined ? null : { position: object.position, rotation: object.rotation, scale: object.scale, hidden: object.hidden === true, object };
+    }
+    const data = this.envSceneData;
+    const index = Number(key.slice(2));
+    const own = data === null ? null : localOf(data, index);
+    if (own === null) return null;
+    const id = this.envTree()?.nodes.get(index)?.id ?? null;
+    const edit = id === null ? undefined : this.sceneEdits().find((item) => item.id === id);
+    return { position: edit?.position ?? own.position, rotation: edit?.rotation ?? own.rotation, scale: edit?.scale ?? own.scale, hidden: edit?.hidden === true, own, id };
+  }
+
+  /**
+   * Places, turns, sizes or hides picked things — the game's objects and the added ones alike (one
+   * undo step). `change`: what a thing gets, from what it has now ('reset': a game's object back as
+   * the game has it).
+   */
+  applyScene(keys: readonly string[], change: (key: string, now: NonNullable<ReturnType<Editor['sceneValues']>>) => Partial<{ position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; hidden: boolean }> | 'reset', merge?: string) {
+    if (this.project === null || keys.length === 0) return;
+    const scene = structuredClone(this.sceneEdits());
+    const objects = structuredClone(this.sceneObjects());
+    let any = false;
+    const same = (a: readonly number[], b: readonly number[]) => a.every((value, k) => Math.abs(value - b[k]!) < 1e-6);
+    for (const key of keys) {
+      const now = this.sceneValues(key);
+      if (now === null) continue;
+      const next = change(key, now);
+      if (now.object !== undefined) {
+        const object = objects.find((item) => item.uid === now.object!.uid);
+        if (object === undefined || next === 'reset') continue;
+        if (next.position !== undefined) object.position = next.position;
+        if (next.rotation !== undefined) object.rotation = next.rotation;
+        if (next.scale !== undefined) object.scale = next.scale;
+        if (next.hidden !== undefined) {
+          if (next.hidden) object.hidden = true;
+          else delete object.hidden;
+        }
+        any = true;
+        continue;
+      }
+      if (now.id === null || now.id === undefined || now.own === undefined) continue;
+      let edit = scene.find((item) => item.id === now.id);
+      if (edit === undefined) scene.push((edit = { id: now.id }));
+      if (next === 'reset') {
+        delete edit.position;
+        delete edit.rotation;
+        delete edit.scale;
+        delete edit.hidden;
+      } else {
+        // (back where the game has it: no change kept for it)
+        for (const part of ['position', 'rotation', 'scale'] as const) {
+          const value = next[part];
+          if (value === undefined) continue;
+          if (same(value, now.own[part])) delete edit[part];
+          else edit[part] = value;
+        }
+        if (next.hidden !== undefined) {
+          if (next.hidden) edit.hidden = true;
+          else delete edit.hidden;
+        }
+      }
+      any = true;
+    }
+    if (!any) return;
+    this.sceneStep(merge);
+    this.putScene(scene, objects);
+    this.sceneChanged();
+  }
+
+  /**
+   * The map's own environment entries (made elsewhere, not Lumatic's) taken into the scene: an entry
+   * that moves, turns, sizes or hides one object by its exact id becomes a change to that object; a
+   * shape with a named or its own material becomes a shape of the scene. What's taken is from then on
+   * written by Lumatic (the map's own entries of it go at the next save); the rest stays the map's.
+   */
+  async importMapEnvironment() {
+    const map = this.map;
+    const row = this.row;
+    const project = this.project;
+    const tree = this.envTree();
+    if (map === null || row === null || project === null || tree === null) return;
+    const text = await map.folder.readText(difficultyFile(row));
+    if (difficultyVersion(text) !== '3') {
+      this.setStatus(tr('Записи окружения берутся из сложностей формата v3 — переведите сложность в v3 (Свойства → копия в v3)'));
+      return;
+    }
+    const custom = ((JSON.parse(text) as { customData?: Record<string, unknown> }).customData ?? {}) as { environment?: Record<string, unknown>[]; materials?: Record<string, Record<string, unknown>> };
+    // (Lumatic's own entries, as written last, are not the map's)
+    const ours = new Map<string, number>();
+    for (const entry of project.writtenEnvironment?.environment ?? []) ours.set(JSON.stringify(entry), (ours.get(JSON.stringify(entry)) ?? 0) + 1);
+    const known = new Set([...tree.nodes.values()].flatMap((node) => (node.id === null ? [] : [node.id])));
+    const vector = (value: unknown): [number, number, number] | undefined => (Array.isArray(value) && value.length === 3 && value.every((item) => typeof item === 'number') ? (value as [number, number, number]) : undefined);
+    const only = (entry: Record<string, unknown>, keys: string[]) => Object.keys(entry).every((key) => keys.includes(key));
+    const scene = structuredClone(this.sceneEdits());
+    const objects = structuredClone(this.sceneObjects());
+    const materials = structuredClone(this.sceneMaterials());
+    const taken: Record<string, unknown>[] = [];
+    const takenMaterials: Record<string, unknown> = {};
+    let left = 0;
+    for (const entry of custom.environment ?? []) {
+      const key = JSON.stringify(entry);
+      if ((ours.get(key) ?? 0) > 0) {
+        ours.set(key, ours.get(key)! - 1);
+        continue;
+      }
+      if (typeof entry.id === 'string' && entry.lookupMethod === 'Exact' && known.has(entry.id) && only(entry, ['id', 'lookupMethod', 'active', 'localPosition', 'localRotation', 'scale'])) {
+        let edit = scene.find((item) => item.id === entry.id);
+        if (edit === undefined) scene.push((edit = { id: entry.id }));
+        if (entry.active === false) edit.hidden = true;
+        const position = vector(entry.localPosition);
+        const rotation = vector(entry.localRotation);
+        const scale = vector(entry.scale);
+        if (position !== undefined) edit.position = position;
+        if (rotation !== undefined) edit.rotation = rotation;
+        if (scale !== undefined) edit.scale = scale;
+        taken.push(entry);
+        continue;
+      }
+      const geometry = entry.geometry as { type?: string; material?: unknown } | undefined;
+      if (geometry !== undefined && (SHAPES as readonly string[]).includes(geometry.type ?? '') && only(entry, ['geometry', 'position', 'rotation', 'scale', 'active', 'components'])) {
+        const source = typeof geometry.material === 'string' ? custom.materials?.[geometry.material] : (geometry.material as Record<string, unknown> | undefined);
+        const light = (entry.components as { ILightWithId?: { type?: number; lightID?: number } } | undefined)?.ILightWithId;
+        const plain = entry.components === undefined || (Object.keys(entry.components as object).length === 1 && light !== undefined);
+        const color = Array.isArray(source?.color) ? (source.color as number[]) : [1, 1, 1, 1];
+        if (source !== undefined && (SHADERS as readonly string[]).includes(String(source.shader)) && only(source, ['shader', 'color']) && plain) {
+          let name = typeof geometry.material === 'string' ? geometry.material : `${tr('Материал')} ${String(Object.keys(materials).length + 1)}`;
+          const made: SceneMaterial = { shader: source.shader as SceneMaterial['shader'], color: [color[0] ?? 1, color[1] ?? 1, color[2] ?? 1, color[3] ?? 1] };
+          // (a name taken by another look: a name of its own)
+          while (materials[name] !== undefined && JSON.stringify(materials[name]) !== JSON.stringify(made)) name = `${name} ·`;
+          materials[name] = made;
+          if (typeof geometry.material === 'string') takenMaterials[geometry.material] = source;
+          objects.push({
+            uid: newId('o'),
+            name: `${geometry.type!} ${String(objects.length + 1)}`,
+            kind: 'shape',
+            shape: geometry.type as SceneObject['shape'],
+            material: name,
+            position: vector(entry.position) ?? [0, 0, 0],
+            rotation: vector(entry.rotation) ?? [0, 0, 0],
+            scale: vector(entry.scale) ?? [1, 1, 1],
+            ...(entry.active === false ? { hidden: true } : {}),
+            ...(isLightShader(made.shader) && light?.lightID !== undefined ? { light: { type: light.type ?? 0, id: light.lightID } } : {}),
+          });
+          taken.push(entry);
+          continue;
+        }
+      }
+      left++;
+    }
+    if (taken.length === 0) {
+      this.setStatus(left === 0 ? tr('У карты нет своих записей окружения') : tr('Своих записей окружения: {0}, но ни одну нельзя взять в сцену (они остаются в карте как есть)', left));
+      return;
+    }
+    this.sceneStep();
+    this.putScene(scene, objects, materials);
+    // (from now on Lumatic's: taken out of the map with what it wrote before, at the next save)
+    const written = project.writtenEnvironment ?? { environment: [], materials: {}, customEvents: [], pointDefinitions: {} };
+    project.writtenEnvironment = { ...written, environment: [...written.environment, ...taken], materials: { ...written.materials, ...takenMaterials } };
+    this.sceneChanged();
+    this.setStatus(tr('Взято в сцену записей: {0}; осталось в карте как есть: {1}', taken.length, left));
+  }
+
+  /** A light ID no lamp of this event type has yet (the game's, the scene's). */
+  freeLightId(type: number, taken: readonly number[] = []): number {
+    const used = new Set<number>([...(this.lightsByType.get(type) ?? []), ...this.sceneObjects().filter((object) => object.light?.type === type).map((object) => object.light!.id), ...taken]);
+    let id = Math.max(100, ...used) + 1;
+    while (used.has(id)) id++;
+    return id;
   }
 
   /** While the Environment window is open: every lamp on, white at 30% (what's taken away shows). */
@@ -1842,7 +2122,7 @@ export class Editor {
     const made = new Set((project.effects ?? []).filter((effect) => effect.custom !== true).map((effect) => effect.id));
     const clips = made.size === 0 ? project.clips : project.clips.filter((clip) => clip.group === undefined || !made.has(clip.group));
     const raw = made.size === 0 ? project.raw : project.raw.filter((event) => event.group === undefined || !made.has(event.group));
-    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null, scene: project.environmentMods?.scene ?? [] });
+    return JSON.stringify({ clips, raw, groups: project.groups ?? [], effects: project.effects ?? [], ringBlocks: project.ringBlocks ?? [], bookmarks: project.bookmarks ?? [], rowOrder: project.rowOrder ?? [], replacedTypes: project.replacedTypes ?? {}, removedTypes: project.removedTypes ?? {}, presets: project.presets ?? null, scene: project.environmentMods?.scene ?? [], sceneObjects: project.environmentMods?.objects ?? [], sceneMaterials: project.environmentMods?.materials ?? {} });
   }
 
   /** Call before a change (one undo step). */
@@ -1899,11 +2179,13 @@ export class Editor {
   private restore(state: string, notify = true) {
     const project = this.project;
     if (project === null) return;
-    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null; scene?: SceneEdit[] };
+    const data = JSON.parse(state) as { clips: LightClip[]; raw: RawEvent[]; groups: LightGroup[]; effects?: Effect[]; ringBlocks?: RingBlock[]; bookmarks?: Bookmark[]; rowOrder?: string[]; replacedTypes?: Record<string, string>; removedTypes?: Record<string, number>; presets?: unknown[] | null; scene?: SceneEdit[]; sceneObjects?: SceneObject[]; sceneMaterials?: Record<string, SceneMaterial> };
     project.bookmarks = data.bookmarks ?? [];
     // (the scene editor's changes: as they were, shown again)
-    if (JSON.stringify(project.environmentMods?.scene ?? []) !== JSON.stringify(data.scene ?? [])) {
-      this.putScene(data.scene ?? []);
+    if (JSON.stringify([project.environmentMods?.scene ?? [], project.environmentMods?.objects ?? [], project.environmentMods?.materials ?? {}]) !== JSON.stringify([data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {}])) {
+      this.putScene(data.scene ?? [], data.sceneObjects ?? [], data.sceneMaterials ?? {});
+      const uids = new Set((data.sceneObjects ?? []).map((object) => object.uid));
+      this.envSelection = this.envSelection.filter((key) => !key.startsWith('o:') || uids.has(key.slice(2)));
       this.showScene();
     }
     // (the map's presets: as they were — the other difficulties' copies too)

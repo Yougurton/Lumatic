@@ -27,8 +27,10 @@ import { NoteInspector } from './editor/note-inspector';
 import { FlyCamera } from './editor/fly-camera';
 import { packForBeatSaver, packName } from './editor/beatsaver';
 import { startUpdates } from './editor/updates';
-import { EnvPanel } from './editor/env-panel';
+import { EnvPanel, SHAPE_NAMES } from './editor/env-panel';
 import { EnvView, type GizmoMode } from './editor/env-view';
+import { SHAPES } from './editor/environment-mods';
+import { showMenu } from './editor/menu';
 import { SmoothScroll } from './editor/smooth-scroll';
 import { NoteTrack, TRACK_POSE } from './editor/note-track';
 import { mirrorObjects } from './editor/notes-timeline';
@@ -98,11 +100,36 @@ const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
 // the Environment side: the scene's tree and settings, picking and handles in the 3D view
 const envPanel = new EnvPanel(editor, byId('env-scene'), byId('env-inspector'));
 const envView = new EnvView(editor, byId<HTMLCanvasElement>('preview'));
-envView.onPick = (index) => envPanel.reveal(index);
+envView.onPick = (key) => envPanel.reveal(key);
+envPanel.placeAhead = () => envView.placeAhead();
 envView.onMode = () => {
-  for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button')) button.classList.toggle('active', button.dataset.mode === envView.mode);
+  for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button[data-mode]')) button.classList.toggle('active', button.dataset.mode === envView.mode);
+  byId('env-snap').classList.toggle('active', envView.snap);
 };
-for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button')) button.addEventListener('click', () => envView.setMode(button.dataset.mode as GizmoMode));
+for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button[data-mode]')) button.addEventListener('click', () => envView.setMode(button.dataset.mode as GizmoMode));
+byId('env-snap').addEventListener('click', () => envView.setSnap(!envView.snap));
+byId('env-add').addEventListener('click', (event) => {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  showMenu(rect.left, rect.bottom + 2, SHAPES.map((shape) => ({ label: SHAPE_NAMES[shape], action: () => envPanel.addShape(shape, false) })));
+});
+byId('env-add-light').addEventListener('click', () => envPanel.addShape('Cube', true));
+// (on the Environment side: Ctrl+D copies what's picked, Delete removes it — before the lights' keys)
+window.addEventListener(
+  'keydown',
+  (event) => {
+    if (!editor.envMode || editor.project === null || document.querySelector('.ce-shade') !== null) return;
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
+    const ctrl = event.ctrlKey || event.metaKey;
+    if (ctrl && event.code === 'KeyD') envPanel.copy();
+    else if (!ctrl && (event.code === 'Delete' || event.code === 'Backspace')) envPanel.remove();
+    else if (!ctrl && event.code === 'Escape' && editor.envSelection.length > 0) editor.selectEnv([]);
+    else return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  },
+  true,
+);
 // (the game's view of the notes side: the wheel takes the song on or back smoothly)
 new SmoothScroll(editor, byId<HTMLCanvasElement>('preview'), () => editor.tab === 'notes' && editor.noteView === 'game' && editor.project !== null);
 /** The notes side's 3D view: the editor's track (the camera behind its wall) or the game's view.
