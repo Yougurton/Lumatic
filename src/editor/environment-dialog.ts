@@ -57,8 +57,9 @@ export async function environmentDialog(editor: Editor): Promise<void> {
       shade.remove();
       window.removeEventListener('keydown', escape, true);
       if (previewTimer !== null) window.clearTimeout(previewTimer);
-      editor.staticLights = false;
-      if (!applied) void editor.previewEnvironmentMods(null);
+      editor.staticLights = editor.envMode;
+      // (not applied: the map's own again — with the scene's changes not saved yet, if there are any)
+      if (!applied) void editor.previewEnvironmentMods((editor.project?.environmentMods?.scene ?? []).length > 0 ? (editor.project?.environmentMods ?? null) : null);
       editor.rebuildPreview(true);
       resolve();
     };

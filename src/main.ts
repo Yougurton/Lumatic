@@ -27,6 +27,8 @@ import { NoteInspector } from './editor/note-inspector';
 import { FlyCamera } from './editor/fly-camera';
 import { packForBeatSaver, packName } from './editor/beatsaver';
 import { startUpdates } from './editor/updates';
+import { EnvPanel } from './editor/env-panel';
+import { EnvView, type GizmoMode } from './editor/env-view';
 import { SmoothScroll } from './editor/smooth-scroll';
 import { NoteTrack, TRACK_POSE } from './editor/note-track';
 import { mirrorObjects } from './editor/notes-timeline';
@@ -54,10 +56,15 @@ new NoteInspector(editor, byId('note-inspector'));
 
 // ----- the two sides: the lights and the notes ---------------------------------------------------------
 
-function setTab(tab: 'lights' | 'notes') {
+/** `environment`: the lights' side with the scene's tree and an object's settings in place of the
+ *  effects and the events' ones. */
+function setTab(tab: 'lights' | 'notes', environment = false) {
   document.body.classList.toggle('notes-tab', tab === 'notes');
-  byId('tab-lights').classList.toggle('active', tab === 'lights');
+  document.body.classList.toggle('env-tab', environment);
+  byId('tab-lights').classList.toggle('active', tab === 'lights' && !environment);
   byId('tab-notes').classList.toggle('active', tab === 'notes');
+  byId('tab-env').classList.toggle('active', environment);
+  editor.setEnvMode(environment);
   editor.setTab(tab);
   applySplit();
   applyNoteView();
@@ -66,7 +73,7 @@ function setTab(tab: 'lights' | 'notes') {
 }
 byId('tab-lights').addEventListener('click', () => setTab('lights'));
 byId('tab-notes').addEventListener('click', () => setTab('notes'));
-
+byId('tab-env').addEventListener('click', () => setTab('lights', true));
 // ----- over the 3D view: the lights and the notes at a click, the camera flown back ------------------
 
 const fly = new FlyCamera(preview, byId<HTMLCanvasElement>('preview'), (text) => editor.setStatus(text));
@@ -88,6 +95,14 @@ byId('view-notes').addEventListener('click', () => setSettings({ notes: !setting
 byId('view-reset').addEventListener('click', () => fly.reset());
 fly.onChange(syncViewTools);
 const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
+// the Environment side: the scene's tree and settings, picking and handles in the 3D view
+const envPanel = new EnvPanel(editor, byId('env-scene'), byId('env-inspector'));
+const envView = new EnvView(editor, byId<HTMLCanvasElement>('preview'));
+envView.onPick = (index) => envPanel.reveal(index);
+envView.onMode = () => {
+  for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button')) button.classList.toggle('active', button.dataset.mode === envView.mode);
+};
+for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button')) button.addEventListener('click', () => envView.setMode(button.dataset.mode as GizmoMode));
 // (the game's view of the notes side: the wheel takes the song on or back smoothly)
 new SmoothScroll(editor, byId<HTMLCanvasElement>('preview'), () => editor.tab === 'notes' && editor.noteView === 'game' && editor.project !== null);
 /** The notes side's 3D view: the editor's track (the camera behind its wall) or the game's view.

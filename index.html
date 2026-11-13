@@ -39,7 +39,7 @@
       #toolbar {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
         background: var(--panel);
         border-bottom: 1px solid var(--line);
         white-space: nowrap;
@@ -54,7 +54,7 @@
         max-width: 140px;
       }
       #toolbar #difficulty {
-        max-width: 200px;
+        max-width: 160px;
       }
       #toolbar label {
         display: flex;
@@ -221,8 +221,143 @@
       body.notes-tab #library,
       body.notes-tab #inspector,
       body:not(.notes-tab) #note-panel,
-      body:not(.notes-tab) #note-inspector {
+      body:not(.notes-tab) #note-inspector,
+      body.env-tab #library,
+      body.env-tab #inspector,
+      body:not(.env-tab) #env-scene,
+      body:not(.env-tab) #env-inspector,
+      body:not(.env-tab) #env-tools {
         display: none !important;
+      }
+      #env-tools {
+        position: absolute;
+        left: 8px;
+        top: 40px;
+        display: flex;
+        gap: 4px;
+      }
+      #env-tools button.active {
+        background: #263a5c;
+        border-color: #6aa6ff;
+        color: #fff;
+      }
+      #env-scene {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+      }
+      .env-head {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 6px;
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+      }
+      .env-head input[type='search'] {
+        width: 100%;
+      }
+      .env-tree {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        font-size: 12px;
+        padding: 4px 0;
+      }
+      .env-node {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 4px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .env-node:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .env-node.picked {
+        background: rgba(106, 166, 255, 0.25);
+      }
+      .env-node.hidden-object .env-name {
+        opacity: 0.45;
+        text-decoration: line-through;
+      }
+      .env-node.no-id .env-name {
+        color: var(--dim);
+      }
+      .env-twist {
+        width: 12px;
+        flex-shrink: 0;
+        color: var(--dim);
+      }
+      .env-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .env-marks {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .env-eye {
+        padding: 0 4px;
+        border: 0;
+        background: none;
+        font-size: 12px;
+      }
+      .env-count {
+        padding: 4px 6px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+      }
+      #env-inspector {
+        padding: 10px 12px;
+        overflow-y: auto;
+        font-size: 13px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #env-inspector h3 {
+        margin: 0;
+        font-size: 14px;
+        word-break: break-all;
+      }
+      .env-row-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: var(--dim);
+        font-size: 12px;
+        margin-bottom: 2px;
+      }
+      .env-back {
+        padding: 0 6px;
+      }
+      .env-drums {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 4px;
+      }
+      .env-drums label {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 11px;
+        color: var(--dim);
+        min-width: 0;
+      }
+      .env-written pre {
+        margin: 6px 0 0;
+        padding: 6px 8px;
+        background: var(--panel2, #1b1d24);
+        border-radius: 5px;
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: text;
       }
       #view-tools {
         position: absolute;
@@ -3288,13 +3423,13 @@
   <body>
     <div id="app">
       <header id="toolbar">
-        <button id="new-map" title="Новая карта из песни (Ctrl+N)">Новая карта</button>
-        <button id="open" title="Открыть папку карты (Ctrl+O)">Открыть карту</button>
+        <button id="new-map" title="Новая карта из песни (Ctrl+N)">Новая</button>
+        <button id="open" title="Открыть папку карты (Ctrl+O)">Открыть</button>
         <select id="recent" title="Недавние карты" hidden></select>
         <button id="save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
         <span class="sep"></span>
         <select id="difficulty" title="Сложность" disabled></select>
-        <span class="side-tabs"><button id="tab-lights" class="active" title="Свет: события, эффекты, кольца, лазеры (Tab — переключить)">💡 Свет</button><button id="tab-notes" title="Ноты, бомбы, стены, дуги и цепи (Tab — переключить)">◆ Ноты</button></span>
+        <span class="side-tabs"><button id="tab-lights" class="active" title="Свет: события, эффекты, кольца, лазеры (Tab — переключить)">💡 Свет</button><button id="tab-notes" title="Ноты, бомбы, стены, дуги и цепи (Tab — переключить)">◆ Ноты</button><button id="tab-env" title="Сцена окружения: объекты — скрыть, подвинуть, повернуть, изменить размер (нужен Chroma)">🏛 Сцена</button></span>
         <span class="sep"></span>
         <button id="beatsaver" title="Архив для BeatSaver: карта сохраняется, в zip — только Info.dat и файлы, на которые он указывает (песня, обложка, сложности)" disabled>📦 BeatSaver</button>
         <button id="quest" title="Сохранить и отправить карту на Quest по adb (кабель или Wi‑Fi)" hidden disabled>📤 Quest</button>
@@ -3319,10 +3454,11 @@
         <span class="grow"></span>
       </header>
       <section id="main">
-        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
+        <div id="preview-wrap"><canvas id="preview"></canvas><div id="view-tools"><button id="view-mode" hidden></button><button id="view-reset" hidden title="Вернуть камеру на место игрока">⟲ Вид</button><button id="view-lights">💡</button><button id="view-notes">◆</button></div><div id="env-tools"><button data-mode="translate" class="active" title="Двигать (W)">↔ Двигать</button><button data-mode="rotate" title="Вращать (E)">⟳ Вращать</button><button data-mode="scale" title="Масштаб (R)">⤢ Масштаб</button></div><span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span><div id="grid-badge"><span id="speed-badge" class="gb-speed" hidden></span><span class="gb-label">сетка</span><span class="gb-value"></span></div><span id="status"></span><div id="sel-infos"><span id="fps" class="sel-info fps-info" hidden></span><span id="selection-info" class="sel-info" hidden></span><span id="clipboard-info" class="sel-info clip-info" hidden></span></div></div>
         <aside id="side">
           <div id="library"></div>
           <div id="note-panel"></div>
+          <div id="env-scene"></div>
         </aside>
       </section>
       <div id="splitter"></div>
@@ -3331,6 +3467,7 @@
         <div id="tracks-wrap"><canvas id="tracks"></canvas></div>
         <aside id="inspector"></aside>
         <aside id="note-inspector"></aside>
+        <aside id="env-inspector"></aside>
       </section>
     </div>
     <script type="module" src="/src/main.ts"></script>

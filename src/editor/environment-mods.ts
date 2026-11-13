@@ -18,6 +18,30 @@ export interface EnvironmentMods {
   /** Per ring system (the rings' object name, "SmallTrackLaneRing(Clone)"): how much bigger the
    *  rings, and their lights thicker and longer (1: as they are). */
   rings?: Record<string, RingLook>;
+  /** The scene editor's changes to single objects of the game's environment. */
+  scene?: SceneEdit[];
+}
+
+/**
+ * One object of the environment changed in the scene editor: found by its exact Chroma id; hidden, or
+ * put, turned and sized (its own — local — values, as Chroma's: metres, degrees x/y/z).
+ */
+export interface SceneEdit {
+  id: string;
+  hidden?: boolean;
+  position?: [number, number, number];
+  rotation?: [number, number, number];
+  scale?: [number, number, number];
+}
+
+/** A scene edit as Chroma's environment command (null: it changes nothing). */
+export function sceneCommand(edit: SceneEdit): Record<string, unknown> | null {
+  const command: Record<string, unknown> = { id: edit.id, lookupMethod: 'Exact' };
+  if (edit.hidden === true) command.active = false;
+  if (edit.position !== undefined) command.localPosition = edit.position.map(round);
+  if (edit.rotation !== undefined) command.localRotation = edit.rotation.map(round);
+  if (edit.scale !== undefined) command.scale = edit.scale.map(round);
+  return Object.keys(command).length > 2 ? command : null;
 }
 
 export interface RingLook {
@@ -222,6 +246,11 @@ export function modsFragment(mods: EnvironmentMods | undefined, data: Environmen
     fragment.customEvents.push(...structuredClone(preset.customEvents));
     Object.assign(fragment.pointDefinitions, structuredClone(preset.pointDefinitions));
   }
+  // (the scene editor's changes: after the ready-made environment, so they have the last word)
+  for (const edit of mods.scene ?? []) {
+    const command = sceneCommand(edit);
+    if (command !== null) fragment.environment.push(command);
+  }
   if (data === null) return fragment;
   const environment = data.id;
   for (const name of mods.hidden ?? []) fragment.environment.push({ id: partId(environment, name), lookupMethod: 'Regex', active: false });
@@ -331,6 +360,7 @@ export function fragmentRequirements(mods: EnvironmentMods | undefined): string[
   const out = new Set<string>();
   if (preset !== undefined) for (const mod of ['Chroma', ...(preset.noodle ? ['Noodle Extensions'] : [])]) out.add(mod);
   if (geometrySystems(mods).length > 0) for (const mod of ['Chroma', 'Noodle Extensions']) out.add(mod);
+  if ((mods.scene ?? []).some((edit) => sceneCommand(edit) !== null)) out.add('Chroma');
   return [...out];
 }
 
@@ -340,6 +370,6 @@ export function geometrySystems(mods: EnvironmentMods | undefined): string[] {
 }
 
 export function hasMods(mods: EnvironmentMods | undefined) {
-  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0);
+  return mods !== undefined && (mods.preset !== undefined || (mods.hidden ?? []).length > 0 || Object.keys(mods.rings ?? {}).length > 0 || (mods.scene ?? []).some((edit) => sceneCommand(edit) !== null));
 }
 
