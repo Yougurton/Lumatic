@@ -2561,8 +2561,10 @@ export class Timeline {
     const editor = this.editor;
     const group = row.group;
     const picked = editor.selectedLights();
+    const lamps = editor.sceneLampKeys(groupLights(group));
     showMenu(x, y, [
       { label: 'Войти в группу', action: () => editor.enterGroup(group.id), disabled: editor.focus === group.id },
+      ...(lamps.length > 0 ? [{ label: '🏛 Показать в окружении', hint: 'лампы сцены', action: () => editor.showInScene(lamps) }] : []),
       { label: 'Переименовать…', action: () => void ask('Новое название', group.name).then((name) => name !== null && editor.renameGroup(group.id, name)) },
       { label: 'Выбрать её лампы', action: () => editor.selectLights(groupLights(group).map((light) => lightKey(light.type, light.id)), 'replace', group.id) },
       group.takesLights === true

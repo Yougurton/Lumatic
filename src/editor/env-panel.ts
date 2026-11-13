@@ -1,7 +1,8 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
 import type { SceneNode } from './env-scene';
-import { isLightShader, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
+import { ARRAY_KINDS, arrayCount, defaultArray, mirrored, type ArrayKind, type SceneArray } from './env-array';
+import { expandObjects, isLightShader, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
 import { numberDrum } from './grids';
 import { tr } from './i18n';
 import { showMenu } from './menu';
@@ -20,6 +21,21 @@ const SHADER_NAMES: Record<Shader, string> = {
   WaterfallMirror: 'Зеркало-водопад',
   InterscopeConcrete: 'Бетон',
   InterscopeCar: 'Машина',
+};
+
+const ARRAY_NAMES: Record<ArrayKind, string> = { row: 'Ряд', circle: 'По кругу', grid: 'Сетка', line: 'Вдоль линии', scatter: 'Россыпь' };
+/** How a material's kind looks on its tile (a rough picture of it). */
+const SHADER_LOOK: Record<Shader, string> = {
+  Standard: 'linear-gradient(135deg, #8a8d96, #3c3f47)',
+  Glowing: 'radial-gradient(circle at 50% 45%, #ffffff, #9fd0ff 55%, #2b4a6b)',
+  OpaqueLight: 'linear-gradient(90deg, #15171c 30%, #ffe9a8 42%, #fff 50%, #ffe9a8 58%, #15171c 70%)',
+  TransparentLight: 'linear-gradient(90deg, transparent 30%, rgba(160,220,255,0.75) 50%, transparent 70%), repeating-conic-gradient(#22252c 0 25%, #2d3038 0 50%) 0 0 / 10px 10px',
+  BaseWater: 'linear-gradient(180deg, #0c2a44, #1f6f9c 60%, #7fd0e8)',
+  BTSPillar: 'linear-gradient(90deg, #2a1838, #b06ad0 50%, #2a1838)',
+  BillieWater: 'linear-gradient(180deg, #10201c, #2f6f5c 60%, #9fe0c0)',
+  WaterfallMirror: 'linear-gradient(160deg, #dfe8f0, #6f8090 45%, #e8f0f8 55%, #50606c)',
+  InterscopeConcrete: 'repeating-linear-gradient(45deg, #6c6a66 0 4px, #605e5a 4px 8px)',
+  InterscopeCar: 'linear-gradient(160deg, #c02030, #50080f 60%, #ff8090)',
 };
 
 const hex = (color: readonly number[]) => `#${color.slice(0, 3).map((value) => Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, '0')).join('')}`;
@@ -49,6 +65,8 @@ export class EnvPanel {
   private anchor: string | null = null;
   /** The material being looked at on the right (null: the picked objects are). */
   private material: string | null = null;
+  /** "By a rule" among the like ones: every which, from which, to which (0: the last). */
+  private rule = { every: 2, from: 1, to: 0 };
   /** Makes a shape in front of the camera (set by main: it knows the view). */
   placeAhead: () => [number, number, number] = () => [0, 1.5, 6];
 
@@ -190,7 +208,8 @@ export class EnvPanel {
         const material = object.material === undefined ? undefined : editor.sceneMaterials()[object.material];
         const mark = Object.assign(document.createElement('span'), { className: 'env-twist', textContent: object.kind === 'copy' ? '⧉' : material !== undefined && isLightShader(material.shader) ? '💡' : '◼' });
         const name = Object.assign(document.createElement('span'), { className: 'env-name', textContent: object.name });
-        line.append(mark, name, eyeButton(object.hidden === true, true, () => editor.applyScene([key], (_key, now) => ({ hidden: !now.hidden }))));
+        const many = Object.assign(document.createElement('span'), { className: 'env-marks', textContent: object.array === undefined ? '' : `${tr(ARRAY_NAMES[object.array.kind])} ×${String(arrayCount(object.array))}` });
+        line.append(mark, name, many, eyeButton(object.hidden === true, true, () => editor.applyScene([key], (_key, now) => ({ hidden: !now.hidden }))));
         line.addEventListener('click', (event) => this.click(key, event));
         line.addEventListener('contextmenu', (event) => this.menu(event, key));
         rows.push(line);
@@ -292,10 +311,27 @@ export class EnvPanel {
     const made: SceneObject[] = [];
     for (const key of keys) {
       const now = editor.sceneValues(key);
-      if (now === null) continue;
+      if (now === null || now.object?.ghost === true) continue;
       const aside: [number, number, number] = [Math.round((now.position[0] + 1) * 1000) / 1000, now.position[1], now.position[2]];
-      if (now.object !== undefined) made.push({ ...structuredClone(now.object), uid: newId('o'), name: tr('{0} — копия', now.object.name), position: aside, ...(now.object.light === undefined ? {} : { light: { type: now.object.light.type, id: editor.freeLightId(now.object.light.type, made.flatMap((item) => (item.light?.type === now.object!.light!.type ? [item.light.id] : []))) } }) });
+      if (now.object !== undefined) made.push({ ...structuredClone({ ...now.object, arrayLights: undefined }), uid: newId('o'), name: tr('{0} — копия', now.object.name), position: aside, ...(now.object.light === undefined ? {} : { light: { type: now.object.light.type, id: editor.freeLightId(now.object.light.type, made.flatMap((item) => (item.light?.type === now.object!.light!.type ? [item.light.id] : []))) } }) });
       else if (now.id !== null && now.id !== undefined) made.push({ uid: newId('o'), name: tr('{0} — копия', editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? ''), kind: 'copy', source: now.id, position: aside, rotation: [...now.rotation], scale: [...now.scale] });
+    }
+    if (made.length === 0) editor.setStatus(tr('Копировать можно объекты с id для Chroma и свои объекты'));
+    else editor.addSceneObjects(made);
+  }
+
+  /** A copy of each picked thing on the other side (left to right). */
+  mirror(keys: readonly string[] = this.editor.envSelection) {
+    const editor = this.editor;
+    const made: SceneObject[] = [];
+    for (const key of keys) {
+      const now = editor.sceneValues(key);
+      if (now === null || now.object?.ghost === true) continue;
+      const placing = mirrored(now);
+      if (now.object !== undefined) {
+        const { array: _array, arrayLights: _lights, ...rest } = structuredClone(now.object);
+        made.push({ ...rest, ...placing, uid: newId('o'), name: tr('{0} — зеркало', now.object.name), ...(rest.light === undefined ? {} : { light: { type: rest.light.type, id: editor.freeLightId(rest.light.type, made.flatMap((item) => (item.light?.type === rest.light!.type ? [item.light.id] : []))) } }) });
+      } else if (now.id !== null && now.id !== undefined) made.push({ uid: newId('o'), name: tr('{0} — зеркало', editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? ''), kind: 'copy', source: now.id, ...placing });
     }
     if (made.length === 0) editor.setStatus(tr('Копировать можно объекты с id для Chroma и свои объекты'));
     else editor.addSceneObjects(made);
@@ -320,10 +356,14 @@ export class EnvPanel {
       showMenu(event.clientX, event.clientY, [
         { label: tr('Выбрано: {0}', keys.length), heading: true },
         { label: '⧉ Копия', hint: 'Ctrl+D', action: () => this.copy() },
+        { label: '⇋ Зеркальная копия', hint: 'слева направо', action: () => this.mirror() },
+        { label: 'Размножить', heading: true },
+        ...ARRAY_KINDS.map((kind) => ({ label: ARRAY_NAMES[kind], action: () => editor.setArray(keys, (base) => defaultArray(kind, base)) })),
         ...(game
           ? [
               { label: 'Выбрать все такие же', hint: 'соседи с тем же именем', action: () => editor.selectEnv(this.alike(key)) },
               { label: 'Выбрать каждый второй из таких же', action: () => editor.selectEnv(this.alike(key).filter((_item, at) => at % 2 === 0)) },
+              { label: 'Выбрать каждый третий из таких же', action: () => editor.selectEnv(this.alike(key).filter((_item, at) => at % 3 === 0)) },
             ]
           : []),
         null,
@@ -427,12 +467,16 @@ export class EnvPanel {
       root.append(section);
     };
     const world = object?.kind === 'shape';
+    if (object?.ghost === true) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Размноженный объект игры: первый в ряду — сам объект игры ({0}). Чтобы сдвинуть всё, двигайте его; здесь — число и шаг копий.', object.source ?? '') }));
+    else {
     line(world ? 'Положение в мире, м' : 'Положение, м', 'position', 0.1, -500, 500, world ? 'Положение в мире, в метрах: X — вправо, Y — вверх, Z — вперёд' : 'Своё положение объекта относительно родителя, в метрах: X — вправо, Y — вверх, Z — вперёд');
     line('Поворот, °', 'rotation', 1, -360, 360, 'Поворот объекта вокруг осей X, Y, Z, в градусах');
     line('Масштаб', 'scale', 0.05, 0, 200, 'Размер объекта по осям (1 — как в игре; у фигуры — метры)');
+    }
+    this.renderArray(root, keys, object);
 
     if (object?.kind === 'shape') this.renderShape(root, object, keys);
-    if (object?.kind === 'copy') root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Копия объекта игры: {0}', object.source ?? '') }));
+    if (object?.kind === 'copy' && object.ghost !== true) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Копия объекта игры: {0}', object.source ?? '') }));
 
     const buttons = document.createElement('div');
     buttons.className = 'ins-buttons';
@@ -444,12 +488,14 @@ export class EnvPanel {
     };
     button(now.hidden ? '👁 Показать' : '◌ Скрыть', 'Скрыть выбранные объекты в игре (вместе со всем, что внутри них)', () => editor.applyScene(keys, () => ({ hidden: !now.hidden })));
     button('⧉ Копия', 'Ещё один такой же объект рядом (Ctrl+D)', () => this.copy(keys));
+    button('⇋ Зеркало', 'Копия на другой стороне: слева направо', () => this.mirror(keys));
     if (keys.some((key) => key.startsWith('g:'))) {
       button('↺ Вернуть как было', 'Убрать все изменения выбранных объектов игры', () => editor.applyScene(keys, () => 'reset'));
       if (keys.length === 1) button('Все такие же', 'Выбрать соседние объекты с тем же именем (ряд колец, лазеров…)', () => editor.selectEnv(this.alike(first)));
     }
     if (keys.some((key) => key.startsWith('o:'))) button('🗑 Удалить', 'Удалить выбранные свои объекты (Delete)', () => this.remove(keys.filter((key) => key.startsWith('o:'))));
     root.append(buttons);
+    if (first.startsWith('g:')) this.renderRule(root, first);
     if (keys.length > 1) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Выбрано несколько: барабаны и ручки в 3D меняют все выбранные на одну и ту же величину (числа показаны для первого).') }));
 
     // how it's written into the map
@@ -459,7 +505,7 @@ export class EnvPanel {
     const commands = keys.flatMap((key) => {
       const values = editor.sceneValues(key);
       if (values === null) return [];
-      if (values.object !== undefined) return [objectCommand(values.object, editor.sceneMaterials())];
+      if (values.object !== undefined) return expandObjects([values.object]).slice(0, 4).map((item) => objectCommand(item, editor.sceneMaterials()));
       const edit = editor.sceneEdits().find((item) => item.id === values.id);
       return [edit === undefined ? null : sceneCommand(edit)];
     }).filter((command) => command !== null);
@@ -467,6 +513,109 @@ export class EnvPanel {
     code.textContent = commands.length === 0 ? tr('Объект не изменён — в карту ничего не пишется.\nid: {0}', now.id ?? '') : commands.map((command) => JSON.stringify(command, null, 2)).join(',\n');
     written.append(code);
     root.append(written);
+  }
+
+  /** "By a rule": of the like ones — every N-th, from one to another. */
+  private renderRule(root: HTMLElement, key: string) {
+    const editor = this.editor;
+    const like = this.alike(key);
+    if (like.length < 3) return;
+    const rule = this.rule;
+    const box = document.createElement('div');
+    box.className = 'env-row';
+    box.append(this.section(tr('Выбрать по правилу — таких же: {0}', like.length)));
+    const drums = document.createElement('div');
+    drums.className = 'env-drums';
+    const cell = (label: string, name: 'every' | 'from' | 'to', min: number, hint: string) => {
+      const item = document.createElement('label');
+      item.title = hint;
+      item.append(Object.assign(document.createElement('span'), { textContent: label }), numberDrum(`env:rule:${name}`, rule[name], (next) => (rule[name] = Math.max(min, Math.round(next))), { step: 1, min, max: like.length, digits: 0 }));
+      drums.append(item);
+    };
+    cell('каждый', 'every', 1, 'Каждый какой по счёту: 1 — все подряд, 2 — через один');
+    cell('с', 'from', 1, 'С какого по счёту начать');
+    cell('по', 'to', 0, 'На каком закончить (0 — до последнего)');
+    const pick = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Выбрать' });
+    pick.addEventListener('click', () => {
+      const to = rule.to === 0 ? like.length : rule.to;
+      editor.selectEnv(like.filter((_item, at) => at + 1 >= rule.from && at + 1 <= to && (at + 1 - rule.from) % rule.every === 0));
+    });
+    box.append(drums, pick);
+    root.append(box);
+  }
+
+  /** Many of the picked: none, or a row, a round, a grid, a line, a scatter — and its numbers. */
+  private renderArray(root: HTMLElement, keys: readonly string[], object: SceneObject | undefined) {
+    const editor = this.editor;
+    const array = object?.array;
+    const box = document.createElement('div');
+    box.className = 'env-row';
+    box.append(this.section(tr('Размножение')));
+    const kind = document.createElement('select');
+    kind.append(Object.assign(document.createElement('option'), { value: '', textContent: 'Нет — один объект' }));
+    for (const item of ARRAY_KINDS) kind.append(Object.assign(document.createElement('option'), { value: item, textContent: ARRAY_NAMES[item] }));
+    kind.value = array?.kind ?? '';
+    kind.title = 'Много таких же объектов: рядом, по кругу, сеткой, вдоль линии или россыпью. Число и шаг можно менять потом';
+    kind.addEventListener('change', () => editor.setArray(keys, kind.value === '' ? null : (base) => defaultArray(kind.value as ArrayKind, base)));
+    box.append(kind);
+    root.append(box);
+    if (object === undefined || array === undefined) return;
+    const uid = object.uid;
+    const set = (patch: (next: SceneArray) => void, merge: string) =>
+      editor.changeObjects([uid], (item) => {
+        if (item.array !== undefined) patch(item.array);
+      }, `env:array:${merge}`);
+    const field = (label: string, hint: string, ...controls: HTMLElement[]) => {
+      const line = document.createElement('label');
+      line.className = 'env-field';
+      line.title = hint;
+      const pair = document.createElement('span');
+      pair.className = 'env-pair';
+      pair.append(...controls);
+      line.append(Object.assign(document.createElement('span'), { textContent: label }), pair);
+      root.append(line);
+    };
+    const one = (name: string, value: number, put: (next: SceneArray, value: number) => void, options: { step: number; min: number; max: number; digits: number }) => numberDrum(`env:array:${uid}:${name}`, value, (next) => set((item) => put(item, next), name), options);
+    const three = (name: string, values: readonly number[], put: (next: SceneArray, axis: number, value: number) => void, options: { step: number; min: number; max: number; digits: number }) => values.map((value, axis) => one(`${name}:${String(axis)}`, value, (item, next) => put(item, axis, next), options));
+    const count = { step: 1, min: 1, max: 500, digits: 0 };
+    const metres = { step: 0.5, min: -500, max: 500, digits: 2 };
+    const degrees = { step: 5, min: -360, max: 360, digits: 1 };
+    if (array.kind === 'row') {
+      field('Сколько всего', 'Сколько объектов в ряду, считая первый', one('count', array.count, (item, next) => item.kind === 'row' && (item.count = Math.round(next)), count));
+      field('Шаг, м (X Y Z)', 'На сколько каждый следующий сдвинут от предыдущего', ...three('step', array.step, (item, axis, next) => item.kind === 'row' && (item.step[axis] = next), metres));
+      field('Доворот, ° (X Y Z)', 'На сколько каждый следующий повёрнут относительно предыдущего', ...three('turn', array.turn, (item, axis, next) => item.kind === 'row' && (item.turn[axis] = next), degrees));
+      field('Рост размера', 'Во сколько раз каждый следующий больше предыдущего (1 — одинаковые)', one('grow', array.grow, (item, next) => item.kind === 'row' && (item.grow = next), { step: 0.05, min: 0.1, max: 3, digits: 2 }));
+    } else if (array.kind === 'circle') {
+      field('Сколько всего', 'Сколько объектов по кругу, считая первый', one('count', array.count, (item, next) => item.kind === 'circle' && (item.count = Math.round(next)), count));
+      const axis = document.createElement('select');
+      ['X', 'Y', 'Z'].forEach((name, at) => axis.append(Object.assign(document.createElement('option'), { value: String(at), textContent: name })));
+      axis.value = String(array.axis);
+      axis.addEventListener('change', () => set((item) => item.kind === 'circle' && (item.axis = Number(axis.value) as 0 | 1 | 2), 'axis'));
+      field('Вокруг оси', 'Ось, вокруг которой идёт круг: Y — по горизонтали вокруг столба, Z — колесом лицом к игроку', axis);
+      field('Центр, м (X Y Z)', 'Точка, вокруг которой стоят объекты; радиус — расстояние от первого объекта до неё', ...three('centre', array.centre, (item, at, next) => item.kind === 'circle' && (item.centre[at] = next), metres));
+      field('Дуга, °', '360 — полный круг; меньше — часть круга от первого объекта', one('angle', array.angle, (item, next) => item.kind === 'circle' && (item.angle = next), { step: 15, min: -360, max: 360, digits: 1 }));
+      const face = Object.assign(document.createElement('input'), { type: 'checkbox', checked: array.face });
+      face.addEventListener('change', () => set((item) => item.kind === 'circle' && (item.face = face.checked), 'face'));
+      field('Поворачивать с кругом', 'Каждый объект повёрнут так же, как сдвинут по кругу (все смотрят на центр одинаково)', face);
+    } else if (array.kind === 'grid') {
+      field('Сколько (X Y Z)', 'Сколько объектов вправо, вверх и вперёд', ...three('counts', array.counts, (item, at, next) => item.kind === 'grid' && (item.counts[at] = Math.round(next)), { step: 1, min: 1, max: 100, digits: 0 }));
+      field('Шаг, м (X Y Z)', 'Расстояние между соседними по каждой оси', ...three('steps', array.steps, (item, at, next) => item.kind === 'grid' && (item.steps[at] = next), metres));
+    } else if (array.kind === 'line') {
+      field('Сколько всего', 'Сколько объектов вдоль линии, считая первый', one('count', array.count, (item, next) => item.kind === 'line' && (item.count = Math.max(2, Math.round(next))), { ...count, min: 2 }));
+      field('Конец, м (X Y Z)', 'Где стоит последний объект — считая от первого', ...three('end', array.end, (item, at, next) => item.kind === 'line' && (item.end[at] = next), metres));
+      field('Изгиб, м (X Y Z)', 'Куда и насколько выгнута середина линии (0 0 0 — прямая)', ...three('bend', array.bend, (item, at, next) => item.kind === 'line' && (item.bend[at] = next), metres));
+    } else {
+      field('Сколько всего', 'Сколько объектов в россыпи, считая первый', one('count', array.count, (item, next) => item.kind === 'scatter' && (item.count = Math.round(next)), count));
+      field('Объём, м (X Y Z)', 'Размер области вокруг первого объекта, в которой разбросаны остальные', ...three('size', array.size, (item, at, next) => item.kind === 'scatter' && (item.size[at] = Math.max(0, next)), { ...metres, min: 0 }));
+      field('Разброс поворота, °', 'Насколько сильно случайно повёрнут каждый (0 — все как первый)', one('turn', array.turn, (item, next) => item.kind === 'scatter' && (item.turn = next), { step: 15, min: 0, max: 180, digits: 0 }));
+      field('Размер от / до', 'Случайный размер каждого — во сколько раз от первого', one('sizeFrom', array.sizeFrom, (item, next) => item.kind === 'scatter' && (item.sizeFrom = next), { step: 0.1, min: 0.05, max: 10, digits: 2 }), one('sizeTo', array.sizeTo, (item, next) => item.kind === 'scatter' && (item.sizeTo = next), { step: 0.1, min: 0.05, max: 10, digits: 2 }));
+      const again = Object.assign(document.createElement('button'), { type: 'button', textContent: '🎲 Другая', title: 'Разбросать по-другому (тот же номер — та же россыпь)' });
+      again.addEventListener('click', () => set((item) => item.kind === 'scatter' && (item.seed = item.seed + 1), 'seed'));
+      field('Россыпь №', 'Номер случайной россыпи: один и тот же номер всегда даёт одно и то же', one('seed', array.seed, (item, next) => item.kind === 'scatter' && (item.seed = Math.round(next)), { step: 1, min: 1, max: 9999, digits: 0 }), again);
+    }
+    const apart = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Сделать отдельными', title: 'Каждая копия станет обычным объектом: их можно будет двигать по одной, но число и шаг больше не поменять' });
+    apart.addEventListener('click', () => editor.detachArrays([uid]));
+    root.append(apart);
   }
 
   /** A shape's own settings: what it is, what it's made of, its lamp. */
@@ -546,7 +695,8 @@ export class EnvPanel {
     group.addEventListener('click', () => {
       const lamps = shapes.filter((item) => item.light !== undefined);
       if (lamps.length === 0) return;
-      editor.addGroup(lamps.length === 1 ? lamps[0]!.name : tr('Лампы сцены ({0})', lamps.length), lamps.map((item) => ({ kind: 'light' as const, type: item.light!.type, id: item.light!.id })));
+      const all = expandObjects(lamps);
+      editor.addGroup(lamps.length === 1 ? lamps[0]!.name : tr('Лампы сцены ({0})', all.length), all.map((item) => ({ kind: 'light' as const, type: item.light!.type, id: item.light!.id })));
       editor.setStatus(tr('Группа света создана: она появилась строкой на вкладке «Свет»'));
     });
     root.append(group);
@@ -576,11 +726,7 @@ export class EnvPanel {
       editor.setSceneMaterial(name, material, next);
     });
     row('Название', title);
-    const shader = document.createElement('select');
-    for (const item of SHADERS) shader.append(Object.assign(document.createElement('option'), { value: item, textContent: SHADER_NAMES[item] }));
-    shader.value = material.shader;
-    shader.addEventListener('change', () => {
-      const next = shader.value as Shader;
+    const pickShader = (next: Shader) => {
       editor.setSceneMaterial(name, { ...material, shader: next });
       // (a lamp now, or not any more: the shapes made of it get their light IDs, or lose them)
       const taken: number[] = [];
@@ -592,14 +738,54 @@ export class EnvPanel {
           item.light = { type: 0, id };
         }
       }, 'env:shader');
-    });
-    row('Вид', shader);
+    };
+    root.append(this.section(tr('Вид')));
+    const tiles = document.createElement('div');
+    tiles.className = 'env-tiles';
+    for (const item of SHADERS) {
+      const tile = Object.assign(document.createElement('button'), { type: 'button', className: 'env-tile', title: SHADER_NAMES[item] });
+      tile.classList.toggle('active', item === material.shader);
+      const look = document.createElement('span');
+      look.style.background = SHADER_LOOK[item];
+      tile.append(look, Object.assign(document.createElement('em'), { textContent: SHADER_NAMES[item] }));
+      tile.addEventListener('click', () => pickShader(item));
+      tiles.append(tile);
+    }
+    root.append(tiles);
     const color = Object.assign(document.createElement('input'), { type: 'color', value: hex(material.color) });
     color.addEventListener('input', () => editor.setSceneMaterial(name, { ...material, color: [...fromHex(color.value), material.color[3]] }, undefined, `env:color:${name}`));
     row('Цвет', color);
     row(isLightShader(material.shader) ? 'Яркость (альфа)' : 'Альфа', numberDrum(`env:alpha:${name}`, material.color[3], (next) => editor.setSceneMaterial(name, { ...material, color: [material.color[0], material.color[1], material.color[2], next] }, undefined, `env:alpha:${name}`), { step: 0.05, min: 0, max: 5, digits: 2 }));
     if (isLightShader(material.shader)) root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('Лампа: объектом из этого материала управляют события света. «Прозрачная» не видна, пока не горит. Цвет в игре задают события; здесь — только вид в редакторе до первого события.') }));
     else if (material.shader !== 'Standard' && material.shader !== 'Glowing') root.append(Object.assign(document.createElement('div'), { className: 'ins-note', textContent: tr('В окне просмотра этот вид показан приближённо — проверьте его в игре.') }));
+    // more: a track for its colour, the shader's keywords
+    const more = document.createElement('details');
+    more.className = 'env-written';
+    more.open = material.track !== undefined || material.keywords !== undefined;
+    more.append(Object.assign(document.createElement('summary'), { textContent: tr('Дополнительно') }));
+    const tracked = document.createElement('label');
+    tracked.className = 'adjust-check';
+    tracked.title = 'Материал получает дорожку (track): по ней его цвет можно менять событиями анимации';
+    const trackBox = Object.assign(document.createElement('input'), { type: 'checkbox', checked: material.track !== undefined });
+    trackBox.addEventListener('change', () => {
+      const { track: _track, ...rest } = material;
+      editor.setSceneMaterial(name, trackBox.checked ? { ...rest, track: `lumatic_material_${name.replace(/[^\p{L}\p{N}]+/gu, '_')}` } : rest);
+    });
+    tracked.append(trackBox, ' Цвет можно анимировать');
+    more.append(tracked);
+    if (material.track !== undefined) more.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr('Дорожка: {0}', material.track) }));
+    const words = Object.assign(document.createElement('input'), { type: 'text', value: (material.keywords ?? []).join(', '), placeholder: 'как у шейдера по умолчанию' });
+    words.title = 'Ключевые слова шейдера через запятую — вместо его собственных. Для тех, кто знает шейдеры игры; пусто — как по умолчанию';
+    words.addEventListener('change', () => {
+      const list = words.value.split(',').map((item) => item.trim()).filter((item) => item !== '');
+      const { keywords: _keywords, ...rest } = material;
+      editor.setSceneMaterial(name, list.length === 0 ? rest : { ...rest, keywords: list });
+    });
+    const wordsLine = document.createElement('label');
+    wordsLine.className = 'env-field';
+    wordsLine.append(Object.assign(document.createElement('span'), { textContent: 'Ключевые слова' }), words);
+    more.append(wordsLine);
+    root.append(more);
     root.append(Object.assign(document.createElement('div'), { className: 'nm-dim', textContent: tr('Объектов из этого материала: {0}', users.length) }));
     const buttons = document.createElement('div');
     buttons.className = 'ins-buttons';
@@ -620,7 +806,7 @@ export class EnvPanel {
     const written = document.createElement('details');
     written.className = 'env-written';
     written.append(Object.assign(document.createElement('summary'), { textContent: tr('Как это записано в карту') }));
-    written.append(Object.assign(document.createElement('pre'), { textContent: JSON.stringify({ [name]: material }, null, 2) }));
+    written.append(Object.assign(document.createElement('pre'), { textContent: JSON.stringify({ [name]: materialCommand(material) }, null, 2) }));
     root.append(written);
   }
 }

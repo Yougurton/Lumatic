@@ -101,6 +101,11 @@ const noteTrack = new NoteTrack(editor, byId<HTMLCanvasElement>('preview'));
 const envPanel = new EnvPanel(editor, byId('env-scene'), byId('env-inspector'));
 const envView = new EnvView(editor, byId<HTMLCanvasElement>('preview'));
 envView.onPick = (key) => envPanel.reveal(key);
+editor.showInScene = (keys) => {
+  setTab('lights', true);
+  editor.selectEnv(keys);
+  if (keys[0] !== undefined) envPanel.reveal(keys[0]);
+};
 envPanel.placeAhead = () => envView.placeAhead();
 envView.onMode = () => {
   for (const button of byId('env-tools').querySelectorAll<HTMLButtonElement>('button[data-mode]')) button.classList.toggle('active', button.dataset.mode === envView.mode);

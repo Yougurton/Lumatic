@@ -1,6 +1,7 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { chromaRotation, dataRotation, flipZ, localFromWorld, rayBox } from '../src/editor/env-scene';
-import { modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
+import { expandObjects, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
+import { arrayCount, arrayPlacings, mirrored } from '../src/editor/env-array';
 
 /**
  * The scene editor's numbers: Chroma's turns and places to the 3D view's and back, a click's ray
@@ -68,6 +69,34 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   const fragment = modsFragment({ ...mods, scene: [{ id: 'Env.[1]Thing', hidden: true }] }, null);
   check('the added objects last in the fragment', fragment.environment.length === 4 && (fragment.environment[3] as { geometry?: unknown }).geometry !== undefined, fragment.environment);
   check('Chroma needed', JSON.stringify(fragmentRequirements(mods)) === JSON.stringify(['Chroma']) && hasMods(mods));
+}
+
+// many of one object
+{
+  const base = { position: [1, 0, 5] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
+  const near = (a: readonly number[], b: readonly number[]) => a.every((value, k) => Math.abs(value - b[k]!) < 1e-3);
+  const row = arrayPlacings(base, { kind: 'row', count: 4, step: [2, 0, 0], turn: [0, 10, 0], grow: 2 });
+  check('a row: the others, each a step on', row.length === 3 && near(row[2]!.position, [7, 0, 5]) && near(row[2]!.rotation, [0, 30, 0]) && near(row[1]!.scale, [4, 4, 4]), row);
+  const circle = arrayPlacings(base, { kind: 'circle', count: 4, axis: 1, centre: [0, 0, 5], angle: 360, face: true });
+  check('a round: a quarter each, as far from the centre', circle.length === 3 && circle.every((item) => Math.abs(Math.hypot(item.position[0], item.position[2] - 5) - 1) < 1e-3) && near(circle[1]!.position, [-1, 0, 5]) && Math.abs(Math.abs(circle[0]!.rotation[1]) - 90) < 1e-3, circle);
+  check('a round: turned as Chroma turns about y', near(circle[0]!.position, [0, 0, 5 - Math.sign(circle[0]!.rotation[1])]), circle[0]);
+  const half = arrayPlacings(base, { kind: 'circle', count: 3, axis: 1, centre: [0, 0, 5], angle: 180, face: false });
+  check('a part of a round: the last at its end', near(half[1]!.position, [-1, 0, 5]) && near(half[1]!.rotation, [0, 0, 0]), half);
+  const grid = arrayPlacings(base, { kind: 'grid', counts: [2, 2, 2], steps: [1, 2, 3] });
+  check('a grid', grid.length === 7 && near(grid[6]!.position, [2, 2, 8]), grid);
+  const line = arrayPlacings(base, { kind: 'line', count: 3, end: [0, 0, 10], bend: [0, 2, 0] });
+  check('a bent line: ends at its end, its middle pulled aside', near(line[1]!.position, [1, 0, 15]) && near(line[0]!.position, [1, 2, 10]), line);
+  const scatter = { kind: 'scatter' as const, count: 20, size: [4, 2, 6] as [number, number, number], turn: 0, sizeFrom: 1, sizeTo: 1, seed: 7 };
+  const once = arrayPlacings(base, scatter);
+  check('a scatter: in its box, the same again', once.length === 19 && once.every((item) => Math.abs(item.position[0] - 1) <= 2 && Math.abs(item.position[1]) <= 1 && Math.abs(item.position[2] - 5) <= 3) && JSON.stringify(once) === JSON.stringify(arrayPlacings(base, scatter)) && JSON.stringify(once) !== JSON.stringify(arrayPlacings(base, { ...scatter, seed: 8 })));
+  check('counted', arrayCount({ kind: 'grid', counts: [3, 1, 3], steps: [1, 1, 1] }) === 9 && arrayCount({ kind: 'row', count: 100000, step: [1, 0, 0], turn: [0, 0, 0], grow: 1 }) === 500);
+  check('mirrored', JSON.stringify(mirrored({ position: [2, 1, 3], rotation: [10, 20, 30], scale: [1, 2, 3] })) === JSON.stringify({ position: [-2, 1, 3], rotation: [10, -20, -30], scale: [1, 2, 3] }));
+  const lamp = { uid: 'l', name: 'lamp', kind: 'shape' as const, shape: 'Cube' as const, material: 'lamp', ...base, light: { type: 0, id: 101 }, array: { kind: 'row' as const, count: 3, step: [1, 0, 0] as [number, number, number], turn: [0, 0, 0] as [number, number, number], grow: 1 }, arrayLights: [102, 103] };
+  const ghost = { uid: 'g', name: 'ring', kind: 'copy' as const, source: 'Env.[3]Ring', ...base, ghost: true, array: { kind: 'row' as const, count: 3, step: [0, 0, 2] as [number, number, number], turn: [0, 0, 0] as [number, number, number], grow: 1 } };
+  const all = expandObjects([lamp, ghost]);
+  check('an array written out: the object, its others; a ghost: only the others', all.length === 5 && all[2]!.light?.id === 103 && all[2]!.of === 'l' && all[3]!.of === 'g' && all[4]!.position[2] === 9, all);
+  const made = objectsFragment({ materials: { lamp: { shader: 'OpaqueLight', color: [1, 1, 1, 1], track: 't', keywords: ['A'] } }, objects: [lamp, ghost] });
+  check('in the fragment: five commands, a material with its track and keywords', made.environment.length === 5 && JSON.stringify(made.materials.lamp) === JSON.stringify({ shader: 'OpaqueLight', color: [1, 1, 1, 1], track: 't', shaderKeywords: ['A'] }), made);
 }
 
 console.log('checks', checks, 'failures', failures);

@@ -5,14 +5,12 @@ import type { Editor } from './editor';
 import { childrenOf, generatedRootOf, generatedRoots, localFromWorld, objectBox, rayBox, shown, shownBoxes, worldMatrix } from './env-scene';
 import { tr } from './i18n';
 
-/** 'all': the arrows and the rings together. */
-export type GizmoMode = 'all' | 'translate' | 'rotate' | 'scale';
+export type GizmoMode = 'translate' | 'rotate' | 'scale';
 
 /**
  * The Environment side in the 3D view: a click picks the thing under the mouse (again on the same
  * spot: the one behind it; Ctrl / Shift adds), the picked ones are framed, and the first of them has
- * handles — arrows to move it and rings to turn it (Q: both at once; W, E: one of them), cubes to size
- * it (R). Let go, the change is written — the other picked ones changed by as much — and the
+ * handles — arrows to move it (W), rings to turn it (E), cubes to size it (R). Let go, the change is written — the other picked ones changed by as much — and the
  * environment built anew with it.
  */
 export class EnvView {
@@ -20,15 +18,13 @@ export class EnvView {
   private readonly frames = new Group();
   private readonly proxy = new Object3D();
   private readonly controls: TransformControls;
-  /** The rings shown with the arrows in 'all'. */
-  private readonly rings: TransformControls;
   private readonly raycaster = new Raycaster();
   private children: { data: EnvironmentData; map: Map<number, number[]> } | null = null;
   private framedKey = '';
   private down: { x: number; y: number } | null = null;
   private lastPick: { x: number; y: number; order: string[]; at: number } | null = null;
   private dragging: 'translate' | 'rotate' | 'scale' | null = null;
-  mode: GizmoMode = 'all';
+  mode: GizmoMode = 'translate';
   snap = false;
   /** Called when something is picked in the view (the tree shows it). */
   onPick: ((key: string) => void) | null = null;
@@ -41,16 +37,11 @@ export class EnvView {
     const view = editor.preview.view;
     this.root.visible = false;
     this.controls = new TransformControls(view.viewCamera, canvas);
-    this.rings = new TransformControls(view.viewCamera, canvas);
-    for (const controls of [this.controls, this.rings]) {
-      controls.attach(this.proxy);
-      controls.setSpace('local');
-      controls.addEventListener('objectChange', () => this.followProxy());
-    }
+    this.controls.attach(this.proxy);
+    this.controls.setSpace('local');
+    this.controls.addEventListener('objectChange', () => this.followProxy());
     this.controls.setSize(0.9);
-    this.rings.setSize(0.62);
-    this.rings.setMode('rotate');
-    this.root.add(this.frames, this.proxy, this.controls.getHelper(), this.rings.getHelper());
+    this.root.add(this.frames, this.proxy, this.controls.getHelper());
     view.overlayScene.add(this.root);
     // (the note track draws in the same overlay: both kept up before each frame)
     const before = view.overlayUpdate;
@@ -62,17 +53,15 @@ export class EnvView {
     editor.onChange(() => {
       this.root.visible = this.active();
     });
-    const drag = (controls: TransformControls) => (event: unknown) => {
+    this.controls.addEventListener('dragging-changed', (event: unknown) => {
       const on = (event as { value: boolean }).value;
-      if (on) this.dragging = controls.getMode();
+      if (on) this.dragging = this.controls.getMode();
       else {
         const mode = this.dragging;
         this.dragging = null;
         if (mode !== null) this.commit(mode);
       }
-    };
-    this.controls.addEventListener('dragging-changed', drag(this.controls));
-    this.rings.addEventListener('dragging-changed', drag(this.rings));
+    });
     canvas.addEventListener('mousedown', (event) => {
       if (this.active() && event.button === 0) this.down = { x: event.clientX, y: event.clientY };
     });
@@ -81,17 +70,17 @@ export class EnvView {
       this.down = null;
       if (!this.active() || event.button !== 0 || down === null) return;
       // (a drag — of a handle or across the view — is not a click)
-      if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4 || this.dragging !== null || this.controls.axis !== null || (this.mode === 'all' && this.rings.axis !== null)) return;
+      if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4 || this.dragging !== null || this.controls.axis !== null) return;
       this.pick(event.clientX, event.clientY, event.ctrlKey || event.metaKey || event.shiftKey);
     });
-    // Q / W / E / R: all, move, turn, size (only on this side; the lights' brush keys stay theirs elsewhere)
+    // W / E / R: move, turn, size (only on this side; the lights' brush keys stay theirs elsewhere)
     window.addEventListener(
       'keydown',
       (event) => {
         if (!this.active() || event.ctrlKey || event.metaKey || event.altKey) return;
         const target = event.target as HTMLElement;
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || document.querySelector('.ce-shade') !== null) return;
-        const mode: GizmoMode | null = event.code === 'KeyQ' ? 'all' : event.code === 'KeyW' ? 'translate' : event.code === 'KeyE' ? 'rotate' : event.code === 'KeyR' ? 'scale' : null;
+        const mode: GizmoMode | null = event.code === 'KeyW' ? 'translate' : event.code === 'KeyE' ? 'rotate' : event.code === 'KeyR' ? 'scale' : null;
         if (mode === null) return;
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -99,7 +88,7 @@ export class EnvView {
       },
       true,
     );
-    this.setMode('all', false);
+    this.setMode('translate', false);
   }
 
   private active() {
@@ -108,19 +97,17 @@ export class EnvView {
 
   setMode(mode: GizmoMode, say = true) {
     this.mode = mode;
-    this.controls.setMode(mode === 'all' ? 'translate' : mode);
+    this.controls.setMode(mode);
     this.onMode?.();
-    if (say) this.editor.setStatus(tr(mode === 'all' ? 'Двигать и вращать (Q): стрелки — сдвиг по оси, кольца — поворот' : mode === 'translate' ? 'Двигать (W): тяните за стрелку — по оси, за квадрат — по плоскости' : mode === 'rotate' ? 'Вращать (E): тяните за кольцо' : 'Масштаб (R): тяните за кубик на оси, за центр — весь объект'));
+    if (say) this.editor.setStatus(tr(mode === 'translate' ? 'Двигать (W): тяните за стрелку — по оси, за квадрат — по плоскости' : mode === 'rotate' ? 'Вращать (E): тяните за кольцо' : 'Масштаб (R): тяните за кубик на оси, за центр — весь объект'));
   }
 
   /** The handles step: a tenth of a metre, 15°, a tenth of the size. */
   setSnap(on: boolean) {
     this.snap = on;
-    for (const controls of [this.controls, this.rings]) {
-      controls.setTranslationSnap(on ? 0.1 : null);
-      controls.setRotationSnap(on ? (15 * Math.PI) / 180 : null);
-      controls.setScaleSnap(on ? 0.1 : null);
-    }
+    this.controls.setTranslationSnap(on ? 0.1 : null);
+    this.controls.setRotationSnap(on ? (15 * Math.PI) / 180 : null);
+    this.controls.setScaleSnap(on ? 0.1 : null);
     this.onMode?.();
   }
 
@@ -144,7 +131,7 @@ export class EnvView {
       return data.objects[index] !== undefined && data.objects[index]!.name === source.objects[index]?.name ? index : null;
     }
     // (the scene's own objects are the last Chroma made, in their order)
-    const objects = this.editor.sceneObjects();
+    const objects = this.editor.sceneRendered();
     const order = objects.findIndex((object) => `o:${object.uid}` === key);
     const roots = generatedRoots(data, source.objects.length);
     const index = roots[roots.length - objects.length + order];
@@ -159,11 +146,19 @@ export class EnvView {
     if (index < count) return data.objects[index]?.name === source.objects[index]?.name ? `g:${String(index)}` : null;
     const root = generatedRootOf(data, count, index);
     if (root === null) return null;
-    const objects = this.editor.sceneObjects();
+    const objects = this.editor.sceneRendered();
     const roots = generatedRoots(data, count);
     const order = roots.indexOf(root) - (roots.length - objects.length);
     const object = objects[order];
-    return order < 0 || object === undefined ? null : `o:${object.uid}`;
+    // (one of an array's others: the object it's of)
+    return order < 0 || object === undefined ? null : `o:${object.of ?? object.uid}`;
+  }
+
+  /** An array's others in the view (for an added object that is many). */
+  private othersOf(key: string): number[] {
+    if (!key.startsWith('o:')) return [];
+    const uid = key.slice(2);
+    return this.editor.sceneRendered().flatMap((object) => (object.of === uid ? [this.renderedIndex(`o:${object.uid}`)] : [])).filter((index): index is number => index !== null);
   }
 
   /** Before each frame: the frames round the picked things, the handles on the first of them. */
@@ -173,13 +168,10 @@ export class EnvView {
     const selection = this.editor.envSelection;
     const camera = this.editor.preview.view.viewCamera;
     this.controls.camera = camera;
-    this.rings.camera = camera;
     const first = selection[0] === undefined ? null : this.renderedIndex(selection[0]);
     const usable = data !== null && first !== null;
     this.controls.enabled = usable;
     this.controls.getHelper().visible = usable;
-    this.rings.enabled = usable && this.mode === 'all';
-    this.rings.getHelper().visible = usable && this.mode === 'all';
     if (data === null) return;
     const key = `${selection.join(',')}|${String(this.editor.version)}|${String(data.objects.length)}`;
     if ((key === this.framedKey && this.children?.data === data) || this.dragging !== null) return;
@@ -188,8 +180,8 @@ export class EnvView {
     this.clearFrames();
     selection.forEach((item, order) => {
       const index = this.renderedIndex(item);
-      if (index === null) return;
-      for (const { box, matrix } of shownBoxes(data, index, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, order === 0 ? 0xffe27a : 0x6aa6ff));
+      if (index !== null) for (const { box, matrix } of shownBoxes(data, index, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, order === 0 ? 0xffe27a : 0x6aa6ff));
+      for (const other of this.othersOf(item)) for (const { box, matrix } of shownBoxes(data, other, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, 0x4fd6a0));
     });
     if (usable) {
       worldMatrix(data, first).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
@@ -239,6 +231,15 @@ export class EnvView {
     const was = before[part];
     const now = local[part];
     const tidy = (value: number) => Math.round(value * 10000) / 10000;
+    // (the snap on, a shape moved: an axis close to another shape's is made the same)
+    if (this.snap && mode === 'translate' && before.object?.kind === 'shape') {
+      const others = editor.sceneRendered().filter((item) => item.kind === 'shape' && !keys.includes(`o:${item.of ?? item.uid}`));
+      for (let axis = 0; axis < 3; axis++) {
+        if (Math.abs(now[axis]! - was[axis]!) < 1e-6) continue;
+        const near = others.map((item) => item.position[axis]!).sort((a, b) => Math.abs(a - now[axis]!) - Math.abs(b - now[axis]!))[0];
+        if (near !== undefined && Math.abs(near - now[axis]!) <= 0.25) now[axis] = near;
+      }
+    }
     editor.applyScene(keys, (key, values) => {
       if (key === keys[0]) return { [part]: now };
       // (the others: by as much — sizes by as many times)

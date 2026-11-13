@@ -1,5 +1,6 @@
 import type { EnvironmentData } from '../engine/renderer/environment/types';
 import catalog from './custom-environments.json';
+import { arrayPlacings, type SceneArray } from './env-array';
 import { GEOMETRY_RING_MATERIALS, geometryRingFragment } from './geometry-rings';
 
 /**
@@ -39,6 +40,15 @@ export interface SceneMaterial {
   shader: Shader;
   /** Red, green, blue, alpha (0…1). */
   color: [number, number, number, number];
+  /** The track its colour can be animated by (none: it can't). */
+  track?: string;
+  /** The shader's keywords instead of its own (for those who know them). */
+  keywords?: string[];
+}
+
+/** A material as Chroma has it. */
+export function materialCommand(material: SceneMaterial): Record<string, unknown> {
+  return { shader: material.shader, color: material.color.map(round), ...(material.track === undefined ? {} : { track: material.track }), ...(material.keywords === undefined ? {} : { shaderKeywords: material.keywords }) };
 }
 
 /**
@@ -60,6 +70,30 @@ export interface SceneObject {
   scale: [number, number, number];
   hidden?: boolean;
   light?: { type: number; id: number };
+  /** Many of it: the others are worked out from it (see env-array). */
+  array?: SceneArray;
+  /** A lamp's others: their light IDs, in the array's order. */
+  arrayLights?: number[];
+  /** A copy standing where the game's original does and not written itself: only its array's others
+   *  are (the original is the array's first). */
+  ghost?: boolean;
+  /** One of an array's others (made by `expandObjects`, never kept): the uid of the object it's of. */
+  of?: string;
+}
+
+/** The added objects as they are written and shown: each, then its array's others (a ghost itself
+ *  left out). */
+export function expandObjects(objects: readonly SceneObject[]): SceneObject[] {
+  const out: SceneObject[] = [];
+  for (const object of objects) {
+    if (object.ghost !== true) out.push(object);
+    if (object.array === undefined) continue;
+    arrayPlacings(object, object.array).forEach((placing, n) => {
+      const { array: _array, arrayLights: _lights, ghost: _ghost, ...rest } = object;
+      out.push({ ...rest, ...placing, uid: `${object.uid}#${String(n + 1)}`, of: object.uid, ...(object.light === undefined ? {} : { light: { type: object.light.type, id: object.arrayLights?.[n] ?? object.light.id } }) });
+    });
+  }
+  return out;
 }
 
 /** An added object as Chroma's environment command (null: nothing to write — a shape without its
@@ -84,13 +118,13 @@ export function objectsFragment(mods: EnvironmentMods): { environment: Record<st
   const materials = mods.materials ?? {};
   const environment: Record<string, unknown>[] = [];
   const used = new Set<string>();
-  for (const object of mods.objects ?? []) {
+  for (const object of expandObjects(mods.objects ?? [])) {
     const command = objectCommand(object, materials);
     if (command === null) continue;
     environment.push(command);
     if (object.kind === 'shape' && object.material !== undefined) used.add(object.material);
   }
-  return { environment, materials: Object.fromEntries([...used].map((name) => [name, { shader: materials[name]!.shader, color: materials[name]!.color.map(round) }])) };
+  return { environment, materials: Object.fromEntries([...used].map((name) => [name, materialCommand(materials[name]!)])) };
 }
 
 /**

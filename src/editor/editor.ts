@@ -48,7 +48,8 @@ import { lightGroupName, otherEventName, setEnvironmentTracks } from './names';
 import type { MapFolder } from './platform';
 import { choose } from './menu';
 import { tr, translate } from './i18n';
-import { isLightShader, sceneCommand, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
+import { expandObjects, isLightShader, sceneCommand, SHADERS, SHAPES, type SceneEdit, type SceneMaterial, type SceneObject } from './environment-mods';
+import { arrayCount, type SceneArray } from './env-array';
 import { localOf, sceneTree } from './env-scene';
 import type { LightInfo, Preview } from './preview';
 import { computeSpectrogram, type Spectrogram } from './spectrogram';
@@ -946,6 +947,124 @@ export class Editor {
     if (Object.keys(materials).length > 0) mods.materials = materials;
     else delete mods.materials;
     project.environmentMods = hasMods(mods) || mods.materials !== undefined ? mods : undefined;
+    this.tidyArrays();
+  }
+
+  /** The added objects as they are shown and written: each, then its array's others. */
+  sceneRendered(): SceneObject[] {
+    return expandObjects(this.sceneObjects());
+  }
+
+  /** The key of the game's object with this Chroma id (null: there's none). */
+  private gameKey(id: string): string | null {
+    for (const node of this.envTree()?.nodes.values() ?? []) if (node.id === id) return `g:${String(node.index)}`;
+    return null;
+  }
+
+  /** After a change: a ghost stands where its original does; an array of lamps has a light ID for
+   *  each of its others. */
+  private tidyArrays() {
+    const objects = this.project?.environmentMods?.objects ?? [];
+    const taken = new Map<number, Set<number>>();
+    const takenOf = (type: number) => {
+      let set = taken.get(type);
+      if (set === undefined) taken.set(type, (set = new Set(this.lightsByGame(type))));
+      return set;
+    };
+    for (const object of objects) if (object.light !== undefined) takenOf(object.light.type).add(object.light.id);
+    for (const object of objects) {
+      if (object.ghost === true && object.source !== undefined) {
+        const key = this.gameKey(object.source);
+        const now = key === null ? null : this.sceneValues(key);
+        if (now !== null) Object.assign(object, { position: [...now.position], rotation: [...now.rotation], scale: [...now.scale] });
+      }
+      if (object.array === undefined || object.light === undefined) {
+        delete object.arrayLights;
+        continue;
+      }
+      const set = takenOf(object.light.type);
+      const wanted = arrayCount(object.array) - 1;
+      const ids = (object.arrayLights ?? []).slice(0, wanted);
+      for (const id of ids) set.add(id);
+      while (ids.length < wanted) {
+        let id = Math.max(100, ...set) + 1;
+        while (set.has(id)) id++;
+        set.add(id);
+        ids.push(id);
+      }
+      object.arrayLights = ids;
+    }
+  }
+
+  /** The light IDs of the game's own lamps of an event type (the scene's left out). */
+  private lightsByGame(type: number): number[] {
+    const own = new Set(this.sceneObjects().flatMap((object) => (object.light?.type === type ? [object.light.id, ...(object.arrayLights ?? [])] : [])));
+    return (this.lightsByType.get(type) ?? []).filter((id) => !own.has(id));
+  }
+
+  /**
+   * Makes many of the picked things (null: one again). An added object gets the array itself; a
+   * game's object gets a ghost copy carrying it — the original is the array's first.
+   */
+  setArray(keys: readonly string[], make: ((base: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }) => SceneArray) | null, merge?: string) {
+    if (this.project === null || keys.length === 0) return;
+    this.sceneStep(merge);
+    let objects = structuredClone(this.sceneObjects());
+    const picked: string[] = [];
+    for (const key of keys) {
+      if (key.startsWith('o:')) {
+        const object = objects.find((item) => item.uid === key.slice(2));
+        if (object === undefined) continue;
+        if (make !== null) object.array = make(object);
+        else if (object.ghost === true) objects = objects.filter((item) => item !== object);
+        else {
+          delete object.array;
+          delete object.arrayLights;
+        }
+        if (make !== null || object.ghost !== true) picked.push(key);
+        continue;
+      }
+      const now = this.sceneValues(key);
+      if (make === null || now === null || now.id === null || now.id === undefined) continue;
+      const base = { position: [...now.position] as [number, number, number], rotation: [...now.rotation] as [number, number, number], scale: [...now.scale] as [number, number, number] };
+      const uid = newId('o');
+      objects.push({ uid, name: this.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? '', kind: 'copy', source: now.id, ...base, ghost: true, array: make(base) });
+      picked.push(`o:${uid}`);
+    }
+    this.putScene(this.sceneEdits(), objects);
+    this.envSelection = picked;
+    this.sceneChanged();
+  }
+
+  /** The scene's lamps among these lights: the keys of the objects they are (an array: its object). */
+  sceneLampKeys(lights: readonly { type: number; id: number }[]): string[] {
+    const out = new Set<string>();
+    for (const object of this.sceneRendered()) if (object.light !== undefined && lights.some((light) => light.type === object.light!.type && light.id === object.light!.id)) out.add(`o:${object.of ?? object.uid}`);
+    return [...out];
+  }
+
+  /** Asked from the lights' side: open the scene with these things picked (set by main). */
+  showInScene: (keys: string[]) => void = () => {};
+
+  /** An array's others made objects of their own (the array is no more; a ghost goes). */
+  detachArrays(uids: readonly string[]) {
+    if (this.project === null || uids.length === 0) return;
+    this.sceneStep();
+    const made: string[] = [];
+    const objects = structuredClone(this.sceneObjects()).flatMap((object) => {
+      if (!uids.includes(object.uid) || object.array === undefined) return [object];
+      const { array: _array, arrayLights: _lights, ghost, ...rest } = object;
+      const others = expandObjects([object]).filter((item) => item.of !== undefined).map((item, n) => {
+        const { of: _of, ...plain } = item;
+        return { ...plain, uid: newId('o'), name: `${object.name} ${String(n + 2)}` };
+      });
+      const all = ghost === true ? others : [rest, ...others];
+      made.push(...all.map((item) => `o:${item.uid}`));
+      return all;
+    });
+    this.putScene(this.sceneEdits(), objects);
+    this.envSelection = made;
+    this.sceneChanged();
   }
 
   private sceneTimer: number | null = null;
@@ -1248,7 +1367,7 @@ export class Editor {
 
   /** A light ID no lamp of this event type has yet (the game's, the scene's). */
   freeLightId(type: number, taken: readonly number[] = []): number {
-    const used = new Set<number>([...(this.lightsByType.get(type) ?? []), ...this.sceneObjects().filter((object) => object.light?.type === type).map((object) => object.light!.id), ...taken]);
+    const used = new Set<number>([...(this.lightsByType.get(type) ?? []), ...this.sceneObjects().flatMap((object) => (object.light?.type === type ? [object.light.id, ...(object.arrayLights ?? [])] : [])), ...taken]);
     let id = Math.max(100, ...used) + 1;
     while (used.has(id)) id++;
     return id;
