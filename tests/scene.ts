@@ -1,6 +1,6 @@
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import { chromaRotation, dataRotation, flipZ, localFromWorld, rayBox } from '../src/editor/env-scene';
-import { expandObjects, FOG_ID, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
+import { copyName, expandObjects, FOG_ID, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
 import { arrayCount, arrayPlacings, mirrored } from '../src/editor/env-array';
 import { checkScene } from '../src/editor/env-checks';
 import { animEvents, animTrack, animValue, baseMotionEvents, defaultMotion, linkDelta, linkTrack, motionEvents, movedValue, offsetAnim } from '../src/editor/env-anim';
@@ -219,6 +219,9 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   check('the load counted', JSON.stringify(load.map((item) => [item.name, item.value, item.level])) === JSON.stringify([['объектов', 4, 'ok'], ['материалов', 2, 'ok'], ['ламп', 3, 'ok'], ['событий', 12, 'ok']]), load);
   check('a clean scene: nothing but the load', checkScene({ mods: {}, knownIds: new Set(), gameLights: new Map(), events: 0 }).issues.length === 0);
 }
+
+// copies' names
+check('copies: numbered in brackets, the old number and "— копия" dropped', copyName('Сфера 1', []) === 'Сфера 1 (1)' && copyName('Сфера (1)', ['Сфера (1)']) === 'Сфера (2)' && copyName('Сфера — копия — копия', ['Сфера (1)', 'Сфера (2)']) === 'Сфера (3)' && copyName('BackColumns', []) === 'BackColumns (1)', [copyName('Сфера 1', []), copyName('Сфера (1)', ['Сфера (1)']), copyName('Сфера — копия — копия', ['Сфера (1)', 'Сфера (2)'])]);
 
 console.log('checks', checks, 'failures', failures);
 if (failures > 0) process.exit(1);

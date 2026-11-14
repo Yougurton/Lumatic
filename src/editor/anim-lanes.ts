@@ -97,8 +97,27 @@ export class AnimLanes {
     return `${key}|${part}`;
   }
 
+  /** The lines as last laid out, and what for (drawn many times a frame while playing: laid out once). */
+  private laidOut: { key: string; lines: Line[] } | null = null;
+  /** Open lines' value ranges, for the same layout. */
+  private ranges = new Map<string, { lo: number; hi: number }>();
+
+  private layoutKey() {
+    const editor = this.editor;
+    return `${String(editor.version)}|${String(this.scrollY)}|${String(this.host.lanesTop)}|${editor.envSelection.join(',')}|${String(editor.envMaterialOpen)}|${[...editor.curveRows].join(',')}|${String(editor.project?.environmentMods?.anims?.length)}`;
+  }
+
   /** The lines, top to bottom: the animated things, then the picked ones without animation yet. */
   private lines(): Line[] {
+    const key = this.layoutKey();
+    if (this.laidOut?.key === key) return this.laidOut.lines;
+    this.ranges.clear();
+    const lines = this.layout();
+    this.laidOut = { key, lines };
+    return lines;
+  }
+
+  private layout(): Line[] {
     const editor = this.editor;
     const out: Line[] = [];
     const seen = new Set<string>();
@@ -149,6 +168,15 @@ export class AnimLanes {
     const id = this.rowId(line.key, line.part!);
     const frozen = this.frozen.get(id);
     if (frozen !== undefined) return frozen;
+    this.lines();
+    const known = this.ranges.get(id);
+    if (known !== undefined) return known;
+    const found = this.measure(line);
+    this.ranges.set(id, found);
+    return found;
+  }
+
+  private measure(line: Line): { lo: number; hi: number } {
     let lo = Infinity;
     let hi = -Infinity;
     const keys = sortedKeys(line.anim?.keys[line.part!]);

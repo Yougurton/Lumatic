@@ -42,7 +42,8 @@ const laneSize = 0.6;
 const identityRotation: [number, number, number, number] = [0, 0, 0, 1];
 const identityScale: [number, number, number] = [1, 1, 1];
 const trackWrapperPrefix = '__chroma_track_';
-const lightShaders = new Set(['OpaqueLight', 'TransparentLight', 'BillieWater']);
+// (only these two make a lamp in the game — Heck's docs, and BillieWater shapes don't follow the lights there)
+const lightShaders = new Set(['OpaqueLight', 'TransparentLight']);
 
 interface LookupEntry {
   id: string;
@@ -816,7 +817,8 @@ function glowingMaterial(color: ChromaMaterial['color']): EnvironmentMaterialDat
     family: 'fakeGlow',
     colors: { _Color: [...(color ?? [0, 0, 0, 0])] },
     floats: {
-      _BloomType: 0,
+      // (white-boosted, as the game's: a Glowing shape of any light colour burns nearly white)
+      _BloomType: 2,
       _BloomWhiteMultiplier: 1,
       _CullMode: 2,
       _EnableFog: 0,
@@ -863,6 +865,40 @@ function materialData(data: EnvironmentData, material: ChromaMaterial) {
   }
   if (color !== undefined) result.colors._Color = [...color];
   if (material.keywords !== undefined && material.keywords.length > 0) result.keywords = [...material.keywords];
+  return lookAsInGame(material.shader, result);
+}
+
+/**
+ * A shape's material made to look closer to the game's. Several of the game's materials take their whole
+ * look from the environment's baked lighting and reflections (diffuse light off, a lightmap or a
+ * reflection probe on), which a shape added by a map doesn't have here: lit by the environment's lights
+ * instead, as the game's pictures of them show.
+ */
+function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMaterialData): EnvironmentMaterialData {
+  const scaled = (factor: number) => {
+    const color = result.colors._Color;
+    if (color !== undefined) result.colors._Color = [color[0] * factor, color[1] * factor, color[2] * factor, color[3]];
+  };
+  switch (shader) {
+    case 'WaterfallMirror':
+      // (no mirror for it on a shape: in the game it burns white)
+      return glowingMaterial([1, 1, 1, 1]);
+    case 'InterscopeConcrete':
+      Object.assign(result.floats, { _EnableDiffuse: 1, _EnableSpecular: 1, _SpecularIntensity: 0.3, _Smoothness: 0.4 });
+      break;
+    case 'InterscopeCar':
+      // (dark lacquer: the light only in its highlights)
+      result.colors._Color = [0.2, 0.2, 0.22, 1];
+      Object.assign(result.floats, { _EnableDiffuse: 1, _EnableSpecular: 1, _SpecularIntensity: 3, _Smoothness: 0.95, _Metallic: 0.6 });
+      break;
+    case 'BillieWater':
+      scaled(0.55);
+      Object.assign(result.floats, { _EnableDiffuse: 1, _EnableSpecular: 1, _SpecularIntensity: 1.2, _EnableNormalMap: 1 });
+      break;
+    case 'BaseWater':
+      scaled(0.35);
+      break;
+  }
   return result;
 }
 

@@ -69,7 +69,17 @@ export const animRuns = (anim: SceneAnim | undefined, part: AnimPart) => 1 + Mat
  *  the short way (a whole round: not at all), so it is taken axis by axis instead. */
 const longTurn = (from: readonly number[], to: readonly number[]) => from.some((value, k) => Math.abs((to[k] ?? 0) - value) >= 180 - 1e-6);
 
-export const sortedKeys = (keys: readonly AnimKey[] | undefined) => [...(keys ?? [])].sort((a, b) => a.beat - b.beat);
+const sortedCache = new WeakMap<readonly AnimKey[], { beats: string; sorted: AnimKey[] }>();
+/** Keys in their order on the song (worked out once for a list of keys while it stays as it is). */
+export const sortedKeys = (keys: readonly AnimKey[] | undefined): AnimKey[] => {
+  if (keys === undefined) return [];
+  const beats = keys.map((key) => key.beat).join(',');
+  const known = sortedCache.get(keys);
+  if (known !== undefined && known.beats === beats) return known.sorted;
+  const sorted = [...keys].sort((a, b) => a.beat - b.beat);
+  sortedCache.set(keys, { beats, sorted });
+  return sorted;
+};
 
 /** Whether an animation has any key at all. */
 export const hasKeys = (anim: SceneAnim | undefined) => anim !== undefined && ALL_PARTS.some((part) => (anim.keys[part] ?? []).length > 0);

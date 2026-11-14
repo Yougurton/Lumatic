@@ -100,6 +100,22 @@ export interface SceneObject {
   of?: string;
 }
 
+/**
+ * A copy's name: the original's without its number (or an old "— copy"), then the first number in
+ * brackets no other object has — "Sphere (1)", "Sphere (2)"…
+ */
+export function copyName(name: string, taken: readonly string[]): string {
+  let stem = name.trim();
+  for (let before = ''; before !== stem; ) {
+    before = stem;
+    stem = stem.replace(/ \(\d+\)$/u, '').replace(/ — (копия|зеркало|copy|mirror)$/iu, '').trim();
+  }
+  const used = new Set(taken);
+  let n = 1;
+  while (used.has(`${stem} (${String(n)})`)) n++;
+  return `${stem} (${String(n)})`;
+}
+
 /** The added objects as they are written and shown: each, then its array's others (a ghost itself
  *  left out). */
 export function expandObjects(objects: readonly SceneObject[]): SceneObject[] {

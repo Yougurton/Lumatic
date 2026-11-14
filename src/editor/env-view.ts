@@ -249,7 +249,7 @@ export class EnvView {
     }
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-    const line = new LineSegments(geometry, new LineBasicMaterial({ color: animRuns(anim, 'position') > 1 ? 0x9fd0ff : 0x6aa6ff, depthTest: false, transparent: true, opacity: 0.85 }));
+    const line = new LineSegments(geometry, lineMaterial(animRuns(anim, 'position') > 1 ? 0x9fd0ff : 0x6aa6ff, 0.85));
     line.renderOrder = 9;
     line.frustumCulled = false;
     this.frames.add(line);
@@ -261,8 +261,9 @@ export class EnvView {
   private clearFrames() {
     for (const child of [...this.frames.children]) {
       this.frames.remove(child);
+      // (the geometry only: the materials are shared — disposing them made the renderer drop their
+      // shader and compile it again on the next frame, every frame while an animated thing played)
       (child as LineSegments).geometry.dispose();
-      ((child as LineSegments).material as LineBasicMaterial).dispose();
     }
   }
 
@@ -401,6 +402,16 @@ export class EnvView {
   }
 }
 
+const LINE_MATERIALS = new Map<string, LineBasicMaterial>();
+
+/** The frames' and paths' line material of a colour — one for good, shared. */
+function lineMaterial(color: number, opacity = 1): LineBasicMaterial {
+  const key = `${String(color)}|${String(opacity)}`;
+  let material = LINE_MATERIALS.get(key);
+  if (material === undefined) LINE_MATERIALS.set(key, (material = new LineBasicMaterial({ color, depthTest: false, transparent: true, opacity })));
+  return material;
+}
+
 /** The player's frame: as tall as a person, on the floor. */
 const PLAYER_BOX = { min: [-0.35, 0, -0.35], max: [0.35, 1.8, 0.35] };
 
@@ -418,7 +429,7 @@ function frame(min: readonly number[], max: readonly number[], matrix: Matrix4, 
   }
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-  const lines = new LineSegments(geometry, new LineBasicMaterial({ color, depthTest: false, transparent: true }));
+  const lines = new LineSegments(geometry, lineMaterial(color));
   lines.renderOrder = 10;
   lines.frustumCulled = false;
   return lines;

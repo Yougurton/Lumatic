@@ -146,6 +146,25 @@ class Pair {
   }
 }
 
+/**
+ * A material no longer drawn, let go a moment later. Let go at once, and its replacement (made in the same
+ * breath — the beat lines as the song plays, the walls as they change) not drawn yet, the renderer drops
+ * the shader they share and compiles it again: a stall each time, on every grid step while playing.
+ */
+const retiring: { material: Material; at: number }[] = [];
+let retireTimer = 0;
+function retire(material: Material) {
+  retiring.push({ material, at: performance.now() });
+  if (retireTimer !== 0) return;
+  const flush = () => {
+    retireTimer = 0;
+    const now = performance.now();
+    while (retiring.length > 0 && now - retiring[0]!.at > 400) retiring.shift()!.material.dispose();
+    if (retiring.length > 0) retireTimer = window.setTimeout(flush, 250);
+  };
+  retireTimer = window.setTimeout(flush, 500);
+}
+
 export class NoteTrack {
   private readonly root = new Group();
   /** Moves with the song cursor: its children sit at -beat × metres. */
@@ -482,7 +501,7 @@ export class NoteTrack {
       child.traverse((part) => {
         const mesh = part as Mesh;
         mesh.geometry?.dispose();
-        (mesh.material as Material | undefined)?.dispose();
+        if (mesh.material !== undefined) retire(mesh.material as Material);
       });
     }
     const obstacle = this.rgb(colors.obstacle);
@@ -565,7 +584,7 @@ export class NoteTrack {
     for (const child of [...this.beatLines.children]) {
       this.beatLines.remove(child);
       (child as Mesh).geometry.dispose();
-      ((child as Mesh).material as Material).dispose();
+      retire((child as Mesh).material as Material);
     }
     const half = WIDTH / 2;
     const bars: number[][] = [];
@@ -695,7 +714,7 @@ export class NoteTrack {
     for (const child of [...this.volume.children]) {
       this.volume.remove(child);
       (child as Mesh).geometry.dispose();
-      ((child as Mesh).material as Material).dispose();
+      retire((child as Mesh).material as Material);
     }
     if (span === null) return;
     const width = (span.right - span.left) * LANE;
@@ -836,7 +855,7 @@ export class NoteTrack {
     for (const child of [...this.ghost.children]) {
       this.ghost.remove(child);
       (child as Mesh).geometry.dispose();
-      ((child as Mesh).material as Material).dispose();
+      retire((child as Mesh).material as Material);
     }
     const drag = this.drag;
     const cell = drag?.kind === 'place' ? drag : drag === null ? this.hoverCell : null;

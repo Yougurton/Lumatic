@@ -7,7 +7,7 @@ import { exportEnvironmentDialog, galleryDialog, importEnvironmentFile, settings
 import { ANIM_PARTS, ALL_PARTS, animRuns, hasKeys, isPeriodic, MOTION_KINDS, type AnimPart, type SceneMotion } from './env-anim';
 import { EASINGS } from './rings';
 import { ARRAY_KINDS, arrayCount, defaultArray, mirrored, type ArrayKind, type SceneArray } from './env-array';
-import { expandObjects, isLightShader, modsFragment, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
+import { copyName, expandObjects, isLightShader, modsFragment, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
 import { numberDrum } from './grids';
 import { tr } from './i18n';
 import { showMenu } from './menu';
@@ -550,8 +550,8 @@ export class EnvPanel {
       const now = editor.sceneValues(key);
       if (now === null || now.object?.ghost === true) continue;
       const aside: [number, number, number] = [Math.round((now.position[0] + 1) * 1000) / 1000, now.position[1], now.position[2]];
-      if (now.object !== undefined) made.push({ ...structuredClone({ ...now.object, arrayLights: undefined }), uid: newId('o'), name: tr('{0} — копия', now.object.name), position: aside, ...(now.object.light === undefined ? {} : { light: { type: now.object.light.type, id: editor.freeLightId(now.object.light.type, made.flatMap((item) => (item.light?.type === now.object!.light!.type ? [item.light.id] : []))) } }) });
-      else if (now.id !== null && now.id !== undefined) made.push({ uid: newId('o'), name: tr('{0} — копия', editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? ''), kind: 'copy', source: now.id, position: aside, rotation: [...now.rotation], scale: [...now.scale] });
+      if (now.object !== undefined) made.push({ ...structuredClone({ ...now.object, arrayLights: undefined }), uid: newId('o'), name: copyName(now.object.name, [...editor.sceneObjects(), ...made].map((item) => item.name)), position: aside, ...(now.object.light === undefined ? {} : { light: { type: now.object.light.type, id: editor.freeLightId(now.object.light.type, made.flatMap((item) => (item.light?.type === now.object!.light!.type ? [item.light.id] : []))) } }) });
+      else if (now.id !== null && now.id !== undefined) made.push({ uid: newId('o'), name: copyName(editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? '', [...editor.sceneObjects(), ...made].map((item) => item.name)), kind: 'copy', source: now.id, position: aside, rotation: [...now.rotation], scale: [...now.scale] });
     }
     if (made.length === 0) editor.setStatus(tr('Копировать можно объекты с id для Chroma и свои объекты'));
     else editor.addSceneObjects(made);
@@ -567,8 +567,8 @@ export class EnvPanel {
       const placing = mirrored(now);
       if (now.object !== undefined) {
         const { array: _array, arrayLights: _lights, ...rest } = structuredClone(now.object);
-        made.push({ ...rest, ...placing, uid: newId('o'), name: tr('{0} — зеркало', now.object.name), ...(rest.light === undefined ? {} : { light: { type: rest.light.type, id: editor.freeLightId(rest.light.type, made.flatMap((item) => (item.light?.type === rest.light!.type ? [item.light.id] : []))) } }) });
-      } else if (now.id !== null && now.id !== undefined) made.push({ uid: newId('o'), name: tr('{0} — зеркало', editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? ''), kind: 'copy', source: now.id, ...placing });
+        made.push({ ...rest, ...placing, uid: newId('o'), name: copyName(now.object.name, [...editor.sceneObjects(), ...made].map((item) => item.name)), ...(rest.light === undefined ? {} : { light: { type: rest.light.type, id: editor.freeLightId(rest.light.type, made.flatMap((item) => (item.light?.type === rest.light!.type ? [item.light.id] : []))) } }) });
+      } else if (now.id !== null && now.id !== undefined) made.push({ uid: newId('o'), name: copyName(editor.envTree()?.nodes.get(Number(key.slice(2)))?.name ?? '', [...editor.sceneObjects(), ...made].map((item) => item.name)), kind: 'copy', source: now.id, ...placing });
     }
     if (made.length === 0) editor.setStatus(tr('Копировать можно объекты с id для Chroma и свои объекты'));
     else editor.addSceneObjects(made);
