@@ -330,7 +330,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
     document.body.append(shade);
     const el = <T extends HTMLElement>(id: string) => box.querySelector<T>(`[data-id="${id}"]`)!;
     // the environment: a plate (picture, name, who made it) and the gallery to pick from
-    let choice: EnvironmentChoice = { environment: SHOW_ENVIRONMENTS[0]![0] };
+    let choice: EnvironmentChoice = { environment: 'DefaultEnvironment' };
     environmentPlate(el<HTMLElement>('env'), choice, 'Окружение новой карты', (picked) => (choice = picked));
     // the difficulties (as ChroMapper shows them): Expert+ to start with
     const diffs = difficultyPanel({ bpm: 120, entries: [{ characteristic: 'Standard', difficulty: 'ExpertPlus', enabled: true, njs: DEFAULT_NJS.ExpertPlus ?? 16, offset: 0, label: '' }] });

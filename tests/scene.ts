@@ -2,6 +2,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three';
 import { chromaRotation, dataRotation, flipZ, localFromWorld, rayBox } from '../src/editor/env-scene';
 import { expandObjects, FOG_ID, modsFragment, objectsFragment, sceneCommand, hasMods, fragmentRequirements } from '../src/editor/environment-mods';
 import { arrayCount, arrayPlacings, mirrored } from '../src/editor/env-array';
+import { checkScene } from '../src/editor/env-checks';
 import { animEvents, animTrack, animValue, baseMotionEvents, defaultMotion, linkDelta, linkTrack, motionEvents, movedValue, offsetAnim } from '../src/editor/env-anim';
 
 /**
@@ -197,6 +198,26 @@ check('hidden', JSON.stringify(sceneCommand({ id: 'a', hidden: true })) === JSON
   const events = fragment.customEvents as { t: string; d: Record<string, unknown> }[];
   check('a motion alone: the object on its track, sampled and following events', (fragment.environment.at(-1) as { track?: string }).track === animTrack('o:a') && events.filter((event) => event.d.track === animTrack('o:a')).length === 2);
   check('a material coloured as the left notes, its alpha kept', events.some((event) => event.d.track === animTrack('m:m') && JSON.stringify(event.d.color) === JSON.stringify(['baseNote0Color', [1, 1, 1, 0.5, 'opMul']])) && (fragment.materials.m as { track?: string }).track === animTrack('m:m'));
+}
+
+// stage 7: the scene's check and load
+{
+  const cube = (uid: string, position: [number, number, number], extra = {}) => ({ uid, name: uid, kind: 'shape' as const, shape: 'Cube' as const, material: 'lamp', position, rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number], ...extra });
+  const mods = {
+    materials: { lamp: { shader: 'OpaqueLight' as const, color: [1, 1, 1, 1] as [number, number, number, number] }, spare: { shader: 'Standard' as const, color: [1, 1, 1, 1] as [number, number, number, number] } },
+    objects: [cube('inway', [0, 1, 5], { light: { type: 0, id: 101 } }), cube('aside', [8, 1, 5], { light: { type: 0, id: 101 } }), cube('clash', [-8, 1, 5], { light: { type: 0, id: 3 } })],
+    scene: [{ id: 'Gone.[9]Thing', hidden: true }],
+    anims: [{ target: 'player', keys: { position: [{ id: 'a', beat: 0, value: [0, 0, 0] }, { id: 'b', beat: 1, value: [0, 5, 0], easing: 'easeInQuad' }] } }],
+  };
+  const { issues, load } = checkScene({ mods, knownIds: new Set(['Env.[1]Ring']), gameLights: new Map([[0, [1, 2, 3]]]), events: 12 });
+  const has = (text: RegExp, target?: string) => issues.some((issue) => text.test(issue.text) && (target === undefined || issue.targets.includes(target)));
+  check('missing: an object the environment hasn\'t', has(/нет в этом окружении/, 'Gone.[9]Thing'));
+  check('in the notes\' way: the cube in front, not the one aside', has(/где летят ноты/, 'o:inway') && !has(/где летят ноты/, 'o:aside'));
+  check('lamps: the same number twice, one as the game\'s', has(/одинаковый номер/) && has(/совпадает с лампой самого окружения/, 'o:clash'));
+  check('materials: the unused one', has(/не используется/, 'm:spare'));
+  check('the player: eased and fast', has(/неравномерно/, 'player') && has(/движется быстро/, 'player'));
+  check('the load counted', JSON.stringify(load.map((item) => [item.name, item.value, item.level])) === JSON.stringify([['объектов', 4, 'ok'], ['материалов', 2, 'ok'], ['ламп', 3, 'ok'], ['событий', 12, 'ok']]), load);
+  check('a clean scene: nothing but the load', checkScene({ mods: {}, knownIds: new Set(), gameLights: new Map(), events: 0 }).issues.length === 0);
 }
 
 console.log('checks', checks, 'failures', failures);

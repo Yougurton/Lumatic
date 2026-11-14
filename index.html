@@ -346,6 +346,29 @@
       .env-motion { display: flex; flex-direction: column; gap: 6px; background: rgba(160, 140, 255, 0.06); border-radius: 5px; padding: 6px; margin: 0 -4px; }
       .env-icon.active { color: #ffe27a; border-color: #6a5f2a; }
       .env-motion .env-line-wide { grid-template-columns: 118px minmax(0, 1fr); }
+      .env-load.ok { color: #7fdc9a; }
+      .env-load.many { color: #ffd36a; }
+      .env-load.heavy { color: #ff7a7a; }
+      .env-checks { border-top: 1px solid var(--line); padding: 3px 6px; font-size: 11px; max-height: 140px; overflow-y: auto; flex-shrink: 0; }
+      .env-checks > summary { cursor: pointer; }
+      .env-checks > summary.error { color: #ff7a7a; }
+      .env-checks > summary.warn { color: #ffd36a; }
+      .env-checks > summary.info { color: var(--dim); }
+      .env-issue { padding: 2px 0 2px 10px; line-height: 1.35; }
+      .env-issue.error { color: #ffb0b0; }
+      .env-issue.warn { color: #ffe3a0; }
+      .env-issue.info { color: var(--dim); }
+      .env-issue.link { cursor: pointer; }
+      .env-issue.link:hover { text-decoration: underline; }
+      .share-dialog { display: flex; flex-direction: column; gap: 8px; width: 520px; max-width: calc(100vw - 32px); max-height: calc(100vh - 60px); overflow-y: auto; }
+      .share-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+      .share-field > span { color: var(--dim); }
+      .share-field input[type='text'], .share-field select { flex: none; width: 280px; max-width: 60%; }
+      .gallery-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+      .gallery-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 6px; align-items: center; padding: 6px; background: rgba(255, 255, 255, 0.03); border-radius: 5px; }
+      .gallery-save { display: flex; gap: 6px; }
+      .gallery-save input { flex: 1; }
+      .settings-grid { display: flex; flex-direction: column; gap: 5px; }
       .env-gap {
         width: 10px;
       }

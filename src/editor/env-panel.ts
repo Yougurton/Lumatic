@@ -2,10 +2,12 @@ import type { EnvironmentData } from '../engine/renderer/environment/types';
 import type { Editor } from './editor';
 import type { SceneNode } from './env-scene';
 import { MOTION_NAMES } from './anim-lanes';
+import { checkScene } from './env-checks';
+import { exportEnvironmentDialog, galleryDialog, importEnvironmentFile, settingsDialog } from './env-share';
 import { ANIM_PARTS, ALL_PARTS, animRuns, hasKeys, isPeriodic, MOTION_KINDS, type AnimPart, type SceneMotion } from './env-anim';
 import { EASINGS } from './rings';
 import { ARRAY_KINDS, arrayCount, defaultArray, mirrored, type ArrayKind, type SceneArray } from './env-array';
-import { expandObjects, isLightShader, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
+import { expandObjects, isLightShader, modsFragment, materialCommand, objectCommand, sceneCommand, SHADERS, SHAPES, type SceneMaterial, type SceneObject, type Shader, type Shape } from './environment-mods';
 import { numberDrum } from './grids';
 import { tr } from './i18n';
 import { showMenu } from './menu';
@@ -74,6 +76,8 @@ export class EnvPanel {
   private changedOnly = false;
   private readonly list = document.createElement('div');
   private readonly count = document.createElement('div');
+  /** The scene's check: what's wrong with it. */
+  private readonly checks = document.createElement('details');
   private shownKey = '';
   /** What the right panel was drawn for (the same again: it stays scrolled where it was). */
   private inspectorShows = '';
@@ -110,12 +114,26 @@ export class EnvPanel {
       this.render();
     });
     changed.append(box, ' Только изменённые');
-    const take = Object.assign(document.createElement('button'), { type: 'button', textContent: '⤓ Взять записи карты', title: 'Собственные записи окружения этой карты (сделанные не в Lumatic) превратить в объекты сцены, чтобы их можно было править здесь' });
-    take.addEventListener('click', () => void editor.importMapEnvironment());
+    const take = Object.assign(document.createElement('button'), { type: 'button', textContent: '☰ Окружение ▾', title: 'Записи карты, файлы окружения Chroma, галерея сцен, рекомендованные настройки' });
+    take.addEventListener('click', () => {
+      const rect = take.getBoundingClientRect();
+      setTimeout(() =>
+        showMenu(rect.left, rect.bottom + 2, [
+          { label: '⤓ Взять записи карты', hint: 'сделанные не в Lumatic', action: () => void editor.importMapEnvironment() },
+          null,
+          { label: '⤒ Сохранить как окружение Chroma…', hint: '.dat для UserData/Chroma/Environments', action: () => void exportEnvironmentDialog(editor) },
+          { label: '⤓ Загрузить окружение Chroma…', hint: 'из файла .dat', action: () => importEnvironmentFile(editor) },
+          { label: '🖼 Галерея сцен…', hint: 'сохранить и применить к другим картам', action: () => galleryDialog(editor) },
+          null,
+          { label: '⚙ Рекомендованные настройки…', hint: 'Settings Setter, Info.dat', action: () => void settingsDialog(editor) },
+        ]),
+      );
+    });
     head.append(search, changed, take);
     this.list.className = 'env-tree';
     this.count.className = 'nm-dim env-count';
-    sceneRoot.append(head, this.list, this.count);
+    this.checks.className = 'env-checks';
+    sceneRoot.append(head, this.list, this.checks, this.count);
     editor.onChange(() => void this.refresh());
   }
 
@@ -348,7 +366,52 @@ export class EnvPanel {
     }
     this.order = order;
     this.list.replaceChildren(...rows);
-    this.count.textContent = tr('Объектов игры: {0} · изменено: {1} · своих: {2}', tree?.nodes.size ?? 0, editor.sceneEdits().length, editor.sceneObjects().length);
+    this.renderChecks();
+  }
+
+  /** The load (coloured: fine, a lot, heavy for Quest) and the check's findings (a click: the thing). */
+  private renderChecks() {
+    const editor = this.editor;
+    const mods = editor.project?.environmentMods ?? {};
+    const tree = editor.envTree();
+    const knownIds = new Set([...(tree?.nodes.values() ?? [])].flatMap((node) => (node.id === null ? [] : [node.id])));
+    let events = 0;
+    try {
+      events = modsFragment(mods, editor.envSceneData).customEvents.length;
+    } catch {
+      events = 0;
+    }
+    const { issues, load } = checkScene({ mods, knownIds, gameLights: editor.lightsByType, events });
+    this.count.replaceChildren();
+    this.count.title = tr('Нагрузка сцены: зелёный — нормально, жёлтый — много, красный — тяжело для Quest');
+    load.forEach((item, at) => {
+      if (at > 0) this.count.append(' · ');
+      this.count.append(Object.assign(document.createElement('span'), { className: `env-load ${item.level}`, textContent: `${tr(item.name)} ${String(item.value)}` }));
+    });
+    const open = this.checks.open;
+    this.checks.replaceChildren();
+    this.checks.hidden = issues.length === 0;
+    const worst = issues.some((issue) => issue.level === 'error') ? 'error' : issues.some((issue) => issue.level === 'warn') ? 'warn' : 'info';
+    const summary = Object.assign(document.createElement('summary'), { textContent: tr('{0} Проверка: {1}', worst === 'error' ? '⛔' : worst === 'warn' ? '⚠' : 'ℹ', issues.length) });
+    summary.className = worst;
+    this.checks.append(summary);
+    this.checks.open = open;
+    for (const issue of issues) {
+      const line = Object.assign(document.createElement('div'), { className: `env-issue ${issue.level}`, textContent: tr(issue.text, ...issue.args) });
+      const keys = issue.targets.map((target) => editor.animKeyOf({ target, keys: {} })).filter((key): key is string => key !== null);
+      if (keys.length > 0) {
+        line.classList.add('link');
+        line.addEventListener('click', () => {
+          const material = keys.find((key) => key.startsWith('m:'));
+          if (material !== undefined) this.openMaterial(material.slice(2));
+          else {
+            editor.selectEnv(keys);
+            this.reveal(keys[0]!);
+          }
+        });
+      }
+      this.checks.append(line);
+    }
   }
 
   /** ◆: animated; ⛓: hung on another. */

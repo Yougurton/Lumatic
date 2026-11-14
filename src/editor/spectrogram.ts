@@ -73,7 +73,9 @@ function fft(re, im) {
 }
 self.onmessage = (event) => {
   const { samples, sampleRate } = event.data;
-  const frames = Math.max(1, Math.floor((samples.length - FFT) / HOP) + 1);
+  // (a column's window centred on its time — not starting there: else a hit lights the column up to a
+  // window's length before it sounds)
+  const frames = Math.max(1, Math.floor(samples.length / HOP) + 1);
   const hz2mel = (f) => 2595 * Math.log10(1 + f / 700);
   const mel2hz = (m) => 700 * (Math.pow(10, m / 2595) - 1);
   const lo = hz2mel(${LOW_HZ}), hi = hz2mel(Math.min(${HIGH_HZ}, sampleRate / 2));
@@ -86,7 +88,7 @@ self.onmessage = (event) => {
   const db = new Float32Array(frames * BANDS);
   let max = -200;
   for (let f = 0; f < frames; f++) {
-    const off = f * HOP;
+    const off = f * HOP - FFT / 2;
     for (let i = 0; i < FFT; i++) { re[i] = (samples[off + i] || 0) * window[i]; im[i] = 0; }
     fft(re, im);
     for (let b = 0; b < BANDS; b++) {

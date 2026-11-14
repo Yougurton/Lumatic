@@ -132,6 +132,19 @@ export interface GlsInspect {
   render?: (root: HTMLElement) => void;
 }
 
+/** A scene kept in the gallery: its parts and the environment it was made for. */
+export interface SceneSnapshot {
+  environment: string;
+  scene?: SceneEdit[];
+  objects?: SceneObject[];
+  materials?: Record<string, SceneMaterial>;
+  anims?: SceneAnim[];
+  links?: SceneLink[];
+  fog?: FogValues;
+  player?: { risky?: boolean };
+  motions?: SceneMotion[];
+}
+
 /** The scene's parts besides its edits, objects, materials and animations (for undo). */
 function sceneExtras(mods: EnvironmentMods | undefined) {
   return { links: mods?.links, fog: mods?.fog, player: mods?.player, motions: mods?.motions };
@@ -1898,34 +1911,32 @@ export class Editor {
    * shape with a named or its own material becomes a shape of the scene. What's taken is from then on
    * written by Lumatic (the map's own entries of it go at the next save); the rest stays the map's.
    */
-  async importMapEnvironment() {
-    const map = this.map;
-    const row = this.row;
-    const project = this.project;
+  /**
+   * Environment entries made into the scene where they can be (a game object's simple change by its
+   * exact id, a shape of a plain material, the fog): the scene as it then is, and what was taken and
+   * left. `skip`: entries left alone without counting them (Lumatic's own).
+   */
+  private entriesToScene(entries: readonly Record<string, unknown>[], sourceMaterials: Record<string, Record<string, unknown>> | undefined, skip: (entry: Record<string, unknown>) => boolean = () => false) {
     const tree = this.envTree();
-    if (map === null || row === null || project === null || tree === null) return;
-    const text = await map.folder.readText(difficultyFile(row));
-    if (difficultyVersion(text) !== '3') {
-      this.setStatus(tr('Записи окружения берутся из сложностей формата v3 — переведите сложность в v3 (Свойства → копия в v3)'));
-      return;
-    }
-    const custom = ((JSON.parse(text) as { customData?: Record<string, unknown> }).customData ?? {}) as { environment?: Record<string, unknown>[]; materials?: Record<string, Record<string, unknown>> };
-    // (Lumatic's own entries, as written last, are not the map's)
-    const ours = new Map<string, number>();
-    for (const entry of project.writtenEnvironment?.environment ?? []) ours.set(JSON.stringify(entry), (ours.get(JSON.stringify(entry)) ?? 0) + 1);
-    const known = new Set([...tree.nodes.values()].flatMap((node) => (node.id === null ? [] : [node.id])));
+    const custom = { materials: sourceMaterials };
+    const known = new Set([...(tree?.nodes.values() ?? [])].flatMap((node) => (node.id === null ? [] : [node.id])));
     const vector = (value: unknown): [number, number, number] | undefined => (Array.isArray(value) && value.length === 3 && value.every((item) => typeof item === 'number') ? (value as [number, number, number]) : undefined);
     const only = (entry: Record<string, unknown>, keys: string[]) => Object.keys(entry).every((key) => keys.includes(key));
     const scene = structuredClone(this.sceneEdits());
     const objects = structuredClone(this.sceneObjects());
     const materials = structuredClone(this.sceneMaterials());
+    let fog: FogValues | undefined;
     const taken: Record<string, unknown>[] = [];
     const takenMaterials: Record<string, unknown> = {};
     let left = 0;
-    for (const entry of custom.environment ?? []) {
-      const key = JSON.stringify(entry);
-      if ((ours.get(key) ?? 0) > 0) {
-        ours.set(key, ours.get(key)! - 1);
+    for (const entry of entries) {
+      if (skip(entry)) continue;
+      // (the fog: on the environment's root, nothing else)
+      const fogComponent = (entry.components as { BloomFogEnvironment?: Record<string, unknown> } | undefined)?.BloomFogEnvironment;
+      if (typeof entry.id === 'string' && /\[0\]Environment\$?$/.test(entry.id) && fogComponent !== undefined && Object.keys(entry.components as object).length === 1 && only(entry, ['id', 'lookupMethod', 'components'])) {
+        fog = { ...(fog ?? {}) };
+        for (const name of ['attenuation', 'offset', 'startY', 'height'] as const) if (typeof fogComponent[name] === 'number') fog[name] = fogComponent[name] as number;
+        taken.push(entry);
         continue;
       }
       if (typeof entry.id === 'string' && entry.lookupMethod === 'Exact' && known.has(entry.id) && only(entry, ['id', 'lookupMethod', 'active', 'localPosition', 'localRotation', 'scale'])) {
@@ -1972,6 +1983,92 @@ export class Editor {
       }
       left++;
     }
+    return { scene, objects, materials, fog, taken, takenMaterials, left };
+  }
+
+  /** A shared Chroma environment's entries (a .dat file) made into the scene where they can be. */
+  importEnvironmentFile(data: { environment?: unknown; materials?: unknown; environmentName?: unknown }) {
+    const project = this.project;
+    if (project === null || this.envTree() === null) return;
+    if (!Array.isArray(data.environment)) {
+      this.setStatus(tr('В файле нет записей окружения (environment)'));
+      return;
+    }
+    const made = this.entriesToScene(data.environment as Record<string, unknown>[], (data.materials ?? undefined) as Record<string, Record<string, unknown>> | undefined);
+    if (made.taken.length === 0) {
+      this.setStatus(tr('Ни одну запись файла нельзя взять в сцену ({0})', made.left));
+      return;
+    }
+    this.sceneStep();
+    if (made.fog !== undefined) project.environmentMods = { ...(project.environmentMods ?? {}), fog: { ...(project.environmentMods?.fog ?? {}), ...made.fog } };
+    this.putScene(made.scene, made.objects, made.materials);
+    this.sceneChanged();
+    const other = typeof data.environmentName === 'string' && data.environmentName !== (this.row?.environmentId ?? 'DefaultEnvironment');
+    this.setStatus(tr('Взято в сцену записей: {0}; пропущено: {1}', made.taken.length, made.left) + (other ? ` · ${tr('файл сделан для окружения {0} — объекты этого окружения могут не найтись', String(data.environmentName))}` : ''));
+  }
+
+  /** The scene as it is (for the gallery): its parts, the environment it's for. */
+  sceneSnapshot(): SceneSnapshot {
+    const mods = this.project?.environmentMods ?? {};
+    return structuredClone({ environment: this.row?.environmentId ?? 'DefaultEnvironment', scene: mods.scene, objects: mods.objects, materials: mods.materials, anims: mods.anims, links: mods.links, fog: mods.fog, player: mods.player, motions: mods.motions });
+  }
+
+  /**
+   * A scene from the gallery put into this one (`replace`: in place of it). Its own objects get new
+   * uids (their keys, links and motions follow); the game objects' changes only when it was made for
+   * this environment.
+   */
+  applySceneSnapshot(snapshot: SceneSnapshot, replace: boolean) {
+    const project = this.project;
+    if (project === null) return;
+    const same = snapshot.environment === (this.row?.environmentId ?? 'DefaultEnvironment');
+    const uids = new Map<string, string>();
+    for (const object of snapshot.objects ?? []) uids.set(`o:${object.uid}`, `o:${newId('o')}`);
+    const target = (value: string) => uids.get(value) ?? value;
+    const ownOrSame = (value: string) => uids.has(value) || same || value === 'fog' || value === 'player' || value.startsWith('m:');
+    const objects = (snapshot.objects ?? []).map((object) => ({ ...structuredClone(object), uid: uids.get(`o:${object.uid}`)!.slice(2) })).filter((object) => same || object.kind !== 'copy');
+    const anims = (snapshot.anims ?? []).filter((anim) => ownOrSame(anim.target)).map((anim) => ({ ...structuredClone(anim), target: target(anim.target) }));
+    const links = (snapshot.links ?? []).filter((link) => ownOrSame(link.child) && ownOrSame(link.parent)).map((link) => ({ child: target(link.child), parent: target(link.parent) }));
+    const motions = (snapshot.motions ?? []).filter((motion) => ownOrSame(motion.target)).map((motion) => ({ ...structuredClone(motion), id: newId('m'), target: target(motion.target) }));
+    this.sceneStep();
+    const mods: EnvironmentMods = { ...(project.environmentMods ?? {}) };
+    const join = <T,>(now: T[] | undefined, added: T[]) => (replace ? added : [...(now ?? []), ...added]);
+    mods.anims = join(mods.anims, anims);
+    mods.links = join(mods.links, links);
+    mods.motions = join(mods.motions, motions);
+    if (snapshot.fog !== undefined || replace) mods.fog = snapshot.fog;
+    if (snapshot.player !== undefined || replace) mods.player = snapshot.player;
+    project.environmentMods = mods;
+    const scene = same ? (replace ? structuredClone(snapshot.scene ?? []) : [...this.sceneEdits(), ...structuredClone(snapshot.scene ?? []).filter((edit) => !this.sceneEdits().some((item) => item.id === edit.id))]) : replace ? [] : this.sceneEdits();
+    this.putScene(scene, join(structuredClone(this.sceneObjects()), objects), { ...(replace ? {} : this.sceneMaterials()), ...structuredClone(snapshot.materials ?? {}) });
+    this.envSelection = [];
+    this.sceneChanged();
+    this.setStatus(same ? tr('Сцена из галереи применена') : tr('Сцена из галереи применена: она сделана для окружения {0}, поэтому изменения его объектов пропущены — взяты свои объекты, материалы и туман', snapshot.environment));
+  }
+
+  async importMapEnvironment() {
+    const map = this.map;
+    const row = this.row;
+    const project = this.project;
+    const tree = this.envTree();
+    if (map === null || row === null || project === null || tree === null) return;
+    const text = await map.folder.readText(difficultyFile(row));
+    if (difficultyVersion(text) !== '3') {
+      this.setStatus(tr('Записи окружения берутся из сложностей формата v3 — переведите сложность в v3 (Свойства → копия в v3)'));
+      return;
+    }
+    const custom = ((JSON.parse(text) as { customData?: Record<string, unknown> }).customData ?? {}) as { environment?: Record<string, unknown>[]; materials?: Record<string, Record<string, unknown>> };
+    // (Lumatic's own entries, as written last, are not the map's)
+    const ours = new Map<string, number>();
+    for (const entry of project.writtenEnvironment?.environment ?? []) ours.set(JSON.stringify(entry), (ours.get(JSON.stringify(entry)) ?? 0) + 1);
+    const made = this.entriesToScene(custom.environment ?? [], custom.materials, (entry) => {
+      const key = JSON.stringify(entry);
+      if ((ours.get(key) ?? 0) <= 0) return false;
+      ours.set(key, ours.get(key)! - 1);
+      return true;
+    });
+    const { scene, objects, materials, taken, takenMaterials, left } = made;
+    if (made.fog !== undefined) project.environmentMods = { ...(project.environmentMods ?? {}), fog: { ...(project.environmentMods?.fog ?? {}), ...made.fog } };
     if (taken.length === 0) {
       this.setStatus(left === 0 ? tr('У карты нет своих записей окружения') : tr('Своих записей окружения: {0}, но ни одну нельзя взять в сцену (они остаются в карте как есть)', left));
       return;
