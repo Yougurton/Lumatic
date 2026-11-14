@@ -1,3 +1,4 @@
+import { CubeTexture, SRGBColorSpace } from 'three';
 import type { Rgb } from '../../../core/colors';
 import { createEnvironmentLitMaterial, createWaterLitMaterial } from '../../materials/environment-surface-materials';
 import type { EnvironmentMaterialData } from '../types';
@@ -14,11 +15,72 @@ function unityVectorColor(value: [number, number, number, number] | undefined, f
   return [vector[0], vector[1], -vector[2]];
 }
 
+/**
+ * A neutral reflection probe for the environments that have none of their own: a sky light above, dim
+ * below, a few soft lights round the horizon. Only for a map's own shapes (marked by
+ * `_LumaticFallbackProbe`): their glossy materials have nothing to reflect otherwise and look matte.
+ */
+let fallbackProbe: CubeTexture | undefined;
+function neutralProbe(): CubeTexture {
+  if (fallbackProbe !== undefined) return fallbackProbe;
+  const size = 64;
+  // (three's cube faces: +x, -x, +y, -y, +z, -z — each pixel's direction)
+  const faces: ((u: number, v: number) => [number, number, number])[] = [
+    (u, v) => [1, -v, -u],
+    (u, v) => [-1, -v, u],
+    (u, v) => [u, 1, v],
+    (u, v) => [u, -1, -v],
+    (u, v) => [u, -v, 1],
+    (u, v) => [-u, -v, -1],
+  ];
+  const lights: [number, number, number][] = [
+    [0.55, 0.45, 0.7],
+    [-0.7, 0.35, 0.6],
+    [0.1, 0.8, -0.6],
+  ];
+  const images = faces.map((direction) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    const image = ctx.createImageData(size, size);
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const [dx, dy, dz] = direction(((x + 0.5) / size) * 2 - 1, ((y + 0.5) / size) * 2 - 1);
+        const length = Math.hypot(dx, dy, dz);
+        const [nx, ny, nz] = [dx / length, dy / length, dz / length];
+        let value = ny >= 0 ? 0.42 + 0.45 * Math.pow(ny, 0.7) : 0.42 - 0.3 * Math.pow(-ny, 0.5);
+        for (const [lx, ly, lz] of lights) {
+          const l = Math.hypot(lx, ly, lz);
+          const facing = Math.max(0, (nx * lx + ny * ly + nz * lz) / l);
+          value += 0.55 * Math.pow(facing, 24);
+        }
+        const byte = Math.round(Math.min(1, value) * 255);
+        const at = (y * size + x) * 4;
+        image.data[at] = byte;
+        image.data[at + 1] = byte;
+        image.data[at + 2] = byte;
+        image.data[at + 3] = 255;
+      }
+    ctx.putImageData(image, 0, 0);
+    return canvas;
+  });
+  fallbackProbe = new CubeTexture(images);
+  fallbackProbe.colorSpace = SRGBColorSpace;
+  fallbackProbe.needsUpdate = true;
+  return fallbackProbe;
+}
+
 export function createLitEnvironmentMaterial(
   data: EnvironmentMaterialData,
-  context: EnvironmentMaterialContext,
+  givenContext: EnvironmentMaterialContext,
   color: Rgb,
 ) {
+  // (a map's own shape in an environment without a probe: the neutral one)
+  const context =
+    data.floats._LumaticFallbackProbe === 1 && givenContext.reflectionProbe === undefined && givenContext.bakedReflectionProbe === undefined
+      ? { ...givenContext, reflectionProbe: neutralProbe() }
+      : givenContext;
   if (data.shader === 'ChroMapper/Water Lit') {
     const normal = materialTexture(data, context, '_NormalTexture');
     if (normal !== undefined && (context.reflectionProbe !== undefined || context.bakedReflectionProbe !== undefined)) {

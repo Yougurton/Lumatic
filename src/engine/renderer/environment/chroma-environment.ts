@@ -865,38 +865,52 @@ function materialData(data: EnvironmentData, material: ChromaMaterial) {
   }
   if (color !== undefined) result.colors._Color = [...color];
   if (material.keywords !== undefined && material.keywords.length > 0) result.keywords = [...material.keywords];
-  return lookAsInGame(material.shader, result);
+  return lookAsInGame(material.shader, result, data);
 }
 
 /**
- * A shape's material made to look closer to the game's. Several of the game's materials take their whole
- * look from the environment's baked lighting and reflections (diffuse light off, a lightmap or a
- * reflection probe on), which a shape added by a map doesn't have here: lit by the environment's lights
- * instead, as the game's pictures of them show.
+ * A shape's material made to look closer to the game's. Several of the game's materials take their look
+ * from the environment's baked reflections and lighting (a reflection probe, a lightmap), which most
+ * environments here don't have: the shape gets a neutral stand-in probe (see the lit materials), the
+ * mirror the floor's, the lamps-to-be a glow with a halo — after side-by-side pictures from the game.
  */
-function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMaterialData): EnvironmentMaterialData {
-  const scaled = (factor: number) => {
-    const color = result.colors._Color;
-    if (color !== undefined) result.colors._Color = [color[0] * factor, color[1] * factor, color[2] * factor, color[3]];
-  };
+function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMaterialData, data: EnvironmentData): EnvironmentMaterialData {
+  const reflective = (intensity: number, smoothness: number) =>
+    Object.assign(result.floats, { _LumaticFallbackProbe: 1, _EnableReflectionProbe: 1, _ReflectionProbeIntensity: intensity, _Smoothness: smoothness, _EnableSpecular: 1 });
   switch (shader) {
-    case 'WaterfallMirror':
-      // (no mirror for it on a shape: in the game it burns white)
-      return glowingMaterial([1, 1, 1, 1]);
+    case 'Glowing':
+    case 'WaterfallMirror': {
+      // (both burn white in the game, with a halo: glow written into the bloom)
+      const glow = shader === 'Glowing' ? result : glowingMaterial([1, 1, 1, 1]);
+      if (glow.family !== 'fakeGlow') return glow;
+      Object.assign(glow.floats, { _BloomType: 1, _BloomMultiplier: 1.6 });
+      return glow;
+    }
+    case 'InterscopeCar': {
+      // (a mirror, as the Big Mirror floor — without its dirt)
+      const mirror = data.materials[chromaMaterialPresetKey('WaterfallMirror')];
+      if (mirror === undefined) return result;
+      const out = structuredClone(mirror);
+      out.name = '__chroma_InterscopeCar_mirror';
+      out.keywords = out.keywords.filter((keyword) => keyword !== 'DIRT' && keyword !== 'ENABLE_DIRT' && keyword !== 'DETAIL_NORMAL_MAP' && keyword !== 'LIGHTMAP');
+      if (out.textures !== undefined) delete out.textures._NormalTex;
+      out.colors._Color = [0, 0, 0, 1];
+      Object.assign(out.floats, { _ReflectionIntensity: 1, _EnableDirt: 0, _DetailNormalMap: 0, _BumpIntensity: 0 });
+      return out;
+    }
     case 'InterscopeConcrete':
-      Object.assign(result.floats, { _EnableDiffuse: 1, _EnableSpecular: 1, _SpecularIntensity: 0.3, _Smoothness: 0.4 });
-      break;
-    case 'InterscopeCar':
-      // (dark lacquer: the light only in its highlights)
-      result.colors._Color = [0.2, 0.2, 0.22, 1];
-      Object.assign(result.floats, { _EnableDiffuse: 1, _EnableSpecular: 1, _SpecularIntensity: 3, _Smoothness: 0.95, _Metallic: 0.6 });
+      // (its grain: a texture over its colour, see the support materials)
+      Object.assign(result.floats, { _EnableDiffuse: 1 });
+      reflective(0.35, 0.5);
       break;
     case 'BillieWater':
-      scaled(0.55);
-      Object.assign(result.floats, { _EnableDiffuse: 1, _EnableSpecular: 1, _SpecularIntensity: 1.2, _EnableNormalMap: 1 });
+      // (the waterfall's water: animated, it needs a probe to reflect)
+      reflective(1, 0.7);
       break;
+    case 'Standard':
+    case 'BTSPillar':
     case 'BaseWater':
-      scaled(0.35);
+      reflective(shader === 'BaseWater' ? 0.8 : 0.6, 0.85);
       break;
   }
   return result;
