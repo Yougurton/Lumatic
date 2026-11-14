@@ -898,8 +898,10 @@ function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMater
       reflective(0.35, 0.5);
       break;
     case 'BillieWater':
-      // (as BaseWater's material looked before its changes — the closest to the game's)
-      return baseWaterMaterial(result.colors._Color);
+      // (the Billie waterfall's water — its running normal map — rippling what's round it, live, as the
+      // game's probe gives it)
+      Object.assign(result.floats, { _LumaticLiveReflection: 1, _EnableReflectionProbe: 1, _ReflectionProbeIntensity: 1 });
+      break;
     case 'BaseWater': {
       // (darker, as the game's)
       const color = result.colors._Color;
