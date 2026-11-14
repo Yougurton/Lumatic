@@ -1,13 +1,22 @@
+import { canInstall, checkForUpdate, downloadUpdate, installUpdate } from './updater';
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { backupFile } from './backup';
+import { pickScreenColor } from './eyedropper';
+import { log, logFolder } from './log';
+import { findAdbServices } from './mdns';
+import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAdb, pair, upload, type UploadOptions } from './quest';
 
 /**
- * ChroEditor's window. The page (dist/) is served from app://local so it can fetch its environment
+ * Lumatic's window (the editor was called ChroEditor before). The page (dist/) is served from app://local so it can fetch its environment
  * data like a website; map folders are read and written through IPC (preload.ts), and only inside
  * folders the user opened.
  */
+
+// (a page that hangs can tell where it's stuck: its JavaScript call stack, into the log)
+app.commandLine.appendSwitch('enable-features', 'DocumentPolicyIncludeJSCallStacksInCrashReports');
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
@@ -15,6 +24,15 @@ protocol.registerSchemesAsPrivileged([
 
 const distRoot = path.join(__dirname, '..', 'dist');
 const allowedRoots = new Set<string>();
+// (settings, recent folders and the rest of the page's storage stay where ChroEditor kept them)
+{
+  const before = path.join(app.getPath('appData'), 'ChroEditor');
+  if (existsSync(before)) app.setPath('userData', before);
+}
+// the window's own questions in the editor's language (the page says which)
+let english = false;
+const say = (russian: string, englishText: string) => (english ? englishText : russian);
+
 const recentFile = () => path.join(app.getPath('userData'), 'recent-folders.json');
 
 function allowed(target: string) {
@@ -52,14 +70,16 @@ async function openFolder(folder: string) {
   return { path: resolved, files: await listFolder(resolved) };
 }
 
-function createWindow() {
+/** `reopen`: a map folder to open again as the page starts (after a restart from a hang). */
+function createWindow(reopen?: string) {
   const window = new BrowserWindow({
     width: 1600,
     height: 960,
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#101114',
-    title: 'ChroEditor',
+    title: 'Lumatic',
+    icon: path.join(distRoot, 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -81,9 +101,116 @@ function createWindow() {
     void shell.openExternal(url);
     return { action: 'deny' };
   });
+  // what goes wrong, into the log
+  window.webContents.on('console-message', (details) => {
+    const level = (details as unknown as { level?: string | number }).level;
+    if (level === 'warning' || level === 'error' || level === 2 || level === 3) log(`page ${String(level)}`, `${details.message} (${details.sourceId}:${String(details.lineNumber)})`);
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    log('crash', `the page's process is gone: ${details.reason} (${String(details.exitCode)})`);
+    if (details.reason === 'clean-exit' || window.isDestroyed()) return;
+    void dialog
+      .showMessageBox(window, { type: 'error', title: 'Lumatic', message: say('Окно Lumatic упало.', 'The Lumatic window crashed.'), detail: say('Оно откроется заново с последней картой; несохранённое можно вернуть из автокопии.', 'It opens again with the last map; what was not saved can be brought back from the autosave.'), buttons: ['OK'] })
+      .then(() => restart(window));
+  });
+  // a page that stopped answering: wait for it, or start it again (the last map opened again)
+  let asking = false;
+  window.on('unresponsive', () => {
+    log('hang', 'the window stopped answering');
+    // where it's stuck: the page's JavaScript call stack
+    void Promise.resolve(window.webContents.mainFrame.collectJavaScriptCallStack())
+      .then((stack) => log('hang', `stuck at:\n${typeof stack === 'string' && stack !== '' ? stack : '(no call stack given)'}`))
+      .catch((error: unknown) => log('hang', `no call stack: ${String(error)}`));
+    if (asking) return;
+    asking = true;
+    void dialog
+      .showMessageBox(window, {
+        type: 'warning',
+        title: 'Lumatic',
+        message: say('Lumatic не отвечает.', 'Lumatic is not responding.'),
+        detail: say('Можно подождать или перезапустить окно: последняя карта откроется снова, несохранённое можно вернуть из автокопии (раз в 2 минуты). Что случилось — в журнале (Настройки → Журнал).', 'Wait, or restart the window: the last map opens again, what was not saved can be brought back from the autosave (every 2 minutes). What happened is in the log (Settings → Log).'),
+        buttons: [say('Подождать', 'Wait'), say('Перезапустить', 'Restart')],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      })
+      .then(({ response }) => {
+        asking = false;
+        if (response === 1 && !window.isDestroyed()) restart(window);
+      });
+  });
+  window.on('responsive', () => log('hang', 'answering again'));
+  // closing with unsaved changes: save them, drop them, or stay (the page says what it has)
+  let closing = false;
+  window.on('close', (event) => {
+    if (closing) return;
+    event.preventDefault();
+    void (async () => {
+      let unsaved: string | null = null;
+      // (a page that doesn't answer in a few seconds — hung: asked whether to close it as it is)
+      const answer = await Promise.race([
+        window.webContents.executeJavaScript('window.chroeditorUnsaved ? window.chroeditorUnsaved() : null').then((value: unknown) => ({ value: value as string | null })),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]).catch(() => ({ value: null }));
+      if (answer === null) {
+        log('hang', 'closing: the page did not answer');
+        const { response } = await dialog.showMessageBox(window, {
+          type: 'warning',
+          title: 'Lumatic',
+          message: say('Окно не отвечает. Закрыть его?', 'The window is not responding. Close it?'),
+          detail: say('Несохранённое можно будет вернуть из автокопии при следующем открытии карты.', 'What was not saved can be brought back from the autosave when the map is opened next.'),
+          buttons: [say('Закрыть', 'Close'), say('Отмена', 'Cancel')],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (response === 1) return;
+        closing = true;
+        window.destroy();
+        return;
+      }
+      unsaved = answer.value;
+      if (unsaved !== null) {
+        const { response } = await dialog.showMessageBox(window, {
+          type: 'question',
+          title: 'Lumatic',
+          message: say('Сохранить изменения перед выходом?', 'Save the changes before quitting?'),
+          detail: unsaved,
+          buttons: [say('Сохранить', 'Save'), say('Не сохранять', "Don't save"), say('Отмена', 'Cancel')],
+          defaultId: 0,
+          cancelId: 2,
+          noLink: true,
+        });
+        if (response === 2) return;
+        if (response === 0) {
+          const saved = (await window.webContents.executeJavaScript('window.chroeditorSave ? window.chroeditorSave() : false').catch(() => false)) as boolean;
+          if (!saved) {
+            await dialog.showMessageBox(window, { type: 'error', title: 'Lumatic', message: say('Не получилось сохранить — окно остаётся открытым.', "Couldn't save — the window stays open."), buttons: ['OK'] });
+            return;
+          }
+        }
+      }
+      closing = true;
+      window.close();
+    })();
+  });
   const devUrl = process.env.CHROEDITOR_DEV_URL;
-  void window.loadURL(devUrl ?? 'app://local/index.html');
+  const page = new URL(devUrl ?? 'app://local/index.html');
+  if (reopen !== undefined) page.searchParams.set('reopen', reopen);
+  void window.loadURL(page.toString());
 }
+
+/** The window started again (after a hang or a crash), the last map opened again in it. */
+function restart(window: BrowserWindow) {
+  log('restart', 'the window is started again');
+  void readRecent().then((recent) => {
+    if (!window.isDestroyed()) window.destroy();
+    createWindow(recent[0]);
+  });
+}
+
+process.on('uncaughtException', (error) => log('main', error.stack ?? String(error)));
+process.on('unhandledRejection', (error) => log('main', error instanceof Error ? (error.stack ?? error.message) : String(error)));
 
 void app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
@@ -91,11 +218,17 @@ void app.whenReady().then(() => {
     const url = new URL(request.url);
     const file = path.normalize(path.join(distRoot, decodeURIComponent(url.pathname)));
     if (!file.startsWith(distRoot)) return new Response('forbidden', { status: 403 });
-    return net.fetch(pathToFileURL(file).toString());
+    return net.fetch(pathToFileURL(file).toString()).then((response) => {
+      if (!file.endsWith('.html')) return response;
+      // (the page lets a hang's call stack be taken: see 'unresponsive')
+      const headers = new Headers(response.headers);
+      headers.set('Document-Policy', 'include-js-call-stacks-in-crash-reports');
+      return new Response(response.body, { status: response.status, headers });
+    });
   });
 
   ipcMain.handle('open-folder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: 'Папка карты (с Info.dat)' });
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: say('Папка карты (с Info.dat)', 'Map folder (with Info.dat)') });
     if (result.canceled || result.filePaths[0] === undefined) return null;
     return openFolder(result.filePaths[0]);
   });
@@ -113,8 +246,8 @@ void app.whenReady().then(() => {
     const recent = await readRecent();
     const parent = recent[0] === undefined ? app.getPath('documents') : path.dirname(recent[0]);
     const result = await dialog.showSaveDialog({
-      title: 'Папка новой карты',
-      buttonLabel: 'Создать',
+      title: say('Папка новой карты', "The new map's folder"),
+      buttonLabel: say('Создать', 'Create'),
       defaultPath: path.join(parent, suggested),
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     });
@@ -122,7 +255,7 @@ void app.whenReady().then(() => {
     const folder = result.filePath;
     await fs.mkdir(folder, { recursive: true });
     const existing = await listFolder(folder);
-    if (existing.some((name) => name.toLowerCase() === 'info.dat')) throw new Error('В этой папке уже есть карта (Info.dat)');
+    if (existing.some((name) => name.toLowerCase() === 'info.dat')) throw new Error(say('В этой папке уже есть карта (Info.dat)', 'This folder already has a map (Info.dat)'));
     return openFolder(folder);
   });
   ipcMain.handle('list-folder', async (_event, folder: string) => {
@@ -136,8 +269,105 @@ void app.whenReady().then(() => {
   });
   ipcMain.handle('write-file', async (_event, file: string, data: ArrayBuffer | string) => {
     if (!allowed(file)) throw new Error('not in an opened folder');
+    // (a file in a folder of the map's — "Lumatic backups" — made with it)
+    await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, typeof data === 'string' ? data : Buffer.from(data));
   });
+  ipcMain.handle('backup-file', async (_event, file: string, keep: number) => {
+    if (!allowed(file)) throw new Error('not in an opened folder');
+    await backupFile(file, keep);
+  });
+  ipcMain.handle('save-file-as', async (event, name: string, data: ArrayBuffer, filterName: string, extensions: string[]) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = { title: say('Сохранить', 'Save'), defaultPath: path.join(app.getPath('documents'), name), filters: [{ name: filterName, extensions }] };
+    const result = window === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(window, options);
+    if (result.canceled || result.filePath === undefined) return null;
+    await fs.writeFile(result.filePath, Buffer.from(data));
+    return result.filePath;
+  });
+  ipcMain.handle('delete-file', async (_event, file: string) => {
+    if (!allowed(file)) throw new Error('not in an opened folder');
+    // (a copy kept first: a deleted difficulty can be brought back from "Lumatic backups")
+    await backupFile(file, 50);
+    await fs.unlink(file);
+  });
+  // the Quest: adb, the headsets, Wi-Fi, sending the map
+  // a colour anywhere on the screen (the page's colour pick)
+  ipcMain.handle('pick-screen-color', (event) => pickScreenColor(BrowserWindow.fromWebContents(event.sender)));
+  // another map's saved colours: its folder picked, the palettes in its projects read (only read)
+  ipcMain.handle('palette-from-map', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const picked = owner === null ? await dialog.showOpenDialog({ properties: ['openDirectory'] }) : await dialog.showOpenDialog(owner, { title: say('Карта, из которой взять палитру или пресеты', 'The map to take the palette or presets from'), properties: ['openDirectory'] });
+    if (picked.canceled || picked.filePaths[0] === undefined) return null;
+    const folder = picked.filePaths[0];
+    const colors: number[][] = [];
+    const presets: unknown[] = [];
+    for (const name of await fs.readdir(folder)) {
+      if (!/\.(lumatic|chroeditor)\.json$/iu.test(name)) continue;
+      try {
+        const project = JSON.parse(await fs.readFile(path.join(folder, name), 'utf8')) as { palette?: unknown };
+        if (Array.isArray(project.palette)) for (const rgb of project.palette) if (Array.isArray(rgb) && rgb.length === 3 && rgb.every((v) => typeof v === 'number')) colors.push(rgb as number[]);
+        // (its presets too: each once)
+        const own = (project as { presets?: unknown }).presets;
+        if (Array.isArray(own)) for (const preset of own) if (typeof preset === 'object' && preset !== null && typeof (preset as { id?: unknown }).id === 'string' && !presets.some((item) => (item as { id: string }).id === (preset as { id: string }).id)) presets.push(preset);
+      } catch {
+        // (not a project after all)
+      }
+    }
+    return { name: path.basename(folder), colors, presets };
+  });
+  ipcMain.handle('quest-find-adb', (_event, picked?: string) => findAdb(picked));
+  ipcMain.handle('quest-download-adb', () => downloadAdb());
+  ipcMain.handle('quest-pick-adb', async () => {
+    const result = await dialog.showOpenDialog({ title: say('Где adb', 'Where adb is'), properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: 'adb', extensions: ['exe'] }] : [] });
+    if (result.canceled || result.filePaths[0] === undefined) return null;
+    return findAdb(result.filePaths[0]);
+  });
+  ipcMain.handle('quest-devices', () => devices());
+  ipcMain.handle('quest-connect', (_event, address: string) => connect(address));
+  ipcMain.handle('quest-disconnect', (_event, address: string) => disconnect(address));
+  ipcMain.handle('quest-enable-wifi', (_event, serial: string) => enableWifi(serial));
+  ipcMain.handle('quest-discover', (_event, remembered: string[]) => discover(remembered));
+  ipcMain.handle('quest-pair', (_event, address: string, code: string) => pair(address, code));
+  ipcMain.handle('quest-mdns', () => findAdbServices(1500));
+  ipcMain.handle('quest-upload', async (event, options: UploadOptions) => {
+    if (!allowed(options.folder)) throw new Error('not an opened folder');
+    return upload(options, (text) => event.sender.send('quest-progress', text));
+  });
+  ipcMain.on('set-language', (_event, language: string) => {
+    english = language === 'en';
+  });
+  // the keyboard back to the page (Windows: after the page's own confirm / alert boxes the window can
+  // look focused while no field takes keys — a grey selection)
+  ipcMain.on('refocus', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window === null || window.isDestroyed()) return;
+    window.blur();
+    window.focus();
+    window.webContents.focus();
+  });
+  // the page's own log lines (an error it caught)
+  ipcMain.on('log', (_event, kind: string, message: string) => log(String(kind).slice(0, 40), String(message).slice(0, 4000)));
+  ipcMain.handle('open-logs', async () => {
+    await fs.mkdir(logFolder(), { recursive: true });
+    return shell.openPath(logFolder());
+  });
+  // updates: the newest release asked about, downloaded, put in place
+  let downloaded: string | null = null;
+  ipcMain.handle('update-check', () => checkForUpdate());
+  ipcMain.handle('update-can-install', () => canInstall());
+  ipcMain.handle('update-download', async (event, url: string, size: number) => {
+    downloaded = await downloadUpdate(url, size, (done) => {
+      if (!event.sender.isDestroyed()) event.sender.send('update-progress', done);
+    });
+    return true;
+  });
+  ipcMain.handle('update-install', async () => {
+    if (downloaded === null) throw new Error('nothing downloaded');
+    log('update', `installing over ${app.getVersion()}`);
+    await installUpdate(downloaded);
+  });
+  log('start', `Lumatic ${app.getVersion()}`);
 
   createWindow();
   app.on('activate', () => {

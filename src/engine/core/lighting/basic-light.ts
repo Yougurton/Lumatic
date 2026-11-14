@@ -1,11 +1,7 @@
 import { z } from 'zod';
 
 import type { BasicEvent } from '../beatmap/types';
-import {
-  beatSaberJsonValueSchema,
-  beatSaberNumberSchema as numberSchema,
-  beatSaberStringSchema as stringSchema,
-} from '../beatmap/value-schema';
+import { beatSaberJsonValueSchema, beatSaberNumber, beatSaberString } from '../beatmap/value-schema';
 import { chromaColor, type ChromaColor } from '../chroma';
 import type { ColorScheme, Rgb } from '../colors';
 import { easingFromId, easingFromName, type EasingFunction } from '../easing';
@@ -118,7 +114,10 @@ function eventChromaColor(event: BasicEvent): ChromaColor | undefined {
 }
 
 function eventGradient(event: BasicEvent): ChromaGradient | undefined {
-  const parsed = lightGradientSchema.safeParse(event.customData?._lightGradient ?? event.customData?.lightGradient);
+  // (most events have none: no schema run for them)
+  const raw = event.customData?._lightGradient ?? event.customData?.lightGradient;
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = lightGradientSchema.safeParse(raw);
   if (!parsed.success) return undefined;
   const data = parsed.data;
   const startColor = chromaColor({
@@ -128,13 +127,13 @@ function eventGradient(event: BasicEvent): ChromaGradient | undefined {
     color: data._endColor ?? data.endColor ?? null,
   });
   if (startColor === undefined || endColor === undefined) return undefined;
-  const duration = numberSchema.parse(data._duration ?? data.duration);
+  const duration = beatSaberNumber(data._duration ?? data.duration);
   return {
     startBeat: event.songBpmTime,
     endBeat: event.songBpmTime + duration,
     startColor,
     endColor,
-    easing: easingFromName(stringSchema.parse(data._easing ?? data.easing) || undefined),
+    easing: easingFromName(beatSaberString(data._easing ?? data.easing) || undefined),
   };
 }
 
@@ -232,7 +231,7 @@ export function sampleBasicLightTimeline(
   if (next !== undefined && isTransition(next.value) && canTransition(event.value)) {
     const duration = next.songBpmTime - event.songBpmTime;
     const rawTime = duration <= 0 ? 1 : clamp01((beat - event.songBpmTime) / duration);
-    const easing = easingFromName(stringSchema.parse(next.customData?._easing ?? next.customData?.easing) || undefined);
+    const easing = easingFromName(beatSaberString(next.customData?._easing ?? next.customData?.easing) || undefined);
     const time = easing(rawTime);
     const nextColor = eventColor(next.value);
     const nextCustomColor = timeline.customColors[index + 1];
@@ -256,7 +255,7 @@ export function sampleBasicLightTimeline(
       const transition: NonNullable<BasicLightSample['transition']> = { color: nextColor, progress: time };
       if (nextCustomColor !== undefined) transition.customColor = nextCustomColor;
       if (nextCustomAlpha !== undefined) transition.customAlpha = nextCustomAlpha;
-      if (stringSchema.parse(next.customData?._lerpType ?? next.customData?.lerpType) === 'HSV') {
+      if (beatSaberString(next.customData?._lerpType ?? next.customData?.lerpType) === 'HSV') {
         transition.useHsv = true;
       }
       sample.transition = transition;
@@ -398,7 +397,7 @@ export function customLightIds(event: BasicEvent): number[] | undefined {
   const value = event.customData?._lightID ?? event.customData?.lightID;
   if (value === undefined) return undefined;
   const values = Array.isArray(value) ? value : [value];
-  const ids = values.map((id) => numberSchema.parse(id));
+  const ids = values.map((id) => beatSaberNumber(id));
   return ids.length === 0 ? undefined : ids;
 }
 
@@ -406,7 +405,7 @@ export function customPropIds(event: BasicEvent): number[] | undefined {
   const value = event.customData?._propID ?? event.customData?.propID;
   if (value === undefined) return undefined;
   const values = Array.isArray(value) ? value : [value];
-  const ids = values.map((id) => numberSchema.parse(id));
+  const ids = values.map((id) => beatSaberNumber(id));
   return ids.length === 0 ? undefined : ids;
 }
 

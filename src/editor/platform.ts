@@ -14,6 +14,21 @@ export interface MapFolder {
   writeBinary(name: string, data: ArrayBuffer): Promise<void>;
   /** Re-reads the list of files. */
   refresh(): Promise<void>;
+  /** A copy of a file in the map's "Lumatic backups" folder, keeping that many copies of it (only in
+   *  the desktop app). */
+  backup?(name: string, keep: number): Promise<void>;
+  /** Deletes a file (the desktop app: a copy of it kept in "Lumatic backups" first). */
+  remove?(name: string): Promise<void>;
+}
+
+/** The newest release against this app (electron/updater.ts). */
+export interface UpdateInfo {
+  current: string;
+  latest: string | null;
+  newer: boolean;
+  notes: string;
+  page: string;
+  asset: { url: string; size: number; name: string } | null;
 }
 
 interface NativeApi {
@@ -21,6 +36,34 @@ interface NativeApi {
   listFolder(path: string): Promise<string[]>;
   readFile(path: string): Promise<ArrayBuffer>;
   writeFile(path: string, data: ArrayBuffer | string): Promise<void>;
+  /** A copy of a file of an opened folder in its "Lumatic backups" folder, the oldest copies of that
+   *  file past `keep` deleted. */
+  backupFile?(path: string, keep: number): Promise<void>;
+  /** Deletes a file of an opened folder (a copy kept in its "Lumatic backups" folder first). */
+  deleteFile?(path: string): Promise<void>;
+  /** A file saved where the user picks (null: cancelled; else where it went). */
+  saveFileAs?(name: string, data: ArrayBuffer, filterName: string, extensions: string[]): Promise<string | null>;
+  /** The language of the window's own questions (closing with unsaved changes, picking folders). */
+  setLanguage?(language: string): void;
+  /** The whole window's scale. */
+  setZoom?(factor: number): void;
+  /** The keyboard back to the page (after a native box took it). */
+  refocus?(): void;
+  /** A line into the app's log. */
+  log?(kind: string, message: string): void;
+  /** The log's folder opened. */
+  openLogs?(): Promise<string>;
+  /** A colour picked anywhere on the screen (0…255 each; null: given up). */
+  pickScreenColor?(): Promise<[number, number, number] | null>;
+  /** The colours saved in another map's projects (its folder picked; null: cancelled). */
+  paletteFromMap?(): Promise<{ name: string; colors: number[][]; presets?: unknown[] } | null>;
+  /** Updates from the project's releases (electron/updater.ts). */
+  updates?: {
+    check(): Promise<UpdateInfo>;
+    canInstall(): Promise<boolean>;
+    download(url: string, size: number, progress: (done: number) => void): Promise<boolean>;
+    install(): Promise<void>;
+  };
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
@@ -40,6 +83,21 @@ declare global {
 
 export const isDesktop = () => window.chroeditorNative !== undefined;
 
+/** A file saved where the user picks (the browser: downloaded). Where it went (null: cancelled; the
+ *  browser: its name). */
+export async function saveFileAs(name: string, data: Uint8Array, filterName: string, extensions: string[]): Promise<string | null> {
+  const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  const native = window.chroeditorNative;
+  if (native?.saveFileAs !== undefined) return native.saveFileAs(name, bytes, filterName, extensions);
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const link = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return name;
+}
+
 function joinPath(folder: string, name: string) {
   return `${folder.replace(/[\\/]+$/u, '')}/${name}`;
 }
@@ -52,6 +110,11 @@ function nativeFolder(native: NativeApi, opened: { path: string; files: string[]
     readBinary: (name) => native.readFile(joinPath(opened.path, name)),
     writeText: (name, text) => native.writeFile(joinPath(opened.path, name), text),
     writeBinary: (name, data) => native.writeFile(joinPath(opened.path, name), data),
+    backup: (name, keep) => native.backupFile?.(joinPath(opened.path, name), keep) ?? Promise.resolve(),
+    remove: async (name) => {
+      await native.deleteFile?.(joinPath(opened.path, name));
+      folder.files = await native.listFolder(opened.path);
+    },
     refresh: async () => {
       folder.files = await native.listFolder(opened.path);
     },
@@ -83,6 +146,11 @@ function memoryFolder(name: string, files: Record<string, string | ArrayBuffer>)
       folder.files = Object.keys(files);
       return Promise.resolve();
     },
+    remove: (file) => {
+      delete files[file];
+      folder.files = Object.keys(files);
+      return Promise.resolve();
+    },
     refresh: () => Promise.resolve(),
   };
   return folder;
@@ -110,6 +178,10 @@ async function handleFolder(handle: FileSystemDirectoryHandle): Promise<MapFolde
       const writable = await (await handle.getFileHandle(name, { create: true })).createWritable();
       await writable.write(data);
       await writable.close();
+    },
+    remove: async (name) => {
+      await handle.removeEntry(name);
+      folder.files = await list();
     },
     refresh: async () => {
       folder.files = await list();

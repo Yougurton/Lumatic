@@ -26,6 +26,7 @@ export const environmentCatalog: readonly EnvironmentCatalogEntry[] = [
   { id: 'InterscopeEnvironment', title: 'Interscope' },
   { id: 'GagaEnvironment', title: 'Gaga' },
   { id: 'SkrillexEnvironment', title: 'Skrillex' },
+  { id: 'BillieEnvironment', title: 'Billie Eilish' },
   { id: 'HalloweenEnvironment', title: 'Spooky' },
   { id: 'WeaveEnvironment', title: 'Weave' },
   { id: 'EDMEnvironment', title: 'EDM' },
@@ -40,7 +41,7 @@ export const environmentCatalog: readonly EnvironmentCatalogEntry[] = [
   { id: 'GridEnvironment', title: 'Cube' },
 ];
 
-const environmentIds = new Set([...environmentCatalog.map(({ id }) => id), 'BillieEnvironment']);
+const environmentIds = new Set(environmentCatalog.map(({ id }) => id));
 
 export function resolveEnvironmentId(id: string) {
   return environmentIds.has(id) ? id : 'DefaultEnvironment';

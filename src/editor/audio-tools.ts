@@ -1,5 +1,7 @@
+import { settings } from './settings';
 import type { AudioReply, AudioRequest } from './audio-worker';
 import type { BpmResult } from './bpm-detect';
+import type { BandFlux } from './onsets';
 
 /** The song tools of the new-map dialog: decoding any audio file, the tempo, Ogg Vorbis. */
 
@@ -34,22 +36,45 @@ function run(request: AudioRequest, onProgress?: (done: number) => void): Promis
   });
 }
 
+/** Where the song's strong beats are (see detectDownbeat). */
+export async function findDownbeat(buffer: AudioBuffer, bpm: number, firstBeat: number, beatsPerBar: number) {
+  const reply = await run({ kind: 'downbeat', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, bpm, firstBeat, beatsPerBar });
+  if (reply.kind !== 'downbeat') throw new Error('unexpected reply');
+  return reply.result;
+}
+
 export async function findBpm(buffer: AudioBuffer): Promise<BpmResult> {
   const reply = await run({ kind: 'bpm', channels: channelsOf(buffer), sampleRate: buffer.sampleRate });
   if (reply.kind !== 'bpm') throw new Error('unexpected reply');
   return reply.result;
 }
 
+/** How much each band of the song (`[lowHz, highHz]`) grows frame by frame (see bandFlux). */
+export async function findBandFlux(buffer: AudioBuffer, bands: [number, number][]): Promise<BandFlux> {
+  const reply = await run({ kind: 'bands', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, bands });
+  if (reply.kind !== 'bands') throw new Error('unexpected reply');
+  return reply.result;
+}
+
 /** The song as Ogg Vorbis with `silence` seconds in front of it. */
 export async function encodeOgg(buffer: AudioBuffer, silence: number, onProgress?: (done: number) => void): Promise<Uint8Array> {
-  const reply = await run({ kind: 'ogg', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, silence: Math.max(0, silence), quality: 6 }, onProgress);
+  const reply = await run({ kind: 'ogg', channels: channelsOf(buffer), sampleRate: buffer.sampleRate, silence: Math.max(0, silence), quality: Math.max(-1, Math.min(10, settings().oggQuality)) }, onProgress);
   if (reply.kind !== 'ogg') throw new Error('unexpected reply');
   return reply.data;
 }
 
 /** Plays the song from `from` seconds with a click on every beat of the grid (to check a tempo by
  *  ear). Returns a stop function. */
-export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: number, from: number): () => void {
+export interface Listening {
+  /** Stops it. */
+  (): void;
+  /** Where in the song it plays now (seconds). */
+  time(): number;
+  /** Still playing. */
+  active(): boolean;
+}
+
+export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: number, from: number, bar: { downbeat: number; beats: number } | null = null): Listening {
   const context = new AudioContext();
   const source = context.createBufferSource();
   source.buffer = buffer;
@@ -66,7 +91,9 @@ export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: numb
     if (at < 0) continue;
     const osc = context.createOscillator();
     const gain = context.createGain();
-    osc.frequency.value = k % 4 === 0 ? 1760 : 1320;
+    // (the strong beat — found, or every 4th — clicks higher)
+    const strong = bar === null ? k % 4 === 0 : ((Math.round((firstBeat + k * period - bar.downbeat) / period) % bar.beats) + bar.beats) % bar.beats === 0;
+    osc.frequency.value = strong ? 1760 : 1320;
     gain.gain.setValueAtTime(0.0001, start + at);
     gain.gain.exponentialRampToValueAtTime(0.5, start + at + 0.002);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + at + 0.06);
@@ -82,5 +109,5 @@ export function playWithClicks(buffer: AudioBuffer, bpm: number, firstBeat: numb
     void context.close();
   };
   window.setTimeout(stop, Math.min(64 * period, 30) * 1000);
-  return stop;
+  return Object.assign(stop, { time: () => from + Math.max(0, context.currentTime - start), active: () => !stopped });
 }

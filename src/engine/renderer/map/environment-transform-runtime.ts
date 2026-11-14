@@ -119,7 +119,7 @@ export class EnvironmentTransformRuntime {
       const random = deterministicRotationRandom(rotation.seed);
       function create(source: MapRenderData['lightEvents']) {
         return rotation.pair === undefined
-          ? createLightRotationSampler(source, data.songBpm, rotation.speedMultiplier, random)
+          ? createLightRotationSampler(source, data.songBpm, rotation.speedMultiplier, random, rotation.eventType === 12)
           : createLightPairRotationSampler(
               source,
               data.songBpm,
@@ -232,12 +232,19 @@ export class EnvironmentTransformRuntime {
       const positionSampler = full ? runtime.fullPosition : runtime.restingPosition;
       if (positionSampler !== undefined) {
         const positions = positionSampler(beat);
+        const initial = group.positionConfig?.initialPositions ?? [];
         group.rings.forEach((ring, index) => {
-          ring.target.position.set(
-            ring.positionOffset[0],
-            ring.positionOffset[1],
-            -(positions[index] ?? ring.positionOffset[2]),
-          );
+          if (ring.target.parent?.name.startsWith('__chroma_track_') === true) {
+            // (a ring on a Chroma track: its wrapper stands where the ring started; the ring moves
+            // along its own axis from there — Chroma's TrackLaneRingOffset)
+            ring.target.position.set(0, 0, -((positions[index] ?? 0) - (initial[index] ?? 0)));
+          } else {
+            ring.target.position.set(
+              ring.positionOffset[0],
+              ring.positionOffset[1],
+              -(positions[index] ?? ring.positionOffset[2]),
+            );
+          }
           changed.add(ring.target);
         });
       }

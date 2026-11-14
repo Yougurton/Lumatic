@@ -1,8 +1,8 @@
 {
-  "name": "chroeditor",
-  "productName": "ChroEditor",
+  "name": "lumatic",
+  "productName": "Lumatic",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.33.4",
   "description": "Beat Saber lightshow editor: a timeline with layers, light ID groups and effects, previewed with ChroPaper's renderer",
   "author": "Yougurton",
   "license": "GPL-2.0-only",
@@ -18,7 +18,6 @@
     "dist:win": "npm run build && electron-builder --win zip --x64"
   },
   "dependencies": {
-    "@wasm-audio-decoders/ogg-vorbis": "^0.1.20",
     "better-result": "2.8.2",
     "fflate": "^0.8.3",
     "lzma-web": "^3.0.1",
@@ -38,8 +37,8 @@
     "vite": "^6.0.0"
   },
   "build": {
-    "appId": "com.yougurton.chroeditor",
-    "productName": "ChroEditor",
+    "appId": "com.yougurton.lumatic",
+    "productName": "Lumatic",
     "files": [
       "dist/**",
       "dist-electron/**",
@@ -50,7 +49,17 @@
     },
     "win": {
       "target": "zip",
-      "signAndEditExecutable": false
-    }
+      "icon": "build/icon.ico"
+    },
+    "extraFiles": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ]
   }
 }

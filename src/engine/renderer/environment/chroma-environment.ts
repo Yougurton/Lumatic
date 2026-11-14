@@ -42,7 +42,8 @@ const laneSize = 0.6;
 const identityRotation: [number, number, number, number] = [0, 0, 0, 1];
 const identityScale: [number, number, number] = [1, 1, 1];
 const trackWrapperPrefix = '__chroma_track_';
-const lightShaders = new Set(['OpaqueLight', 'TransparentLight', 'BillieWater']);
+// (only these two make a lamp in the game — Heck's docs, and BillieWater shapes don't follow the lights there)
+const lightShaders = new Set(['OpaqueLight', 'TransparentLight']);
 
 interface LookupEntry {
   id: string;
@@ -816,7 +817,8 @@ function glowingMaterial(color: ChromaMaterial['color']): EnvironmentMaterialDat
     family: 'fakeGlow',
     colors: { _Color: [...(color ?? [0, 0, 0, 0])] },
     floats: {
-      _BloomType: 0,
+      // (white-boosted, as the game's: a Glowing shape of any light colour burns nearly white)
+      _BloomType: 2,
       _BloomWhiteMultiplier: 1,
       _CullMode: 2,
       _EnableFog: 0,
@@ -863,6 +865,54 @@ function materialData(data: EnvironmentData, material: ChromaMaterial) {
   }
   if (color !== undefined) result.colors._Color = [...color];
   if (material.keywords !== undefined && material.keywords.length > 0) result.keywords = [...material.keywords];
+  return lookAsInGame(material.shader, result, data);
+}
+
+/**
+ * A shape's material made to look closer to the game's. Several of the game's materials take their look
+ * from the environment's baked reflections and lighting (a reflection probe, a lightmap), which most
+ * environments here don't have: the shape gets a neutral stand-in probe (see the lit materials), the
+ * mirror the floor's, the lamps-to-be a glow with a halo — after side-by-side pictures from the game.
+ */
+function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMaterialData, data: EnvironmentData): EnvironmentMaterialData {
+  const reflective = (intensity: number, smoothness: number) =>
+    Object.assign(result.floats, { _LumaticFallbackProbe: 1, _EnableReflectionProbe: 1, _ReflectionProbeIntensity: intensity, _Smoothness: smoothness, _EnableSpecular: 1 });
+  switch (shader) {
+    case 'Glowing':
+    case 'WaterfallMirror': {
+      // (both burn white in the game, with a halo: glow written into the bloom)
+      const glow = shader === 'Glowing' ? result : glowingMaterial([1, 1, 1, 1]);
+      if (glow.family !== 'fakeGlow') return glow;
+      Object.assign(glow.floats, { _BloomType: 1, _BloomMultiplier: 1.6 });
+      return glow;
+    }
+    case 'InterscopeCar':
+      // (chrome: what's round it, bent by its form — a live reflection, as the game's probe gives it)
+      result.colors._Color = [0, 0, 0, 1];
+      result.keywords = result.keywords.filter((keyword) => keyword !== 'MULTIPLY_REFLECTIONS');
+      Object.assign(result.floats, { _LumaticLiveReflection: 1, _EnableReflectionProbe: 1, _ReflectionProbeIntensity: 1, _EnableDiffuse: 0, _EnableSpecular: 1, _SpecularIntensity: 1, _Smoothness: 1, _Metallic: 0.25 });
+      break;
+    case 'InterscopeConcrete':
+      // (its grain: a texture over its colour, see the support materials)
+      Object.assign(result.floats, { _EnableDiffuse: 1 });
+      reflective(0.35, 0.5);
+      break;
+    case 'BillieWater':
+      // (the Billie waterfall's water — its running normal map — rippling what's round it, live, as the
+      // game's probe gives it)
+      Object.assign(result.floats, { _LumaticLiveReflection: 1, _EnableReflectionProbe: 1, _ReflectionProbeIntensity: 1 });
+      break;
+    case 'BaseWater': {
+      // (darker, as the game's)
+      const color = result.colors._Color;
+      if (color !== undefined) result.colors._Color = [color[0] * 0.35, color[1] * 0.35, color[2] * 0.35, color[3]];
+      break;
+    }
+    case 'Standard':
+    case 'BTSPillar':
+      reflective(0.6, 0.85);
+      break;
+  }
   return result;
 }
 
@@ -923,12 +973,16 @@ function wrapTrackedObject(
   const trackNames = enhancementTracks(enhancement);
   if (target === undefined || trackNames.length === 0) return targetIndex;
   const wrapperIndex = data.objects.length;
+  // (a ring's own turn is an offset on top of what its track sets — Chroma's TrackLaneRingOffset —
+  // and until the track turns it that offset is none: the ring's resting pose in the data is only
+  // where the ring motion had it)
+  const ring = target.components?.TrackLaneRing !== undefined;
   const wrapper: EnvironmentObjectData = {
     name: `${trackWrapperPrefix}${trackNames.join('_')}`,
     parent: target.parent,
     active: true,
     position: [...target.position],
-    rotation: [...target.rotation],
+    rotation: ring ? [...identityRotation] : [...target.rotation],
     scale: [...target.scale],
   };
   data.objects.push(wrapper);
@@ -939,6 +993,20 @@ function wrapTrackedObject(
   applyTransform(data, wrapperIndex, enhancement, version);
   for (const track of trackNames) addTrack(tracks, track, wrapperIndex);
   return wrapperIndex;
+}
+
+/** For the editor: the ids Chroma's environment lookups find each object by (its ChromaIDMarker
+ *  ids, and for the rings the ids they get when the game spawns them). */
+export function environmentLookupIds(data: EnvironmentData): Map<number, string[]> {
+  const lookups = data.objects.flatMap((object, index) =>
+    (object.components?.ChromaIDMarker ?? []).flatMap((marker) =>
+      marker.enabled ? [{ id: marker.ChromaID, index }] : [],
+    ),
+  );
+  addRuntimeRingLookups(data, lookups);
+  const out = new Map<number, string[]>();
+  for (const lookup of lookups) out.set(lookup.index, [...(out.get(lookup.index) ?? []), lookup.id]);
+  return out;
 }
 
 export function buildChromaEnvironmentVariant(

@@ -621,6 +621,8 @@ export interface EnvironmentData {
   version: number;
   id: string;
   title: string;
+  /** What the environment calls each of its event types (its light groups and the rest). */
+  eventTracks?: { name: string; type: number }[];
   colorScheme: EnvironmentColorScheme;
   fogParams: FogParams;
   meshes: Record<string, EnvironmentMeshData>;

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="t">
+  <title id="t">Lumatic</title>
+  
+  <rect width="512" height="512" rx="112" fill="#16171c"/>
+  <path d="M124.0 0H1079.0V229H388.0V1490H124.0ZM1573.04 -21C1719.04 -21 1826.04 43 1898.04 162V0H2146.04V1056H1893.04V459C1893.04 279 1795.04 200 1662.04 200C1527.04 200 1449.04 281 1449.04 436V1056H1197.04V396C1197.04 125 1352.04 -21 1573.04 -21Z" transform="matrix(0.14441 0 0 -0.14441 92.093 333.169)" fill="#f4f6fb"/>
+  <rect x="96.00" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#ff4f8b" opacity="0.55"/>
+  <rect x="137.61" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#ff4f8b" opacity="0.77"/>
+  <rect x="179.23" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#ff9a3d" opacity="0.92"/>
+  <rect x="220.84" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#ffd84a" opacity="0.99"/>
+  <rect x="262.46" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#4dffb8" opacity="0.99"/>
+  <rect x="304.07" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#3dc8ff" opacity="0.92"/>
+  <rect x="345.69" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#8f6bff" opacity="0.77"/>
+  <rect x="387.30" y="374.00" width="28.70" height="16.00" rx="8.00" fill="#8f6bff" opacity="0.55"/>
+</svg>

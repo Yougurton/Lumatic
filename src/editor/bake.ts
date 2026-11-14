@@ -98,6 +98,20 @@ function clipKeyframes(clip: LightClip, scheme: SchemeColors, until: number, han
     frames.push(keyframe(settled, 'on', c0, scheme));
   }
   const last = clip.endColor ?? c0;
+  // a fade out over its last `fadeOut` beats: lit (or on its way through the gradient) until then
+  const fadeFrom = clip.endMode === 'fade' && clip.fadeOut !== undefined && clip.fadeOut > 0 ? clip.end - Math.min(clip.fadeOut, span) : null;
+  if (fadeFrom !== null && fadeFrom > (frames.at(-1)?.beat ?? clip.start) + 1e-6) {
+    if (clip.endColor === null) frames.push(keyframe(fadeFrom, 'on', c0, scheme));
+    else {
+      // (the colour the gradient has reached there)
+      const t = (fadeFrom - clip.start) / Math.max(1e-6, span);
+      const a = resolveRgb(c0, scheme);
+      const b = resolveRgb(clip.endColor, scheme);
+      const rgb: Rgb = clip.hsv === true ? lerpHsv(a, b, t) : [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+      const brightness = c0.brightness + (clip.endColor.brightness - c0.brightness) * t;
+      frames.push(keyframe(fadeFrom, 'trans', { ref: 'custom', rgb, brightness }, scheme));
+    }
+  }
   if (clip.endMode === 'fade') frames.push(keyframe(clip.end, 'trans', dark(last), scheme));
   else {
     if (clip.endColor !== null) frames.push(keyframe(clip.end, 'trans', clip.endColor, scheme));
@@ -133,6 +147,7 @@ function stateAt(frames: readonly Keyframe[], beat: number, secondsPerBeat: numb
       fromRgb[2] + (next.rgb[2] - fromRgb[2]) * t,
     ];
     const brightness = fromBrightness + (next.brightness - fromBrightness) * t;
+    if (brightness <= 0.001) return null;
     if (t <= 0 && current.kind !== 'off' && current.color !== null) return { color: current.color, rgb: current.rgb, brightness: current.brightness, resting: current };
     return { color: { ref: 'custom', rgb, brightness }, rgb, brightness, resting: null };
   }
@@ -144,6 +159,9 @@ function stateAt(frames: readonly Keyframe[], beat: number, secondsPerBeat: numb
     if (brightness <= 0.001) return null;
     return { color: { ...current.color, brightness }, rgb: current.rgb, brightness, resting: null };
   }
+  // (faded out to nothing: dark, as if off — a clip over it fades out in its own colour, not into
+  // the colour of a light that isn't shining)
+  if (current.brightness <= 0.001) return null;
   return { color: current.color, rgb: current.rgb, brightness: current.brightness, resting: current.kind === 'on' ? current : null };
 }
 
@@ -182,8 +200,10 @@ function bakeLight(clips: readonly BakeClip[], scheme: SchemeColors, secondsPerB
       const handOver = next !== undefined && next.start <= clip.end + 1e-9;
       const { frames, cut } = withBlend(clipKeyframes(clip, scheme, until, handOver, beatsPerSecond), clip);
       const end = cut ? until : clip.end;
-      // the layers below don't show while it lasts
-      kept = kept.filter((frame) => frame.beat < clip.start - 1e-9 || frame.beat >= end - 1e-9);
+      // the layers below don't show while it lasts — but a transition of theirs ending right where it
+      // starts stays: it is how they got there (a fade out finishing as this one comes on; without
+      // it the light would stay fully lit up to here)
+      kept = kept.filter((frame) => frame.beat < clip.start - 1e-9 || (frame.kind === 'trans' && frame.beat <= clip.start + 1e-9) || frame.beat >= end - 1e-9);
       if (!cut && !handOver && clip.endMode !== 'stay' && below.length > 0) {
         const under = stateAt(below, end, secondsPerBeat);
         if (under !== null) {
@@ -204,7 +224,24 @@ function bakeLight(clips: readonly BakeClip[], scheme: SchemeColors, secondsPerB
     });
     base = sortFrames([...kept, ...added]);
   }
-  return base;
+  return withoutRepeats(base);
+}
+
+/** Without an "on" that only says again what the transition just arrived at (chained gradients:
+ *  one clip's end is the next one's start) — the next transition starts from there all the same. */
+function withoutRepeats(frames: Keyframe[]): Keyframe[] {
+  return frames.filter((frame, index) => {
+    const before = frames[index - 1];
+    return !(
+      frame.kind === 'on' &&
+      before !== undefined &&
+      before.kind === 'trans' &&
+      Math.abs(before.beat - frame.beat) < 1e-6 &&
+      Math.abs(before.brightness - frame.brightness) < 1e-6 &&
+      before.rgb.every((value, channel) => Math.abs(value - frame.rgb[channel]!) < 1e-6) &&
+      (before.color?.ref ?? '') === (frame.color?.ref ?? '')
+    );
+  });
 }
 
 function valueOf(kind: Kind, color: ClipColor | null): number {
@@ -332,6 +369,12 @@ function hsvToRgb([h, s, v]: Rgb): Rgb {
     default:
       return [v, p, q];
   }
+}
+
+/** A colour turned round the hue circle by `degrees`. */
+export function shiftHue(rgb: Rgb, degrees: number): Rgb {
+  const [h, s, v] = rgbToHsv(rgb);
+  return hsvToRgb([(((h + degrees / 360) % 1) + 1) % 1, s, v]);
 }
 
 /** Through hue, the short way round (as Chroma does). */

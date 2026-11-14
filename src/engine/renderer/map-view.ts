@@ -1,9 +1,20 @@
 import { Result } from 'better-result';
+import { findLiveReflectionMeshes, hasLiveReflections, renderLiveReflections } from './environment/live-reflections';
 import {
   BufferAttribute,
   BufferGeometry,
+  Color,
+  CustomBlending,
   Euler,
+  MeshBasicMaterial,
+  OneFactor,
+  OneMinusSrcAlphaFactor,
+  OrthographicCamera,
+  PlaneGeometry,
+  Vector2,
+  WebGLRenderTarget,
   Group,
+  Matrix4,
   Mesh,
   type Object3D,
   PerspectiveCamera,
@@ -17,8 +28,10 @@ import { HeckBaseProviderRuntime } from '../core/animation/base-provider';
 import { songBpmTimeToSeconds } from '../core/beatmap/bpm';
 import type { InfoColorScheme } from '../core/beatmap/info';
 import type { ChromaEnvironmentData } from '../core/chroma-environment';
+import type { EnvironmentData } from './environment/types';
 import { DEFAULT_COLORS, resolveColorScheme, type ColorScheme, type Rgb } from '../core/colors';
 import { isForcedLightshowMode, type LightshowMode } from '../core/lighting/basic-light';
+import type { RingPositionConfig, RingRotationConfig } from '../core/lighting/ring-motion';
 import { sampleNoodlePlayerTrack } from '../core/noodle-runtime';
 import { applyReplayHeightEvents, applyReplayNoteEvents, type MapRenderData } from '../core/placement/map-render-data';
 import type { HitScoreVisualizerConfig } from '../core/replay/hit-score-visualizer';
@@ -35,6 +48,7 @@ import {
   environmentLoadFailure,
   type EnvironmentLoadFailure,
 } from './environment/environment-error';
+import { environmentLookupIds } from './environment/chroma-environment';
 import { loadEnvironment } from './environment/environment-loader';
 import type { EnvironmentLightBinding, LoadedEnvironment } from './environment/environment-runtime';
 import { EnvironmentLightRuntime } from './map/environment-light-runtime';
@@ -157,6 +171,38 @@ export class MapView implements RenderView {
 
   private data: MapRenderData | null = null;
   private beatSource: () => number = () => 0;
+  /** Drawn over the finished picture (the editor's note track); `overlayUpdate` runs before. */
+  readonly overlayScene = new Scene();
+  overlayUpdate: (() => void) | null = null;
+  private overlayTarget: WebGLRenderTarget | null = null;
+  private overlayQuad: Mesh | null = null;
+  private readonly overlayQuadScene = new Scene();
+  private readonly overlayCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  /** A field of view across (degrees) kept whatever the view's shape (null: the usual one). */
+  private horizontalFov: number | null = null;
+  private usualFov: number | null = null;
+
+  setHorizontalFov(degrees: number | null) {
+    if (degrees !== null && this.usualFov === null) this.usualFov = this.camera.fov;
+    this.horizontalFov = degrees;
+    if (degrees === null && this.usualFov !== null) {
+      this.camera.fov = this.usualFov;
+      this.usualFov = null;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** The camera the view is seen through (for picking things in it). */
+  get viewCamera(): PerspectiveCamera {
+    return this.camera;
+  }
+
+  /** A camera flown by hand (world position, turn left/right and up/down in radians); null: the
+   *  player's. */
+  private freeCamera: { position: [number, number, number]; yaw: number; pitch: number } | null = null;
+  private readonly freeEuler = new Euler(0, 0, 0, 'YXZ');
+  private readonly playerCameraLocal = new Vector3();
 
   constructor(
     quality = DEFAULT_QUALITY,
@@ -167,6 +213,7 @@ export class MapView implements RenderView {
     this.postBloom = new PostBloomPipeline();
     this.mirror = new PlanarMirror(quality, 6, 400);
     this.camera.position.set(...fixedCameraPosition(DEFAULT_REPLAY_CAMERA_SETTINGS.previewCameraDistance));
+    this.playerCameraLocal.copy(this.camera.position);
     this.scene.matrixAutoUpdate = false;
     this.scene.matrixWorldAutoUpdate = false;
     this.camera.layers.enable(MAIN_ONLY_LAYER);
@@ -202,6 +249,7 @@ export class MapView implements RenderView {
       },
       () => {
         this.mirror.updateMaterials(this.scene);
+        findLiveReflectionMeshes(this.scene);
       },
     );
     this.replayView.hudRoot.traverse((object) => {
@@ -210,6 +258,7 @@ export class MapView implements RenderView {
     this.scene.add(this.replayView.hudRoot);
     this.scene.add(this.replayView.root);
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
     // The replay headset model is only ever shown with a replay loaded, so it's fetched on the
     // first setReplay() with one instead of up front (the wallpaper never loads replays, and the
     // model isn't shipped with it — loading it eagerly only produced a failed request).
@@ -285,6 +334,7 @@ export class MapView implements RenderView {
     this.applyPlayerPlatformVisibility();
     this.environmentLights.setEnvironment(environment);
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
     this.pipeline.setFogParams(environment.data.fogParams);
     const hasCustomEnvironment =
       chromaEnvironment !== undefined &&
@@ -304,22 +354,113 @@ export class MapView implements RenderView {
   readonly overlayRoot = new Group();
   private overlayAdded = false;
 
+  /** The environment's data as loaded (with what the map's Chroma environment made of it). */
+  environmentData(): EnvironmentData | null {
+    return this.environment?.data ?? null;
+  }
+
+  /**
+   * One ring of a ring system as the player sees it down the tunnel: its parts' triangles flattened
+   * onto the ring's plane (x, y pairs, three a triangle; laser beams and glows left out) and how far
+   * from the middle they reach — for drawing ring poses in the environment's own shape. Null: no rings.
+   */
+  ringOutline(system = 0): { triangles: Float32Array; radius: number } | null {
+    const group = this.environment?.ringGroups[system];
+    const ring = group?.rings[Math.min(1, (group?.rings.length ?? 1) - 1)]?.target;
+    if (ring === undefined) return null;
+    ring.updateMatrixWorld(true);
+    const toRing = new Matrix4().copy(ring.matrixWorld).invert();
+    const points: number[] = [];
+    const corner = new Vector3();
+    const matrix = new Matrix4();
+    ring.traverse((part) => {
+      const mesh = part as Mesh;
+      if (!(mesh as { isMesh?: boolean }).isMesh || mesh.geometry === undefined || !mesh.visible || /bloom|glow|flare/iu.test(mesh.name)) return;
+      const position = mesh.geometry.getAttribute('position');
+      if (position === undefined) return;
+      matrix.multiplyMatrices(toRing, mesh.matrixWorld);
+      const flat: number[] = [];
+      for (let k = 0; k < position.count; k++) {
+        corner.fromBufferAttribute(position, k).applyMatrix4(matrix);
+        flat.push(corner.x, corner.y);
+      }
+      // (a laser beam — long and thin, reaching far off — isn't the ring)
+      const xs = flat.filter((_, k) => k % 2 === 0);
+      const ys = flat.filter((_, k) => k % 2 === 1);
+      const w = Math.max(...xs) - Math.min(...xs);
+      const h = Math.max(...ys) - Math.min(...ys);
+      if (Math.max(w, h) > 30 * Math.max(Math.min(w, h), 1e-3)) return;
+      const index = mesh.geometry.getIndex();
+      const count = index === null ? position.count : index.count;
+      for (let k = 0; k < count && points.length < 400000; k++) {
+        const at = index === null ? k : index.getX(k);
+        points.push(flat[at * 2]!, flat[at * 2 + 1]!);
+      }
+    });
+    if (points.length < 6) return null;
+    let radius = 1e-6;
+    let finite = true;
+    for (let k = 0; k < points.length; k += 2) {
+      const reach = Math.hypot(points[k]!, points[k + 1]!);
+      if (!Number.isFinite(reach)) finite = false;
+      else radius = Math.max(radius, reach);
+    }
+    // (a ring caught while the environment is still being put together — shrunk to a point, or not
+    // placed yet: no shape to go by)
+    if (!finite || radius < 0.05) return null;
+    return { triangles: Float32Array.from(points), radius };
+  }
+
   /** The environment's ring systems: their names (what Chroma's nameFilter picks), how many rings,
-   *  whether ring events turn them / move them. */
-  ringSystems(): { name: string; rings: number; rotates: boolean; zooms: boolean }[] {
+   *  whether ring events turn them / move them; the ring motion's settings and seed (for working
+   *  out where rings stand), and per ring the ids Chroma's environment lookups find it by. */
+  ringSystems(): {
+    name: string;
+    rings: number;
+    rotates: boolean;
+    zooms: boolean;
+    rotation?: RingRotationConfig;
+    position?: RingPositionConfig;
+    seed: number;
+    ringIds: string[][];
+  }[] {
     const environment = this.environment;
     if (environment === null) return [];
-    return environment.ringGroups.map((group) => ({
+    const data = environment.data;
+    const lookupIds = environmentLookupIds(data);
+    // (the rings' objects, in the order buildRingGroups takes them)
+    const ringObjects: number[][] = [];
+    data.objects.forEach((object) => {
+      for (const manager of object.components?.TrackLaneRingsManager ?? []) {
+        if (!manager.enabled) continue;
+        const rings = manager.Rings.flatMap((reference) => {
+          const ring = data.objects[reference.obj]?.components?.TrackLaneRing?.[reference.componentIndex ?? 0];
+          return ring === undefined || !ring.enabled ? [] : [reference.obj];
+        });
+        if (rings.length > 0) ringObjects.push(rings);
+      }
+    });
+    return environment.ringGroups.map((group, index) => ({
       name: group.rotationConfig?.name ?? group.positionConfig?.name ?? '',
       rings: group.rings.length,
       rotates: group.rotationConfig !== undefined,
       zooms: group.positionConfig !== undefined,
+      ...(group.rotationConfig === undefined ? {} : { rotation: group.rotationConfig }),
+      ...(group.positionConfig === undefined ? {} : { position: group.positionConfig }),
+      seed: group.seed,
+      ringIds: (ringObjects[index] ?? []).map((object) => lookupIds.get(object) ?? []),
     }));
+  }
+
+  /** The environment's Chroma track animations were changed in place (the editor's ring poses):
+   *  played from now on without loading the environment again. */
+  refreshChromaAnimations() {
+    this.environmentLights.refreshChromaTracks();
   }
 
   /** The environment's lights as events address them: per event type, each light ID, where it is
    *  in the world, and the ring (group, index from the camera) it rides on, if any. */
-  lightLayout(): { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null }[] {
+  lightLayout(): { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; moving: boolean }[] {
     const environment = this.environment;
     if (environment === null) return [];
     if (!this.overlayAdded) {
@@ -336,20 +477,35 @@ export class MapView implements RenderView {
       }
       return null;
     };
-    const out = new Map<string, { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; count: number }>();
+    // (lights on something the laser speed events turn: the rotating lasers)
+    const turning = new Set<Object3D>(environment.rotations.map((rotation) => rotation.target));
+    const moves = (node: Object3D) => {
+      for (let current: Object3D | null = node; current !== null; current = current.parent) if (turning.has(current)) return true;
+      return false;
+    };
+    const out = new Map<string, { type: number; lightId: number; position: [number, number, number]; ring: { group: number; index: number } | null; moving: boolean; count: number }>();
+    const inactive = (node: Object3D) => {
+      for (let current: Object3D | null = node; current !== null; current = current.parent) if (current.userData.inactive === true) return true;
+      return false;
+    };
     const add = (bindings: EnvironmentLightBinding[], node: Object3D, local: Vector3) => {
+      if (inactive(node)) return;
       const world = node.localToWorld(local.clone());
       const ring = ringOf(node);
       for (const binding of bindings) {
         const remapped = new Map<number, number>();
         for (const [source, target] of binding.lightIdRemap) if (!remapped.has(source)) remapped.set(source, target);
+        // the one id a map lights it by (as Chroma finds lights): the smallest of the environment's
+        // table that points to it; with none, its own place in the game's list — unless the table
+        // uses that number for another light (then nothing reaches it)
         const ids = new Set<number>();
-        if (!remapped.has(binding.lightId)) ids.add(binding.lightId);
-        for (const [source, target] of remapped) if (target === binding.lightId) ids.add(source);
+        const keys = [...remapped].filter(([, target]) => target === binding.lightId).map(([source]) => source);
+        if (keys.length > 0) ids.add(Math.min(...keys));
+        else if (!remapped.has(binding.lightId)) ids.add(binding.lightId);
         for (const id of ids) {
           const key = `${String(binding.eventType)}|${String(id)}`;
           const known = out.get(key);
-          if (known === undefined) out.set(key, { type: binding.eventType, lightId: id, position: [world.x, world.y, world.z], ring, count: 1 });
+          if (known === undefined) out.set(key, { type: binding.eventType, lightId: id, position: [world.x, world.y, world.z], ring, moving: moves(node), count: 1 });
           else {
             // (a light made of several pieces: their middle)
             const n = known.count + 1;
@@ -491,6 +647,11 @@ export class MapView implements RenderView {
    *  actual player standing on it, it can just read as clutter floating in frame. Takes effect on
    *  the environment that's loaded right now (if any) and every one loaded afterwards; the setting
    *  itself persists across environment/track changes until called again. */
+  /** Lights shown lit over the show, by event type and map light ID (see EnvironmentLights). */
+  setHighlight(lights: readonly { type: number; id: number }[] | null, color?: Rgb, strength?: number) {
+    this.environmentLights.setHighlight(lights, color, strength);
+  }
+
   setShowPlayerPlatform(enabled: boolean) {
     this.showPlayerPlatform = enabled;
     this.applyPlayerPlatformVisibility();
@@ -543,6 +704,7 @@ export class MapView implements RenderView {
     this.replayView.setColors(colors);
     this.mapObjects.setMap(data, colors);
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
   }
 
   /** Cheaper setMap for a live, lighting-only show (the wallpaper's screensaver mode rebuilds its
@@ -592,6 +754,11 @@ export class MapView implements RenderView {
     );
   }
 
+  /** The environment's own colours (no map colours over them). */
+  environmentColors() {
+    return this.resolveMapColors(undefined);
+  }
+
   private resolveMapColors(override?: InfoColorScheme) {
     return this.environment === null ? DEFAULT_COLORS : resolveColorScheme(this.environment.data.colorScheme, override);
   }
@@ -603,6 +770,7 @@ export class MapView implements RenderView {
     this.replayView.setNoodleTrailLocalSpace(false);
     this.environmentLights.clearMap();
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
   }
 
   private baseProvider(name: string, beat: number): readonly number[] | undefined {
@@ -707,6 +875,27 @@ export class MapView implements RenderView {
     this.playerCameraHead.scale.set(1, 1, 1);
   }
 
+  /** Flies the camera (null: back to where the player stands). */
+  setFreeCamera(pose: { position: [number, number, number]; yaw: number; pitch: number } | null) {
+    this.freeCamera = pose === null ? null : { position: [...pose.position], yaw: pose.yaw, pitch: pose.pitch };
+    if (pose === null) {
+      this.camera.position.copy(this.playerCameraLocal);
+      this.camera.quaternion.identity();
+    }
+  }
+
+  /** Where the camera is and where it looks (yaw, pitch in radians), in the world. */
+  cameraPose(): { position: [number, number, number]; yaw: number; pitch: number } {
+    if (this.freeCamera !== null) return { position: [...this.freeCamera.position], yaw: this.freeCamera.yaw, pitch: this.freeCamera.pitch };
+    this.scene.updateMatrixWorld();
+    const position = new Vector3();
+    const quaternion = new Quaternion();
+    this.camera.getWorldPosition(position);
+    this.camera.getWorldQuaternion(quaternion);
+    const euler = new Euler().setFromQuaternion(quaternion, 'YXZ');
+    return { position: [position.x, position.y, position.z], yaw: euler.y, pitch: euler.x };
+  }
+
   render(renderer: WebGLRenderer) {
     const now = this.environment === null && this.data === null ? 0 : this.beatSource();
     this.update(now);
@@ -746,10 +935,27 @@ export class MapView implements RenderView {
       this.parallaxQuaternion.setFromEuler(this.parallaxEuler);
       this.playerCameraRoot.quaternion.multiply(this.parallaxQuaternion);
     }
+    if (this.horizontalFov !== null) {
+      const aspect = Math.max(0.2, this.camera.aspect);
+      const vertical = (2 * Math.atan(Math.tan((this.horizontalFov * Math.PI) / 360) / aspect) * 180) / Math.PI;
+      const fov = Math.max(42, Math.min(75, vertical));
+      if (Math.abs(fov - this.camera.fov) > 0.01) {
+        this.camera.fov = fov;
+        this.camera.updateProjectionMatrix();
+      }
+    }
+    if (this.freeCamera !== null) {
+      this.resetPlayerCameraRig();
+      this.camera.position.set(...this.freeCamera.position);
+      this.freeEuler.set(this.freeCamera.pitch, this.freeCamera.yaw, 0, 'YXZ');
+      this.camera.quaternion.setFromEuler(this.freeEuler);
+    }
     this.scene.updateMatrixWorld();
     if (this.environment?.applyConstraints() === true) this.scene.updateMatrixWorld();
     this.environment?.syncInstancedMeshes();
     if (this.environment !== null) this.environmentLights.updateWorldLights(now);
+    // (chrome shapes: their surroundings taken anew, as the mirror floors' are)
+    if (hasLiveReflections()) renderLiveReflections(renderer, this.scene);
     if (hasVisibleMirrorConsumer(this.environmentMirrorConsumers, this.camera)) {
       this.mirror.render(renderer, this.scene, this.camera, (mirrorRenderer, mirrorCamera) => {
         this.pipeline.render(mirrorRenderer, mirrorCamera, this.environmentLights.lightSegments);
@@ -757,6 +963,35 @@ export class MapView implements RenderView {
     }
     this.pipeline.render(renderer, this.camera, this.environmentLights.lightSegments);
     this.postBloom.render(renderer, this.scene, this.camera, this.mapRoot.visible && this.mapObjects.wallsVisible);
+    // (the editor's own things — its note track — over the finished picture, with their own depth)
+    if (this.overlayScene.children.some((child) => child.visible && child.children.length > 0)) {
+      this.overlayUpdate?.();
+      this.overlayScene.updateMatrixWorld();
+      // (the screen has no depth of its own: drawn into a target that has, then laid over it)
+      const size = renderer.getDrawingBufferSize(new Vector2());
+      if (this.overlayTarget === null) {
+        this.overlayTarget = new WebGLRenderTarget(size.x, size.y, { samples: 4 });
+        this.overlayQuad = new Mesh(new PlaneGeometry(2, 2), new MeshBasicMaterial({ map: this.overlayTarget.texture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, blending: CustomBlending, blendSrc: OneFactor, blendDst: OneMinusSrcAlphaFactor }));
+        this.overlayQuadScene.add(this.overlayQuad);
+      }
+      if (this.overlayTarget.width !== size.x || this.overlayTarget.height !== size.y) this.overlayTarget.setSize(size.x, size.y);
+      const previousTarget = renderer.getRenderTarget();
+      const autoClear = renderer.autoClear;
+      const clipping = renderer.localClippingEnabled;
+      const clearColor = renderer.getClearColor(new Color());
+      const clearAlpha = renderer.getClearAlpha();
+      renderer.setRenderTarget(this.overlayTarget);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, true, true);
+      renderer.autoClear = false;
+      renderer.localClippingEnabled = true;
+      renderer.render(this.overlayScene, this.camera);
+      renderer.setRenderTarget(previousTarget);
+      renderer.render(this.overlayQuadScene, this.overlayCamera);
+      renderer.setClearColor(clearColor, clearAlpha);
+      renderer.autoClear = autoClear;
+      renderer.localClippingEnabled = clipping;
+    }
     if (this.orthoCameraEnabled && this.replayView.hasReplay && !isForcedLightshowMode(this.lightshowMode)) {
       const element = this.orthoOverlayElement();
       if (element !== null) this.renderOrthographicOverlay(renderer, element, now);

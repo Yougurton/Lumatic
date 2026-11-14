@@ -1,15 +1,10 @@
-import {
-  AdditiveBlending,
-  CanvasTexture,
-  Sprite,
-  SpriteMaterial,
-} from 'three';
-
+import { onSettings, settings } from './settings';
 import type { InfoColorScheme } from '../engine/core/beatmap/info';
-import { createDifficulty, type BasicEvent, type BpmEvent } from '../engine/core/beatmap/types';
+import { createDifficulty, type BasicEvent, type BpmEvent, type Difficulty } from '../engine/core/beatmap/types';
+import type { NoodleBeatmapData } from '../engine/core/noodle-data';
 import { createBpmConverter } from '../engine/core/beatmap/bpm';
 import type { ChromaEnvironmentData } from '../engine/core/chroma-environment';
-import type { ColorScheme } from '../engine/core/colors';
+import type { ColorScheme, Rgb } from '../engine/core/colors';
 import { buildMapRenderData } from '../engine/core/placement/map-render-data';
 import { DEFAULT_REPLAY_CAMERA_SETTINGS } from '../engine/core/viewer-settings';
 import { MapView } from '../engine/renderer/map-view';
@@ -19,8 +14,7 @@ import type { OutEvent } from './bake';
 /**
  * The 3D view: ChroPaper's renderer showing the environment with the lightshow as it is being
  * edited (lights only — the notes would only get in the way). Every edit rebuilds the light
- * timelines (the cheap path ChroPaper's live lightshow uses). Also the editor's own things in the
- * scene: the green glow on a lamp picked in the timeline.
+ * timelines (the cheap path ChroPaper's live lightshow uses).
  */
 
 export interface LightInfo {
@@ -28,6 +22,8 @@ export interface LightInfo {
   lightId: number;
   position: [number, number, number];
   ring: { group: number; index: number } | null;
+  /** On something the laser speed events turn (a rotating laser). */
+  moving: boolean;
 }
 
 export class Preview {
@@ -36,17 +32,34 @@ export class Preview {
   private songBpm = 120;
   private bpmEvents: BpmEvent[] = [];
   private colorScheme: InfoColorScheme | undefined;
-  private glow: { sprite: Sprite; startedAt: number } | null = null;
-  private glowTexture: CanvasTexture | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.lifecycle.attach(canvas);
-    this.view = new MapView({ mirrorQuality: 'medium' });
+    // (the floor's reflections are made with the view: a change waits for a restart)
+    this.view = new MapView({ mirrorQuality: settings().mirror });
     this.lifecycle.setView(this.view);
-    this.view.setLightshowMode('full-lightshow');
-    this.view.setShowPlayerPlatform(false);
-    this.view.setScreenDisplacementEffects(true);
+    this.applySettings();
+    onSettings(() => this.applySettings());
     this.view.setReplayCameraSettings({ ...DEFAULT_REPLAY_CAMERA_SETTINGS });
+  }
+
+  /** The settings' 3D view: the platform, the screen distortion, the notes and walls. */
+  /** The notes in the game's view: shown, hidden (the notes side's track has them), or as the
+   *  settings say. */
+  private notesMode: 'auto' | 'show' | 'hide' = 'auto';
+
+  setNotesMode(mode: 'auto' | 'show' | 'hide') {
+    if (mode === this.notesMode) return;
+    this.notesMode = mode;
+    this.applySettings();
+  }
+
+  private applySettings() {
+    const { platform, distortion, notes } = settings();
+    const shown = this.notesMode === 'show' || (this.notesMode === 'auto' && notes);
+    this.view.setLightshowMode(shown ? 'full' : 'full-lightshow');
+    this.view.setShowPlayerPlatform(platform);
+    this.view.setScreenDisplacementEffects(distortion);
   }
 
   setTiming(songBpm: number, bpmEvents: BpmEvent[], colorScheme: InfoColorScheme | undefined) {
@@ -57,6 +70,7 @@ export class Preview {
 
   async setEnvironment(id: string, chromaEnvironment?: ChromaEnvironmentData) {
     const result = await this.view.setEnvironment(id, chromaEnvironment);
+    this.outlines.clear();
     return result.isOk();
   }
 
@@ -66,12 +80,35 @@ export class Preview {
   }
 
   /** The ring systems (big / small rings…). */
+  environmentData() {
+    return this.view.environmentData();
+  }
+
   ringSystems() {
     return this.view.ringSystems();
   }
 
+  /** One ring of a ring system seen down the tunnel (see MapView.ringOutline). */
+  ringOutline(system = 0) {
+    // (kept till the environment changes: the ring editor draws it every frame)
+    // (none found — the environment still loading: asked again next time)
+    if (!this.outlines.has(system)) {
+      const found = this.view.ringOutline(system);
+      if (found === null) return null;
+      this.outlines.set(system, found);
+    }
+    return this.outlines.get(system) ?? null;
+  }
+
+  private outlines = new Map<number, ReturnType<MapView['ringOutline']>>();
+
   get colors(): ColorScheme {
     return this.view.currentColors;
+  }
+
+  /** Lights lit over the show (the editor's picked lights flashing); null: none. */
+  setHighlight(lights: readonly { type: number; id: number }[] | null, color?: Rgb, strength?: number) {
+    this.view.setHighlight(lights, color, strength);
   }
 
   /** The beat (song time, in beats of the song's own BPM) the view shows. */
@@ -79,11 +116,34 @@ export class Preview {
     this.view.setBeatSource(source);
   }
 
+  /** The map's Noodle data the environment needs (its tracks' parents: AssignTrackParent). */
+  private noodle: NoodleBeatmapData | null = null;
+
+  setNoodle(noodle: NoodleBeatmapData | null) {
+    this.noodle = noodle;
+  }
+
+  /** The difficulty's notes, walls, arcs and chains (null: none shown). */
+  private objects: Pick<Difficulty, 'notes' | 'obstacles' | 'arcs' | 'chains'> | null = null;
+
+  setObjects(objects: Pick<Difficulty, 'notes' | 'obstacles' | 'arcs' | 'chains'> | null) {
+    this.objects = objects;
+  }
+
+  /** How fast the notes come and how far ahead they appear (the difficulty's NJS and offset). */
+  private jump = { speed: 16, offset: 0 };
+
+  setJump(speed: number, offset: number) {
+    this.jump = { speed: speed > 0 ? speed : 16, offset };
+  }
+
   /** The lightshow as events (jsonTime beats). */
   setEvents(events: readonly OutEvent[]) {
     const toSong = createBpmConverter(this.bpmEvents, this.songBpm);
     const difficulty = createDifficulty('3.3.0');
     difficulty.bpmEvents = this.bpmEvents;
+    if (this.noodle !== null) difficulty.noodle = this.noodle;
+    if (this.objects !== null) Object.assign(difficulty, this.objects);
     difficulty.events = events.map((event): BasicEvent => {
       const customData: Record<string, unknown> = { ...(event.customData ?? {}) };
       if (event.color !== undefined) customData.color = event.color;
@@ -100,59 +160,12 @@ export class Preview {
     });
     difficulty.events.sort((a, b) => a.songBpmTime - b.songBpmTime);
     const data = buildMapRenderData(difficulty, {
-      noteJumpSpeed: 16,
-      noteStartBeatOffset: 0,
+      noteJumpSpeed: this.jump.speed,
+      noteStartBeatOffset: this.jump.offset,
       songBpm: this.songBpm,
       legacyNoodleV2Semantics: false,
       environmentRemoval: [],
     });
     this.view.updateLightshow(data, this.colorScheme);
   }
-
-  /** A green glow on a lamp, fading out (a light picked in the timeline). */
-  highlight(position: [number, number, number] | null) {
-    if (this.glow !== null) {
-      this.view.overlayRoot.remove(this.glow.sprite);
-      this.glow.sprite.material.dispose();
-      this.glow = null;
-    }
-    if (position === null) return;
-    this.glowTexture ??= glowTexture();
-    const material = new SpriteMaterial({ map: this.glowTexture, color: 0x33ff77, transparent: true, blending: AdditiveBlending, depthTest: false, depthWrite: false });
-    const sprite = new Sprite(material);
-    sprite.position.set(...position);
-    sprite.scale.set(3, 3, 1);
-    sprite.renderOrder = 10_000;
-    sprite.matrixAutoUpdate = true;
-    sprite.updateMatrixWorld(true);
-    this.view.overlayRoot.add(sprite);
-    this.view.overlayRoot.updateMatrixWorld(true);
-    this.glow = { sprite, startedAt: performance.now() };
-    const step = () => {
-      const glow = this.glow;
-      if (glow === null || glow.sprite !== sprite) return;
-      const t = (performance.now() - glow.startedAt) / 1600;
-      material.opacity = Math.max(0, 1 - t);
-      const scale = 3 + t * 2;
-      sprite.scale.set(scale, scale, 1);
-      sprite.updateMatrixWorld(true);
-      if (t < 1) requestAnimationFrame(step);
-      else this.highlight(null);
-    };
-    requestAnimationFrame(step);
-  }
-}
-
-function glowTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext('2d')!;
-  const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
-  gradient.addColorStop(0, 'rgba(255,255,255,1)');
-  gradient.addColorStop(0.3, 'rgba(255,255,255,0.6)');
-  gradient.addColorStop(1, 'rgba(255,255,255,0)');
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 64, 64);
-  return new CanvasTexture(canvas);
 }

@@ -1,3 +1,4 @@
+import { STAND_IN_TEXTURES, supplementEnvironment } from './environment-supplements';
 import {
   ClampToEdgeWrapping,
   CubeTextureLoader,
@@ -77,6 +78,7 @@ export async function loadEnvironmentAssets(
   loadData: EnvironmentDataLoader = loadEnvironmentData,
 ): Promise<LoadedEnvironmentAssets> {
   const data = await loadData(id, signal);
+  supplementEnvironment(data);
 
   const assets = new Set(materialTextureAssets(data));
   const clampedAssets = new Set(
@@ -87,6 +89,7 @@ export async function loadEnvironmentAssets(
     ),
   );
   for (const system of data.particleSystems ?? []) clampedAssets.add(system.texture);
+  for (const asset of STAND_IN_TEXTURES) clampedAssets.add(asset);
   if (Object.values(data.materials).some((material) => material.shader === 'ChroMapper/Parametric Box Fake Glow')) {
     assets.add(PARAMETRIC_FAKE_GLOW_TEXTURE);
   }

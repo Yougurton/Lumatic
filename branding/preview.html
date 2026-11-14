@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Lumatic logos</title>
+<style>
+  body { margin: 0; padding: 26px; background: #0b0c10; color: #c9cdd8; font: 13px Inter, system-ui, sans-serif; }
+  table { border-collapse: collapse; }
+  th { color: #fff; font-weight: 600; padding: 0 8px 10px; text-align: center; }
+  th.form { text-align: left; padding: 0 16px 0 0; white-space: nowrap; }
+  td { padding: 6px 8px; text-align: center; }
+  td.small img { margin: 0 3px; vertical-align: middle; }
+  .row { display: flex; gap: 22px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
+  .mono { background: #16171c; border-radius: 14px; padding: 8px; }
+</style>
+<body>
+<table id="grid"></table>
+<div class="row" id="locks"></div>
+<script>
+const forms = [['classic', 'классика'], ['tall', 'вытянутая'], ['eight', 'восемь лучей'], ['tilted', 'наклонная'], ['ring', 'в кольце'], ['flare', 'с бликом']];
+const palettes = [['spectrum', 'спектр'], ['neon', 'неон'], ['sunset', 'закат'], ['aurora', 'аврора'], ['accent', 'акцент'], ['fire', 'огонь']];
+const grid = document.getElementById('grid');
+grid.insertAdjacentHTML('beforeend', `<tr><th></th>${palettes.map(([, n]) => `<th>${n}</th>`).join('')}<th>32 · 16 px</th><th>одноцветный</th></tr>`);
+for (const [form, name] of forms) {
+  grid.insertAdjacentHTML('beforeend', `<tr><th class="form">${name}</th>${palettes.map(([p]) => `<td><img src="logos/lumatic-spark-${form}-${p}-icon.svg" width="96"></td>`).join('')}
+    <td class="small"><img src="logos/lumatic-spark-${form}-spectrum-icon.svg" width="32"><img src="logos/lumatic-spark-${form}-spectrum-icon.svg" width="16"></td>
+    <td><img class="mono" src="logos/lumatic-spark-${form}-mono.svg" width="48"></td></tr>`);
+}
+document.getElementById('locks').innerHTML = ['classic-spectrum', 'tall-neon', 'ring-aurora'].map((s) => `<img src="logos/lumatic-spark-${s}-horizontal.svg" height="64">`).join('') + '<img src="logos/lumatic-wordmark.svg" height="64">';
+</script>

@@ -1,4 +1,6 @@
+import type { EnvironmentFragment, EnvironmentMods } from './environment-mods';
 import type { Effect } from './effects';
+import type { RingBlock } from './rings';
 
 /**
  * The editor's own picture of a lightshow (what the project file keeps): light clips on the
@@ -37,6 +39,8 @@ export interface LightClip {
   /** fadeIn: how many beats it takes to come up. */
   fadeIn: number;
   endMode: EndMode;
+  /** endMode fade: how many beats the fade out takes, to the clip's end (none: all of the clip). */
+  fadeOut?: number;
   color: ClipColor;
   /** A gradient across the clip: the colour it has arrived at by its end (null: none). */
   endColor: ClipColor | null;
@@ -70,6 +74,8 @@ export interface LightGroup {
   id: string;
   name: string;
   items: GroupItem[];
+  /** Its lights are taken out of their environment rows (those rows then light only the rest). */
+  takesLights?: boolean;
 }
 
 export type GroupItem = LightRef | LightGroup;
@@ -88,7 +94,8 @@ export interface RawEvent {
 }
 
 export interface Project {
-  format: 'chroeditor';
+  /** ('chroeditor': written when the editor was called ChroEditor) */
+  format: 'lumatic' | 'chroeditor';
   version: 1;
   /** The difficulty file it belongs to. */
   difficulty: string;
@@ -103,6 +110,42 @@ export interface Project {
   expandedGroups?: string[];
   /** Effects (their events are clips with `group` = the effect's id). */
   effects?: Effect[];
+  /** Ring pose blocks. */
+  ringBlocks?: RingBlock[];
+  /** Bookmarks (written into the difficulty as the editors' bookmarks). */
+  bookmarks?: Bookmark[];
+  /** The map checker's finds the user chose to ignore (their keys). */
+  ignoredIssues?: string[];
+  /** The map's presets (each difficulty's project has the map's, all the same; presets.ts). */
+  presets?: unknown[];
+  /** When it was last saved (ms since 1970): an autosave newer than this is offered back. */
+  savedAt?: number;
+  /** Colours kept for this map (each difficulty's project has the map's, all the same). */
+  palette?: Rgb[];
+  /** The order of the top rows of lights ("g<type>" — a light group of the environment, "u<id>" — a
+   *  group of the user's); rows not in it keep their own order after these. */
+  rowOrder?: string[];
+  /** Light groups of the environment whose row a group of the user's with all of their lights
+   *  stands in for (event type → that group's id): their row is hidden, their clips shown on it. */
+  replacedTypes?: Record<string, string>;
+  /** Light groups of the environment whose row the user took off the timeline (event type → the place
+   *  among the top rows it had, for when it's brought back). */
+  removedTypes?: Record<string, number>;
+  /** Changes to the environment (written into the difficulty's custom data). */
+  environmentMods?: EnvironmentMods;
+  /** What they wrote last time (taken out again before they're written anew). */
+  writtenEnvironment?: EnvironmentFragment;
+  /** Mods put into the difficulty's requirements for them (taken out when not needed any more). */
+  addedRequirements?: string[];
+}
+
+/** A named place in the song (Beat Saber editors' bookmarks: v2 `_bookmarks`, v3 `bookmarks`). */
+export interface Bookmark {
+  id: string;
+  beat: number;
+  name: string;
+  /** RGB 0…1. */
+  color: Rgb;
 }
 
 let counter = 0;

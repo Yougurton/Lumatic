@@ -16,7 +16,6 @@ import type { EnvironmentSceneBuild } from './environment-scene-builder';
 import type { EnvironmentMaterialContext } from './materials/material-context';
 import type { BackgroundGradientData, EnvironmentData, ObjectReference } from './types';
 
-const OPAQUE_LIGHT_MIN_EMISSION = 0.25;
 
 export interface EnvironmentParametricTarget {
   node: Object3D;
@@ -217,7 +216,6 @@ function addParametricLights(
         const sprite =
           kind === 'sprite' ? childComponents?.ParametricSpriteLight?.[target.componentIndex ?? 0] : undefined;
         const lightNode = targetNode;
-        const targetObjectIndex = target.obj;
         let lightTransform: Object3D = lightNode;
         while (lightTransform.parent?.name.startsWith('__chroma_track_') === true) {
           lightTransform = lightTransform.parent;
@@ -231,7 +229,6 @@ function addParametricLights(
         }
         const renderer = scene.rendererMeshes.get(lightNode);
         const initialRendererVisible = renderer?.visible ?? true;
-        const opaque = targetMaterials.some((material) => !material.transparent && material.depthWrite);
         let currentAlpha = 1;
         let currentLength = controller.Length;
         let currentCollisionLength = Number.POSITIVE_INFINITY;
@@ -239,14 +236,11 @@ function addParametricLights(
         if (box !== undefined && box.UpdateTransform !== 0) bindingTarget.matrixTargets.push(lightTransform);
         function applyAlpha(alpha: number) {
           currentAlpha = alpha;
-          const renderedAlpha = Math.max(Math.abs(alpha * intensityMultiplier), controller.MinAlpha);
+          // (as the game's ParametricBloomFogLightController: only DisableRenderersOnZeroAlpha takes
+          // the renderer away — a dark opaque light is still there, an unlit bar or tube in the fog,
+          // not gone; the opaque shader draws it so at no emission)
           if (renderer !== undefined) {
-            renderer.visible =
-              initialRendererVisible &&
-              (controller.DisableRenderersOnZeroAlpha === 0 || alpha > 0.01) &&
-              (data.objects[targetObjectIndex]?.chromaGenerated === true ||
-                !opaque ||
-                renderedAlpha * renderedAlpha > OPAQUE_LIGHT_MIN_EMISSION);
+            renderer.visible = initialRendererVisible && (controller.DisableRenderersOnZeroAlpha === 0 || alpha > 0.01);
           }
           const lengthFactor =
             controller.MultiplyLengthByAlpha === 0 ? 1 : evaluateAnimationCurve(controller.AlphaToLengthCurve, alpha);

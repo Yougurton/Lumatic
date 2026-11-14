@@ -1,4 +1,5 @@
-import { lerpHsv, resolveRgb, type SchemeColors } from './bake';
+import { soundLevels, type SoundMode, type SoundSettings, type SoundSource } from './sound-effect';
+import { lerpHsv, resolveRgb, shiftHue, type SchemeColors } from './bake';
 import { generateGls, type GlsData } from './gls';
 import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, type RawEvent, type Rgb, type StartMode } from './model';
 
@@ -14,7 +15,10 @@ import { newId, type ClipColor, type EndMode, type LightClip, type LightGroup, t
  * lines — or its lights); on an event type's row, that type's lights by ID.
  */
 
-export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'gls';
+/** 'group': events drawn by hand kept together as one block (a preset's) — always `custom`. */
+export type EffectKind = 'wave' | 'fill' | 'strobe' | 'gradient' | 'twinkle' | 'fire' | 'gls' | 'group' | 'sound';
+/** fire: how its light goes over its time — coming up, dying down, or just burning. */
+export type FireShape = 'rise' | 'fall' | 'steady';
 export type Direction = 'forward' | 'backward' | 'outward' | 'inward' | 'pingpong';
 export type StrobePattern = 'all' | 'alternate' | 'sequence';
 
@@ -29,6 +33,8 @@ export interface EffectParams {
   fadeIn: number;
   /** wave: how long each item stays lit; fill: how long the filling takes (beats). */
   pulse: number;
+  /** wave: beats from one item's flash to the next one's (none / 0: spread over the effect's length). */
+  spacing?: number;
   /** wave: how many times it runs through. */
   repeats: number;
   direction: Direction;
@@ -40,6 +46,53 @@ export interface EffectParams {
   /** twinkle: the share of items lit each time. */
   density: number;
   seed: number;
+  /** fire: coming up, dying down or burning on (older effects: none). */
+  shape?: FireShape;
+  /** fire: how low it goes (its share of the brightness: where it starts coming up from, dies down
+   *  to). */
+  floor?: number;
+  /** fire: how much it trembles (a share of the brightness it has at the time). */
+  tremor?: number;
+  /** fire: trembling at random like a flame, or swaying evenly like a singer's vibrato — `rate` beats
+   *  a sway, down by `tremor` and back. */
+  wobble?: 'flame' | 'vibrato';
+  /** vibrato: how far behind each next item sways (a share of a sway: 0 — all together). */
+  vibratoLag?: number;
+  /** vibrato: how far the hue sways either way with it (degrees). */
+  vibratoHue?: number;
+  /** vibrato: the light coming on item after item as a wave (beats it takes; none / 0: all at once)… */
+  vibratoIn?: number;
+  /** …and going off the same way at the end, the first one lit the first to go. (Both a sway long;
+   *  above 0: on.) */
+  vibratoOut?: number;
+  /** vibrato: the colour its waves come on and go off in (none: the effect's own). */
+  vibratoWaveColor?: ClipColor | null;
+  /** endMode fade: the beats each flash's fade out takes (none / 0: all of it). */
+  fadeOut?: number;
+  /** Its colours turned round the hue circle (degrees)… */
+  hueShift?: number;
+  /** …and each next one further by this much (degrees): the next item, or the next flash in time. */
+  hueStep?: number;
+  hueBy?: 'item' | 'time';
+  /** sound: what it shows — an equaliser, a level meter, one light by loudness (sound-effect.ts)… */
+  soundMode?: SoundMode;
+  /** …how much brighter than the song's own swing, the frequencies listened to (Hz)… */
+  gain?: number;
+  lowHz?: number;
+  highHz?: number;
+  /** …beats from one point to the next, beats to die down from full… */
+  soundStep?: number;
+  release?: number;
+  /** …level: each next item later by (beats); meter: its top falling back over (beats; 0: none), in
+   *  its own colour (none: the others')… */
+  soundDelay?: number;
+  peakFall?: number;
+  peakColor?: ClipColor | null;
+  /** …the second colour by loudness (quiet → loud) or along the items. */
+  soundColorBy?: 'level' | 'item';
+  /** The base colour on the other end: the last item (the last flash) unturned, the ones before it
+   *  turned further and further. */
+  hueInvert?: boolean;
 }
 
 export interface Effect {
@@ -59,13 +112,25 @@ export interface Effect {
   custom?: boolean;
   /** kind 'gls': its boxes (gls.ts). */
   gls?: GlsData;
+  /** kind 'group': the map's preset it was made from or put in as (its id)… */
+  preset?: string;
+  /** …kept the same as the preset's other copies (changed inside: they all change)… */
+  presetSync?: boolean;
+  /** …and how much longer than the preset it is (stretched on the timeline: its events with it). */
+  presetScale?: number;
 }
 
 /** What making an effect's events needs besides the effect. */
 export interface EffectExtras {
   secondsPerBeat: number;
+  /** The song's spectrogram (the effects by sound; none yet: they make nothing). */
+  sound?: SoundSource;
+  /** A beat's place in the song (seconds; the tempo changes counted). */
+  beatToSeconds?: (beat: number) => number;
   /** Rings in a ring system ('': all of them together). */
   ringCount: (system: string) => number;
+  /** What a GLS block's further group runs over. */
+  itemsOf?: (target: Pick<Effect, 'target' | 'type' | 'ids'>) => EffectItem[];
 }
 
 /** What an effect goes through, one by one. */
@@ -77,7 +142,10 @@ export const KIND_NAMES: Record<EffectKind, string> = {
   strobe: 'Стробоскоп',
   gradient: 'Градиент',
   twinkle: 'Мерцание',
+  fire: 'Огонёк',
   gls: 'GLS-группа',
+  group: 'Группа событий',
+  sound: 'По звуку',
 };
 
 export function defaultParams(color: ClipColor): EffectParams {
@@ -96,6 +164,9 @@ export function defaultParams(color: ClipColor): EffectParams {
     pattern: 'all',
     density: 0.3,
     seed: 1,
+    shape: 'steady',
+    floor: 0.15,
+    tremor: 0.3,
   };
 }
 
@@ -122,7 +193,7 @@ function stepsOf(count: number, direction: Direction): number[] {
   });
 }
 
-function mixColor(a: ClipColor, b: ClipColor | null, t: number, hsv: boolean, scheme: SchemeColors): ClipColor {
+export function mixColor(a: ClipColor, b: ClipColor | null, t: number, hsv: boolean, scheme: SchemeColors): ClipColor {
   if (b === null || t <= 0) return { ...a };
   if (t >= 1) return { ...b };
   if (a.ref === b.ref && a.ref !== 'custom') return { ref: a.ref, brightness: a.brightness + (b.brightness - a.brightness) * t };
@@ -130,6 +201,28 @@ function mixColor(a: ClipColor, b: ClipColor | null, t: number, hsv: boolean, sc
   const to = resolveRgb(b, scheme);
   const rgb: Rgb = hsv ? lerpHsv(from, to, t) : [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
   return { ref: 'custom', rgb, brightness: a.brightness + (b.brightness - a.brightness) * t };
+}
+
+/** A wave's length with a set time from item to item: `passes` passes over `steps` steps. */
+export function waveLength(p: EffectParams, steps: number, passes = Math.max(1, Math.round(p.repeats))) {
+  return passes * ((Math.max(1, steps) - 1) * (p.spacing ?? 0) + Math.max(1 / 64, p.pulse));
+}
+
+/** How many steps a wave goes through for `count` items (items side by side from the middle are one). */
+export function waveSteps(count: number, direction: Direction) {
+  return count === 0 ? 0 : Math.max(...stepsOf(count, direction === 'pingpong' ? 'forward' : direction)) + 1;
+}
+
+/**
+ * How long an effect needs to be for what its settings ask (0: it fits any length): a vibrato's
+ * waves in and out, a fill's sweep, a wave with a set time from item to item.
+ */
+export function effectNeededLength(effect: Effect, items: number): number {
+  const p = effect.params;
+  if (effect.kind === 'fire' && p.wobble === 'vibrato') return vibratoPlan(effect, items).needed;
+  if (effect.kind === 'fill') return Math.max(0, p.pulse) / 0.95;
+  if (effect.kind === 'wave' && (p.spacing ?? 0) > 0) return waveLength(p, waveSteps(items, p.direction));
+  return 0;
 }
 
 /** A small seeded random (the same twinkle every time it is made). */
@@ -155,17 +248,68 @@ export function generateEffect(effect: Effect, items: readonly EffectItem[], sch
 
 /** The effect's events: light clips — and, for a GLS block's rotation boxes, ring events. */
 export function buildEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
+  const made = buildEffectEvents(effect, items, scheme, extras);
+  return { clips: finishClips(made.clips, effect.params, scheme), raw: made.raw };
+}
+
+/** What every effect's events get from its settings: the fade out's length, the colours turned round
+ *  the hue circle (all of them, and each next one further). */
+function finishClips(clips: LightClip[], p: EffectParams, scheme: SchemeColors): LightClip[] {
+  const fadeOut = p.fadeOut ?? 0;
+  const shift = p.hueShift ?? 0;
+  const step = p.hueStep ?? 0;
+  // (the next flash in time: the clips' starts, in order)
+  const times = step !== 0 && p.hueBy === 'time' ? [...new Set(clips.map((clip) => Math.round(clip.start * 10000)))].sort((a, b) => a - b) : [];
+  // (turned the other way round: counted from the last)
+  const last = p.hueBy === 'time' ? times.length - 1 : Math.max(0, ...clips.map((clip) => clip.slot ?? 0));
+  for (const clip of clips) {
+    if (fadeOut > 0 && clip.endMode === 'fade') clip.fadeOut = fadeOut;
+    const index = step === 0 ? 0 : p.hueBy === 'time' ? times.indexOf(Math.round(clip.start * 10000)) : Math.max(0, clip.slot ?? 0);
+    const k = p.hueInvert === true && step !== 0 ? last - index : index;
+    const degrees = shift + step * k;
+    if (Math.abs(degrees % 360) < 1e-6) continue;
+    clip.color = turnHue(clip.color, degrees, scheme);
+    if (clip.endColor !== null) clip.endColor = turnHue(clip.endColor, degrees, scheme);
+  }
+  return clips;
+}
+
+/** A colour turned round the hue circle by `degrees` (as a colour of its own, Chroma's). */
+export function turnHue(color: ClipColor, degrees: number, scheme: SchemeColors): ClipColor {
+  return { ref: 'custom', rgb: shiftHue(resolveRgb(color, scheme), degrees), brightness: color.brightness };
+}
+
+function buildEffectEvents(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): { clips: LightClip[]; raw: Omit<RawEvent, 'id'>[] } {
+  // (a group has no settings to make events from: its own are kept as they are)
+  if (effect.kind === 'group') return { clips: [], raw: [] };
   if (effect.kind === 'gls') {
-    const made = generateGls(effect.gls ?? { boxes: [] }, effect.start, effect.end, {
+    const made = generateGls({ boxes: effect.gls?.boxes ?? [] }, effect.start, effect.end, {
       scheme,
       items: items.length,
       makeClip: (item, start, end) => childClip(effect, items[item] ?? null, start, end, item),
       ringCount: extras?.ringCount ?? (() => 1),
       secondsPerBeat: extras?.secondsPerBeat ?? 0.5,
     });
+    // its further groups: each over its own elements (their slots after the ones before)
+    let slot = items.length;
+    for (const lane of effect.gls?.lanes ?? []) {
+      const laneItems = extras?.itemsOf?.(lane) ?? [];
+      const base = slot;
+      const laneEffect: Effect = { ...effect, target: lane.target, type: lane.type, ids: lane.ids };
+      if (lane.target === undefined) delete laneEffect.target;
+      const more = generateGls({ boxes: lane.boxes.filter((box) => box.kind === 'color') }, effect.start, effect.end, {
+        scheme,
+        items: laneItems.length,
+        makeClip: (item, start, end) => childClip(laneEffect, laneItems[item] ?? null, start, end, base + item),
+        ringCount: () => 1,
+        secondsPerBeat: extras?.secondsPerBeat ?? 0.5,
+      });
+      made.clips.push(...more.clips);
+      slot += laneItems.length;
+    }
     return { clips: made.clips, raw: made.raw.map((event) => ({ ...event, group: effect.id })) };
   }
-  return { clips: classicEffect(effect, items, scheme), raw: [] };
+  return { clips: classicEffect(effect, items, scheme, extras), raw: [] };
 }
 
 /** One of an effect's clips: for an item (null: the whole target), from `start` to `end`. */
@@ -199,7 +343,7 @@ function childClip(effect: Effect, item: EffectItem | null, start: number, end: 
   return clip;
 }
 
-function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors): LightClip[] {
+function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: SchemeColors, extras?: EffectExtras): LightClip[] {
   const p = effect.params;
   const out: LightClip[] = [];
   const duration = Math.max(1 / 64, effect.end - effect.start);
@@ -241,10 +385,17 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
   const colorAt = (step: number) => mixColor(p.color, p.color2, stepCount <= 1 ? 0 : step / (stepCount - 1), p.hsv, scheme);
 
   if (effect.kind === 'wave') {
-    const passes = Math.max(1, Math.round(p.repeats));
-    const pass = duration / passes;
-    const pulse = Math.max(1 / 64, Math.min(p.pulse, pass));
-    const delay = stepCount > 1 ? Math.max(0, pass - pulse) / (stepCount - 1) : 0;
+    // (the next item after a set time: a pass as long as that makes it, as many passes as fit; else
+    // the passes spread over the effect)
+    const spaced = (p.spacing ?? 0) > 0;
+    const pulse0 = Math.max(1 / 64, p.pulse);
+    const passLength = spaced ? waveLength(p, stepCount, 1) : 0;
+    const passes = spaced ? Math.max(1, Math.round(duration / passLength + 1e-6)) : Math.max(1, Math.round(p.repeats));
+    const pass = spaced ? passLength : duration / passes;
+    // (too short a pass for its flashes: they're shortened to half of it — the wave still runs
+    // across the items instead of lighting them all at once)
+    const pulse = spaced ? pulse0 : stepCount > 1 ? Math.min(pulse0, pass / 2) : Math.min(pulse0, pass);
+    const delay = spaced ? p.spacing! : stepCount > 1 ? Math.max(0, pass - pulse) / (stepCount - 1) : 0;
     for (let r = 0; r < passes; r++) {
       items.forEach((item, index) => {
         const step = p.direction === 'pingpong' && r % 2 === 1 ? stepCount - 1 - steps[index]! : steps[index]!;
@@ -279,6 +430,10 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
         });
       }
     }
+  } else if (effect.kind === 'fire') {
+    out.push(...fire(effect, items, scheme, (start, end, color, slot) => base(start, end, color, slot), onItem));
+  } else if (effect.kind === 'sound') {
+    out.push(...soundClips(effect, items, scheme, extras, (start, end, color, slot) => base(start, end, color, slot), onItem));
   } else {
     // twinkle
     const rate = Math.max(1 / 32, p.rate);
@@ -295,6 +450,207 @@ function classicEffect(effect: Effect, items: readonly EffectItem[], scheme: Sch
       }
     }
   }
+  return out;
+}
+
+/**
+ * A vibrato's waves, each one sway long: coming on item after item (in the direction picked) — in the
+ * waves' own colour, if it has one, turning to the effect's over a sway; and at the end turning back
+ * to that colour over a sway, the wave passing item after item, then (ending in a fade) dying down
+ * over one more sway. Per item: when it's lit, the moments its colour waves start and end, how far
+ * into the waves' colour it is and how bright it still is at a time.
+ */
+export function vibratoPlan(effect: Pick<Effect, 'start' | 'end' | 'params'>, count: number) {
+  const p = effect.params;
+  const sway = Math.max(1 / 16, p.rate);
+  const waveIn = (p.vibratoIn ?? 0) > 0;
+  const waveOut = (p.vibratoOut ?? 0) > 0;
+  const fadeOut = waveOut && p.endMode === 'fade' ? sway : 0;
+  const order = stepsOf(count, p.direction === 'pingpong' ? 'forward' : p.direction);
+  const steps = Math.max(1, ...order.map((step) => step + 1));
+  const clamp = (value: number) => Math.min(1, Math.max(0, value));
+  return {
+    sway,
+    waveIn,
+    waveOut,
+    /** `slot` -1: everything at once (no waves). */
+    item(slot: number) {
+      const share = slot < 0 || steps <= 1 ? 0 : (order[slot] ?? 0) / (steps - 1);
+      const from = slot >= 0 && waveIn ? effect.start + share * sway : effect.start;
+      const peak = slot >= 0 && waveOut ? Math.max(from + 1 / 16, effect.end - fadeOut - sway + share * sway) : effect.end;
+      const to = slot >= 0 && waveOut ? Math.max(from + 1 / 16, peak + fadeOut) : effect.end;
+      const coloured = slot >= 0 && p.vibratoWaveColor != null;
+      return {
+        from,
+        to,
+        fades: slot >= 0 && fadeOut > 0,
+        marks: [from + sway, peak - sway, peak],
+        wave: (t: number) => (!coloured ? 0 : Math.max(waveIn ? 1 - clamp((t - from) / sway) : 0, waveOut ? clamp((t - (peak - sway)) / sway) : 0)),
+        fade: (t: number) => (slot >= 0 && fadeOut > 0 ? 1 - clamp((t - peak) / fadeOut) : 1),
+      };
+    },
+    /** How long the effect needs for its waves. */
+    needed: (waveIn ? sway : 0) + (waveOut ? sway + fadeOut : 0) + (p.vibratoWaveColor != null && (waveIn || waveOut) ? sway : 0),
+  };
+}
+
+/**
+ * A flame: the light comes up, dies down or burns on — slowly — and trembles on its way: every step
+ * (about `rate` beats, never quite the same) it goes a little dimmer, now and then a little brighter,
+ * never far from where the slow change has it. Each item burns on its own (pattern 'all': all of
+ * them as one); a second colour: the flame wavers between the two.
+ */
+/** An effect by sound: each item's brightness following the song (see sound-effect.ts) — a point every
+ *  step, each a fade to the next; the colour by loudness or along the items; the meter's top in its own. */
+function soundClips(
+  effect: Effect,
+  items: readonly EffectItem[],
+  scheme: SchemeColors,
+  extras: EffectExtras | undefined,
+  make: (start: number, end: number, color: ClipColor, slot: number) => LightClip,
+  onItem: (clip: LightClip, item: EffectItem | null) => LightClip,
+): LightClip[] {
+  const source = extras?.sound;
+  if (source === undefined || items.length === 0) return [];
+  const p = effect.params;
+  const secondsPerBeat = extras?.secondsPerBeat ?? 0.5;
+  const toSeconds = extras?.beatToSeconds ?? ((beat: number) => beat * secondsPerBeat);
+  const settings: SoundSettings = {
+    mode: p.soundMode ?? 'eq',
+    gain: Math.max(0.05, p.gain ?? 1),
+    lowHz: Math.max(20, p.lowHz ?? 40),
+    highHz: Math.max((p.lowHz ?? 40) + 10, p.highHz ?? 12000),
+    step: Math.max(1 / 64, p.soundStep ?? 1 / 8),
+    release: Math.max(0, p.release ?? 0.5),
+    delay: Math.max(0, p.soundDelay ?? 0),
+    peakFall: Math.max(0, p.peakFall ?? 0),
+  };
+  const times: number[] = [];
+  for (let t = effect.start; t < effect.end - 1e-6; t += settings.step) times.push(Math.round(t * 1e5) / 1e5);
+  times.push(effect.end);
+  // (the direction, as a wave's: which item takes which band / place in the meter / delay — side by
+  // side from the middle sharing one)
+  const order = stepsOf(items.length, p.direction === 'pingpong' ? 'forward' : p.direction);
+  const places = Math.max(1, ...order.map((step) => step + 1));
+  const { levels, peak } = soundLevels(source, settings, places, times, toSeconds, secondsPerBeat);
+  const count = places;
+  const out: LightClip[] = [];
+  items.forEach((item, slot) => {
+    const index = order[slot]!;
+    const own = levels[index]!;
+    const points = times.map((time, k) => {
+      const topHere = peak[k] === index;
+      const level = topHere ? 1 : own[k]!;
+      const along = count <= 1 ? 0 : index / (count - 1);
+      let color = topHere && p.peakColor != null ? p.peakColor : mixColor(p.color, p.color2, p.color2 === null ? 0 : p.soundColorBy === 'item' ? along : level, p.hsv, scheme);
+      color = { ...color, brightness: Math.round(p.color.brightness * level * 1000) / 1000 };
+      return { time, color };
+    });
+    // (a point where nothing changes from the one before and after: passed over)
+    const kept = points.filter((point, k) => k === 0 || k === points.length - 1 || JSON.stringify(point.color) !== JSON.stringify(points[k - 1]!.color) || JSON.stringify(point.color) !== JSON.stringify(points[k + 1]!.color));
+    for (let k = 0; k + 1 < kept.length; k++) {
+      const from = kept[k]!;
+      const to = kept[k + 1]!;
+      const clip = make(from.time, to.time, from.color, slot);
+      clip.startMode = 'on';
+      clip.endColor = to.color;
+      clip.endMode = k + 2 < kept.length ? 'stay' : 'off';
+      out.push(onItem(clip, item));
+    }
+  });
+  return out;
+}
+
+function fire(
+  effect: Effect,
+  items: readonly EffectItem[],
+  scheme: SchemeColors,
+  make: (start: number, end: number, color: ClipColor, slot: number) => LightClip,
+  onItem: (clip: LightClip, item: EffectItem | null) => LightClip,
+): LightClip[] {
+  const p = effect.params;
+  const shape = p.shape ?? 'steady';
+  const floor = Math.min(1, Math.max(0, p.floor ?? 0.15));
+  const tremor = Math.min(1, Math.max(0, p.tremor ?? 0.3));
+  const rate = Math.max(1 / 32, p.rate);
+  const duration = Math.max(1 / 64, effect.end - effect.start);
+  const level = (u: number) => (shape === 'rise' ? floor + (1 - floor) * u : shape === 'fall' ? 1 - (1 - floor) * u : 1);
+  const out: LightClip[] = [];
+  // vibrato coming on and going off as waves, each a sway long (see vibratoPlan)
+  const plan = p.wobble === 'vibrato' ? vibratoPlan(effect, items.length) : null;
+  const vibratoWaves = plan !== null && items.length > 0 && (plan.waveIn || plan.waveOut);
+  const burn = (item: EffectItem | null, slot: number, lagSlot = slot) => {
+    const next = random(p.seed * 7919 + slot * 104729 + 1);
+    if (plan !== null) {
+      // even sways: eight steps a sway, each a fade to the next (smooth, near enough a sine); all of
+      // them on the effect's own beat, so items coming on later sway with the rest
+      const sway = plan.sway;
+      const step = Math.max(1 / 64, sway / 8);
+      const lag = (p.vibratoLag ?? 0) * Math.max(0, lagSlot);
+      const own = plan.item(vibratoWaves ? slot : -1);
+      const times = new Set<number>([own.from, own.to]);
+      const keep = (t: number) => {
+        if (t > own.from + 1 / 64 - 1e-9 && t < own.to - 1 / 64 + 1e-9) times.add(Math.round(t * 1e5) / 1e5);
+      };
+      for (let t = effect.start; t < own.to; t += step) keep(t);
+      // (the colour waves' own moments: where they begin and end on this item)
+      for (const t of own.marks) keep(t);
+      const sorted = [...times].sort((a, b) => a - b);
+      const points = sorted.map((time) => {
+        const u = (time - effect.start) / duration;
+        const phase = 2 * Math.PI * ((time - effect.start) / sway - lag);
+        // (down from full by `tremor` and back: a dip each sway)
+        const dip = 0.5 - 0.5 * Math.cos(phase);
+        let brightness = Math.max(0, p.color.brightness * level(u) * (1 - tremor * dip));
+        let color = mixColor(p.color, p.color2, p.color2 === null ? 0 : dip, p.hsv, scheme);
+        const hue = (p.vibratoHue ?? 0) * Math.sin(phase);
+        if (Math.abs(hue) > 0.01) color = { ref: 'custom', rgb: shiftHue(resolveRgb(color, scheme), hue), brightness: color.brightness };
+        // the waves' own colour: coming on in it and turning to the effect's; turning back to it at the end
+        const wave = own.wave(time);
+        if (p.vibratoWaveColor != null && wave > 0) color = mixColor(color, p.vibratoWaveColor, wave, p.hsv, scheme);
+        brightness *= own.fade(time);
+        return { time, color: { ...color, brightness: Math.round(brightness * 1000) / 1000 } };
+      });
+      for (let k = 0; k + 1 < points.length; k++) {
+        const from = points[k]!;
+        const to = points[k + 1]!;
+        const clip = make(from.time, to.time, from.color, slot);
+        clip.startMode = k === 0 ? (p.startMode === 'fade' ? 'on' : p.startMode) : 'on';
+        clip.endColor = to.color;
+        // (a fade made by the steps themselves ends dark: then just off)
+        clip.endMode = k + 2 < points.length ? 'stay' : own.fades ? 'off' : p.endMode;
+        out.push(onItem(clip, item));
+      }
+      return;
+    }
+    // the moments it changes at: about `rate` apart
+    const times = [effect.start];
+    // (on a 1/64 grid: uneven, but on the map's beats)
+    while (times.at(-1)! < effect.end - 1e-6) times.push(Math.min(effect.end, Math.round((times.at(-1)! + rate * (0.6 + next() * 0.8)) * 64) / 64));
+    if (times.length > 2 && times.at(-1)! - times.at(-2)! < rate * 0.3) times.splice(times.length - 2, 1);
+    const points = times.map((time, index) => {
+      const u = (time - effect.start) / duration;
+      const at = level(u);
+      // (mostly a little dimmer, a flare now and then; the very ends as the slow change has them)
+      const shake = index === 0 || index === times.length - 1 ? 0 : next() < 0.22 ? next() * 0.45 : -next();
+      const brightness = Math.round(Math.max(0, p.color.brightness * at * (1 + tremor * shake)) * 1000) / 1000;
+      const color = mixColor(p.color, p.color2, p.color2 === null ? 0 : next(), p.hsv, scheme);
+      return { time, color: { ...color, brightness } };
+    });
+    for (let k = 0; k + 1 < points.length; k++) {
+      const from = points[k]!;
+      const to = points[k + 1]!;
+      const clip = make(from.time, to.time, from.color, slot);
+      clip.startMode = k === 0 ? (p.startMode === 'fade' ? 'on' : p.startMode) : 'on';
+      clip.endColor = to.color;
+      // (one step hands over to the next; the last one ends as the effect does)
+      clip.endMode = k + 2 < points.length ? 'stay' : p.endMode;
+      out.push(onItem(clip, item));
+    }
+  };
+  if (vibratoWaves) items.forEach((item, index) => burn(item, index, p.pattern === 'all' ? -1 : index));
+  else if (p.pattern === 'all' || items.length === 0) burn(null, -1);
+  else items.forEach((item, index) => burn(item, index));
   return out;
 }
 
@@ -328,5 +684,7 @@ export function sketchLevel(clips: readonly LightClip[], slot: number, t: number
     if (clip.endMode === 'fade') level *= 1 - into / Math.max(0.01, length);
   }
   if (clip.startMode === 'fade' && into > length && clip.endMode !== 'stay') level = 0;
-  return { level: level * clip.color.brightness, color: clip.color };
+  // (a gradient: its brightness on its way to the end's)
+  const brightness = clip.endColor === null ? clip.color.brightness : clip.color.brightness + (clip.endColor.brightness - clip.color.brightness) * Math.min(1, Math.max(0, into / Math.max(0.01, length)));
+  return { level: level * brightness, color: clip.color };
 }
