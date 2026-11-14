@@ -115,6 +115,10 @@ vec3 chroProjectProbeDirection(vec3 direction, vec3 worldPosition) {
 }
 
 vec3 chroSampleProbe(vec3 reflectedView, vec3 worldPosition, float mip) {
+  #ifdef LIVE_PROBE
+  // (taken by a cube camera here: in this space already — not the game's, z the other way)
+  return textureCube(_ReflectionProbe, reflectedView, mip).rgb;
+  #endif
   vec3 probeDirection = vec3(reflectedView.xy, -reflectedView.z);
   #ifdef BAKED_REFLECTION_PROBE
   vec3 unityWorldPosition = vec3(worldPosition.xy, -worldPosition.z);

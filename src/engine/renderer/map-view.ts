@@ -1,4 +1,5 @@
 import { Result } from 'better-result';
+import { findLiveReflectionMeshes, hasLiveReflections, renderLiveReflections } from './environment/live-reflections';
 import {
   BufferAttribute,
   BufferGeometry,
@@ -248,6 +249,7 @@ export class MapView implements RenderView {
       },
       () => {
         this.mirror.updateMaterials(this.scene);
+        findLiveReflectionMeshes(this.scene);
       },
     );
     this.replayView.hudRoot.traverse((object) => {
@@ -256,6 +258,7 @@ export class MapView implements RenderView {
     this.scene.add(this.replayView.hudRoot);
     this.scene.add(this.replayView.root);
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
     // The replay headset model is only ever shown with a replay loaded, so it's fetched on the
     // first setReplay() with one instead of up front (the wallpaper never loads replays, and the
     // model isn't shipped with it — loading it eagerly only produced a failed request).
@@ -331,6 +334,7 @@ export class MapView implements RenderView {
     this.applyPlayerPlatformVisibility();
     this.environmentLights.setEnvironment(environment);
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
     this.pipeline.setFogParams(environment.data.fogParams);
     const hasCustomEnvironment =
       chromaEnvironment !== undefined &&
@@ -700,6 +704,7 @@ export class MapView implements RenderView {
     this.replayView.setColors(colors);
     this.mapObjects.setMap(data, colors);
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
   }
 
   /** Cheaper setMap for a live, lighting-only show (the wallpaper's screensaver mode rebuilds its
@@ -765,6 +770,7 @@ export class MapView implements RenderView {
     this.replayView.setNoodleTrailLocalSpace(false);
     this.environmentLights.clearMap();
     this.mirror.updateMaterials(this.scene);
+    findLiveReflectionMeshes(this.scene);
   }
 
   private baseProvider(name: string, beat: number): readonly number[] | undefined {
@@ -948,6 +954,8 @@ export class MapView implements RenderView {
     if (this.environment?.applyConstraints() === true) this.scene.updateMatrixWorld();
     this.environment?.syncInstancedMeshes();
     if (this.environment !== null) this.environmentLights.updateWorldLights(now);
+    // (chrome shapes: their surroundings taken anew, as the mirror floors' are)
+    if (hasLiveReflections()) renderLiveReflections(renderer, this.scene);
     if (hasVisibleMirrorConsumer(this.environmentMirrorConsumers, this.camera)) {
       this.mirror.render(renderer, this.scene, this.camera, (mirrorRenderer, mirrorCamera) => {
         this.pipeline.render(mirrorRenderer, mirrorCamera, this.environmentLights.lightSegments);

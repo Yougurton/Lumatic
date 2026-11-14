@@ -886,31 +886,29 @@ function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMater
       Object.assign(glow.floats, { _BloomType: 1, _BloomMultiplier: 1.6 });
       return glow;
     }
-    case 'InterscopeCar': {
-      // (a mirror, as the Big Mirror floor — without its dirt)
-      const mirror = data.materials[chromaMaterialPresetKey('WaterfallMirror')];
-      if (mirror === undefined) return result;
-      const out = structuredClone(mirror);
-      out.name = '__chroma_InterscopeCar_mirror';
-      out.keywords = out.keywords.filter((keyword) => keyword !== 'DIRT' && keyword !== 'ENABLE_DIRT' && keyword !== 'DETAIL_NORMAL_MAP' && keyword !== 'LIGHTMAP');
-      if (out.textures !== undefined) delete out.textures._NormalTex;
-      out.colors._Color = [0, 0, 0, 1];
-      Object.assign(out.floats, { _ReflectionIntensity: 1, _EnableDirt: 0, _DetailNormalMap: 0, _BumpIntensity: 0 });
-      return out;
-    }
+    case 'InterscopeCar':
+      // (chrome: what's round it, bent by its form — a live reflection, as the game's probe gives it)
+      result.colors._Color = [0, 0, 0, 1];
+      result.keywords = result.keywords.filter((keyword) => keyword !== 'MULTIPLY_REFLECTIONS');
+      Object.assign(result.floats, { _LumaticLiveReflection: 1, _EnableReflectionProbe: 1, _ReflectionProbeIntensity: 1, _EnableDiffuse: 0, _EnableSpecular: 1, _SpecularIntensity: 1, _Smoothness: 1, _Metallic: 0.25 });
+      break;
     case 'InterscopeConcrete':
       // (its grain: a texture over its colour, see the support materials)
       Object.assign(result.floats, { _EnableDiffuse: 1 });
       reflective(0.35, 0.5);
       break;
     case 'BillieWater':
-      // (the waterfall's water: animated, it needs a probe to reflect)
-      reflective(1, 0.7);
+      // (as BaseWater's material looked before its changes — the closest to the game's)
+      return baseWaterMaterial(result.colors._Color);
+    case 'BaseWater': {
+      // (darker, as the game's)
+      const color = result.colors._Color;
+      if (color !== undefined) result.colors._Color = [color[0] * 0.35, color[1] * 0.35, color[2] * 0.35, color[3]];
       break;
+    }
     case 'Standard':
     case 'BTSPillar':
-    case 'BaseWater':
-      reflective(shader === 'BaseWater' ? 0.8 : 0.6, 0.85);
+      reflective(0.6, 0.85);
       break;
   }
   return result;

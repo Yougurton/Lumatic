@@ -1,4 +1,5 @@
-import { CubeTexture, SRGBColorSpace } from 'three';
+import { CubeTexture, SRGBColorSpace, type ShaderMaterial } from 'three';
+import { liveReflectionTarget } from '../live-reflections';
 import type { Rgb } from '../../../core/colors';
 import { createEnvironmentLitMaterial, createWaterLitMaterial } from '../../materials/environment-surface-materials';
 import type { EnvironmentMaterialData } from '../types';
@@ -71,11 +72,24 @@ function neutralProbe(): CubeTexture {
   return fallbackProbe;
 }
 
+/** Any cube map — for a material whose own one is set after it is made. */
+const placeholderProbe = () => neutralProbe();
+
 export function createLitEnvironmentMaterial(
   data: EnvironmentMaterialData,
   givenContext: EnvironmentMaterialContext,
   color: Rgb,
-) {
+): ShaderMaterial {
+  // (a live reflection: its own cube map, taken every frame — see live-reflections)
+  if (data.floats._LumaticLiveReflection === 1) {
+    const holder: { target?: ReturnType<typeof liveReflectionTarget> } = {};
+    const material: ShaderMaterial = createLitEnvironmentMaterial({ ...data, floats: { ...data.floats, _LumaticLiveReflection: 0 } }, { ...givenContext, bakedReflectionProbe: undefined, reflectionProbe: placeholderProbe() }, color);
+    holder.target = liveReflectionTarget(material);
+    material.uniforms._ReflectionProbe = { value: holder.target.texture };
+    material.defines = { ...material.defines, LIVE_PROBE: 1 };
+    material.needsUpdate = true;
+    return material;
+  }
   // (a map's own shape in an environment without a probe: the neutral one)
   const context =
     data.floats._LumaticFallbackProbe === 1 && givenContext.reflectionProbe === undefined && givenContext.bakedReflectionProbe === undefined
