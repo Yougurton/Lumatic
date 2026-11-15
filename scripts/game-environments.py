@@ -341,7 +341,9 @@ class Converter:
             data['textures'] = textures
         if mat.m_Name in SKIP_MATERIALS:
             data['family'] = 'skip'
+        native = dict(data['floats'])
         self.fill_from_reference(data)
+        self.engine_properties(data, native)
         key = mat.m_Name
         n = 1
         while key in self.materials and self.materials[key] != data:
@@ -373,6 +375,24 @@ class Converter:
                 data[kind].setdefault(name, value)
         if score[1] < 1 and not score[0]:
             self.unknown[f"material {data['name']}: defaults from the engine's {best['name']} (keywords differ)"] += 1
+
+    def engine_properties(self, data, native):
+        """The engine-only properties that the game's material does say, under other names or as
+        keywords (found by comparing the environments both have): they win over what the alike
+        material had."""
+        floats, keywords = data['floats'], set(data['keywords'])
+        for engine, game in (('_BlendModeSrc', '_BlendSrcFactor'), ('_BlendModeDst', '_BlendDstFactor'), ('_BlendModeSrcA', '_BlendSrcFactorA'),
+                             ('_BlendModeDstA', '_BlendDstFactorA'), ('_CullMode', '_Cull'), ('_Vertex', '_VertexMode')):
+            if game in native:
+                floats[engine] = native[game]
+        if data['family'] != 'lit':
+            boost = 2 if '_WHITEBOOSTTYPE_ALWAYS' in keywords else 1 if '_WHITEBOOSTTYPE_MAINEFFECT' in keywords else 0
+            floats['_BloomType'] = boost
+            floats['_BloomWhite'] = boost
+        floats['_SquareAlpha'] = int('SQUARE_ALPHA' in keywords)
+        floats['_UseFogForLights'] = int('USE_FOG_FOR_LIGHTS' in keywords)
+        floats['_EnableYAxisBillboard'] = int('ENABLE_Y_AXIS_BILLBOARD' in keywords)
+        floats['_EnableFog'] = int('FOG' in keywords or 'ENABLE_FOG' in keywords)
 
     def renderers(self):
         for go_id, comps in self.go_components.items():
@@ -444,6 +464,7 @@ class Converter:
 
     def components(self):
         self.group_lights = collections.defaultdict(list)
+        self.fx_groups = []
         handled = {
             'Transform', 'RectTransform', 'MeshFilter', 'MeshRenderer', 'LightGroup', 'LightColorGroupParent', 'ZenjectBinding',
             'LightGroupElementsSpawner', 'LightGroupLinearLayouter', 'TubeBloomPrePassLight', 'RectangleFakeGlow',
@@ -675,6 +696,75 @@ class Converter:
         if index is not None:
             self.objects[index]['active'] = False
 
+    # ---- float effects (FX groups): what a group's value does to its elements ----
+
+    def path_ref(self, pptr):
+        """A reference to the output object of a game object or component given as the file has it."""
+        if not pptr or pptr.get('m_FileID') != 0 or not pptr.get('m_PathID'):
+            return None
+        obj = self.scene.objects.get(pptr['m_PathID'])
+        if obj is None:
+            return None
+        go_id = obj.path_id if obj.type.name == 'GameObject' else obj.read().m_GameObject.path_id
+        index = self.index.get(go_id)
+        return None if index is None else {'obj': index}
+
+    def c_FloatMaterialPropertyEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'MpbFx', {
+            'MpbController': self.comp_ref.get(t['_materialPropertyBlockController']['m_PathID']), 'PropertyName': t['_propertyName'],
+            'ValueBounds': [num(t['_valueBounds']['x']), num(t['_valueBounds']['y'])], 'GranularityMultiplier': num(t['_granularityMultiplier']),
+            'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_FloatArrayMaterialPropertyEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'MpbArrayFx', {
+            'MpbControllers': [r for r in (self.comp_ref.get(p['m_PathID']) for p in t['_materialPropertyBlockControllers']) if r],
+            'PropertyName': t['_propertyName'], 'ValueBounds': [num(t['_valueBounds']['x']), num(t['_valueBounds']['y'])],
+            'GranularityMultiplier': num(t['_granularityMultiplier']), 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_FloatLocalScaleEffect(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'LocalScaleFx', {
+            'TargetTransforms': [r for r in (self.path_ref(p) for p in t['_transforms']) if r],
+            'ValueBounds': [num(t['_valueBounds']['x']), num(t['_valueBounds']['y'])], 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_Parametric3SliceSpriteWidthEndFloatFxEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'ParametricSliceEndWidthFx', {
+            'SpriteLight': self.comp_ref.get(t['_parametric3SliceSpriteController']['m_PathID']),
+            'ValueBounds': [num(t['_valueBounds']['x']), num(t['_valueBounds']['y'])], 'ValueMultiplier': num(t['_valueMultiplier']),
+            'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_SwitchGameObjectArrayEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'SwitchGameObjectArrayFx', {
+            'GameObjects': [{'Threshold': num(e['threshold']), 'GameObject': r} for e in t['gameObjects'] for r in [self.path_ref(e['gameObject'])] if r],
+            'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_SwitchGameObjectEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        a, b = self.path_ref(t['_gameObject01']), self.path_ref(t['_gameObject02'])
+        if a is None or b is None:
+            return
+        self.add(go_id, 'SwitchGameObjectFx', {'GameObjectA': a, 'GameObjectB': b, 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
+    def c_VertexDisplacementFloatFxGroupEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        r = t['_displacementRanges']
+        self.add(go_id, 'VertexDisplacementFx', {
+            'Ranges': [num(r['x']), num(r['y']), num(r['z'])], 'XCurve': curve(t['_xAnimationCurve']), 'YCurve': curve(t['_yAnimationCurve']),
+            'ZCurve': curve(t['_zAnimationCurve']), 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_FloatFxGroup(self, go_id, obj):
+        self.fx_groups.append(obj.read_typetree())
+
     def c_BoxCollider(self, go_id, obj):
         t = obj.read()
         self.add(go_id, 'BoxCollider', {'Center': vec(t.m_Center), 'Size': vec(t.m_Size), 'enabled': bool(t.m_Enabled)})
@@ -817,7 +907,24 @@ class Converter:
         self.objects[index]['components'] = {'LightTranslationGroupEffectManager': [{'effectEntries': entries, 'enabled': True}], 'LightTranslationGroupEffect': effects}
         refs['LightTranslationGroupEffectManager'] = {'obj': index, 'component': 'LightTranslationGroupEffectManager', 'componentIndex': 0}
 
-        index = manager('FloatFxGroupEffectManager', {'FloatFxGroupEffectManager': [{'effectEntries': [], 'enabled': True}]})
+        index = manager('FloatFxGroupEffectManager')
+        effects, entries = [], []
+        for t in self.fx_groups:
+            group = self.comp_ref.get(t['_lightGroup']['m_PathID'])
+            if not isinstance(group, int):
+                self.notes.append('FloatFxGroup: its light group is not in the scene')
+                continue
+            fx = []
+            for element, pptr in enumerate(t['_targets']):
+                ref = self.comp_ref.get(pptr['m_PathID'])
+                if isinstance(ref, dict):
+                    fx.append({'ID': element, 'Targets': [ref]})
+                else:
+                    target = self.scene.objects.get(pptr['m_PathID'])
+                    self.unknown[f"FX target {self.cls(target) if target is not None else '?'} (not understood)"] += 1
+            entries.append({'Group': group, 'Effect': {'obj': index, 'component': 'FloatFxGroupEffect', 'componentIndex': len(effects)}})
+            effects.append({'Atsc': None, 'ID': group, 'Count': self.group_so[group]['_numberOfElements'], 'Trigger': int(t['_isTriggerOnly']), 'fxEntries': fx, 'enabled': True})
+        self.objects[index]['components'] = {'FloatFxGroupEffectManager': [{'effectEntries': entries, 'enabled': True}], 'FloatFxGroupEffect': effects}
         refs['FloatFxGroupEffectManager'] = {'obj': index, 'component': 'FloatFxGroupEffectManager', 'componentIndex': 0}
         return refs
 
