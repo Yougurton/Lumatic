@@ -21,7 +21,7 @@ The installer is per-user and does not request administrator rights. It preserve
 On Windows:
 
 1. Install Node.js 22.
-2. Install Inno Setup 6.1 or later.
+2. Install Inno Setup 6.5 or later (the installer uses ZIP extraction support introduced in Inno Setup 6.5).
 3. Run:
 
 ~~~powershell
