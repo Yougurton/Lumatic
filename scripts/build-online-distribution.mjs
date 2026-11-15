@@ -169,7 +169,7 @@ async function main() {
   }
   if (!compiler) {
     throw new Error(
-      'Inno Setup compiler not found. Install Inno Setup 6.1+ or set INNO_SETUP_COMPILER to the full path of ISCC.exe.'
+      'Inno Setup compiler not found. Install Inno Setup 6.5+ or set INNO_SETUP_COMPILER to the full path of ISCC.exe.'
     );
   }
 
