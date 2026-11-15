@@ -148,7 +148,7 @@ function glsToV4(root: Json, warnings: string[], name: string): Json {
             l: list(box.e).map((event) => {
               if (event.customData !== undefined) eased = true;
               const transition = num(event.i);
-              return { b: num(event.b), i: pools.colorEvents.index({ c: num(event.c), b: num(event.s, 1), e: transition === 0 ? -1 : 0, p: transition === 2 ? 1 : 0, f: num(event.f), sb: num(event.sb), sf: num(event.sf) }) };
+              return { b: num(event.b), i: pools.colorEvents.index({ c: num(event.c), b: num(event.s), e: transition === 0 ? -1 : 0, p: transition === 2 ? 1 : 0, f: num(event.f), sb: num(event.sb), sf: num(event.sf) }) };
             }),
           })),
         },
@@ -433,7 +433,7 @@ function glsToV3(show: Json, warnings: string[], name: string): Json {
               const item = colors[num(event.i)];
               if (item === undefined) return [];
               if (num(item.e) > 0) easings = true;
-              return [{ b: num(event.b), i: num(item.p) === 1 ? 2 : num(item.e) === -1 ? 0 : 1, c: num(item.c), s: num(item.b, 1), f: num(item.f), sb: num(item.sb), sf: num(item.sf) }];
+              return [{ b: num(event.b), i: num(item.p) === 1 ? 2 : num(item.e) === -1 ? 0 : 1, c: num(item.c), s: num(item.b), f: num(item.f), sb: num(item.sb), sf: num(item.sf) }];
             }),
           },
         ];
