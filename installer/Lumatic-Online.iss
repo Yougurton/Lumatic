@@ -23,6 +23,7 @@ OutputBaseFilename=Lumatic-Setup-{#LumaticVersion}-win-x64
 SetupIconFile=..\build\icon.ico
 UninstallDisplayIcon={app}\Lumatic.exe
 Compression=lzma2/ultra64
+ArchiveExtraction=full
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
