@@ -10,7 +10,7 @@ import path from 'node:path';
  */
 
 /** Where the releases are (a public repository: the app asks without a sign-in). */
-export const UPDATE_REPO = 'Yougurton/ChroEditor';
+export const UPDATE_REPO = 'Yougurton/Lumatic';
 
 export interface UpdateInfo {
   /** The app's own version. */
