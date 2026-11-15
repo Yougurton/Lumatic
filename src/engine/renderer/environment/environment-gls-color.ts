@@ -197,6 +197,7 @@ export function buildEnvironmentGlsColors(
       return [
         {
           id: controller.ID,
+          key: referenceKey(reference),
           node: reference.component === 'ParametricBloomFogLightController' ? undefined : scene.nodes[reference.obj],
           materials: controllerMaterials(reference),
           colorProperty: controllerColorProperty(reference) ?? '_Color',

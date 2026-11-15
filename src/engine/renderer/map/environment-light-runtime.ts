@@ -132,6 +132,8 @@ export class EnvironmentLightRuntime {
   private colors: ColorScheme = DEFAULT_COLORS;
   private lightshowMode: LightshowMode = 'full';
   private glsColorRuntime: GlsColorRuntime[] = [];
+  /** What each GLS light controller shows now, by its key (for the directional lights that read them). */
+  private readonly glsControllerSamples = new Map<string, ControlledLight>();
   private jsonTimeToSongBpmTime: (jsonTime: number) => number = (jsonTime) => jsonTime;
   private basicLightSampleBeat = Number.NaN;
   private basicLightSampleBoosted = false;
@@ -336,6 +338,7 @@ export class EnvironmentLightRuntime {
     this.glsSegments.clear();
     this.glsMaterialLights.clear();
     this.glsDirectMaterials.length = 0;
+    this.glsControllerSamples.clear();
     this.glsColorSamples.clear();
     if (full) {
       const samples = this.glsColorSamples;
@@ -346,6 +349,7 @@ export class EnvironmentLightRuntime {
           samples.set(runtime.source, sample);
         }
         const controlled = runtime.target.transform(sample.color, sample.alpha);
+        if (runtime.target.key !== undefined) this.glsControllerSamples.set(runtime.target.key, controlled);
         if (runtime.target.node !== undefined) {
           runtime.target.node.visible = runtime.initialVisible !== false && controlled.visible;
         }
@@ -831,6 +835,35 @@ export class EnvironmentLightRuntime {
       light.node.getWorldDirection(direction);
       light.node.getWorldPosition(position);
       radii[index] = light.radius;
+      const glsInputs = light.glsInputs ?? [];
+      if (light.inputs.length === 0 && glsInputs.length > 0) {
+        for (const input of glsInputs) {
+          const sample = this.glsControllerSamples.get(input.key);
+          if (sample === undefined) continue;
+          const weightedAlpha = sample.alpha * input.intensity;
+          const alpha = light.mixType === 0 ? Math.sqrt(Math.max(weightedAlpha, 0)) : weightedAlpha;
+          const colorWeight = light.multiplyColorByAlpha ? alpha : 1;
+          const [r, g, b] = sample.color;
+          if (light.mixType === 0) {
+            color.x = Math.max(color.x, r * colorWeight);
+            color.y = Math.max(color.y, g * colorWeight);
+            color.z = Math.max(color.z, b * colorWeight);
+          } else {
+            color.x += r * colorWeight;
+            color.y += g * colorWeight;
+            color.z += b * colorWeight;
+          }
+        }
+        if (light.multiplyColorByAlpha) {
+          color.multiplyScalar(light.controllerIntensity);
+          const grayscale = color.x * 0.299 + color.y * 0.587 + color.z * 0.114;
+          if (grayscale > light.maxIntensity) color.multiplyScalar(light.maxIntensity / grayscale);
+        }
+        color.multiplyScalar(light.intensity);
+        this.directionalLightLinear.setRGB(color.x, color.y, color.z).convertSRGBToLinear();
+        color.set(this.directionalLightLinear.r, this.directionalLightLinear.g, this.directionalLightLinear.b);
+        continue;
+      }
       if (light.inputs.length === 0) {
         color.fromArray(light.color).multiplyScalar(light.intensity);
         this.directionalLightLinear.setRGB(color.x, color.y, color.z).convertSRGBToLinear();

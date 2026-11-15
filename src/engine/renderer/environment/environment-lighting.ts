@@ -98,7 +98,16 @@ function buildDirectionalLights(data: EnvironmentData, scene: EnvironmentSceneBu
           intensity: input.Intensity ?? 1,
         }));
       });
+      // (a light of a GLS group — its address is the group and the element — is read from the group's own sampling)
+      const glsInputs = (controller?.LightIntensityData ?? []).flatMap((reference) => {
+        if (reference.component !== 'LightIntensityController') return [];
+        const input =
+          data.objects[reference.obj]?.components?.LightIntensityController?.[reference.componentIndex ?? 0];
+        if (!input?.enabled) return [];
+        return [{ key: referenceKey(reference), intensity: input.Intensity ?? 1 }];
+      });
       directionalLights.push({
+        glsInputs,
         node: scene.nodes[index] ?? scene.root,
         color: [light.Color[0], light.Color[1], light.Color[2]],
         intensity: light.Intensity,

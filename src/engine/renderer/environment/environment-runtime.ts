@@ -72,10 +72,14 @@ export interface EnvironmentDirectionalLight {
   multiplyColorByAlpha: boolean;
   mixType: number;
   inputs: { binding: EnvironmentLightBinding; intensity: number }[];
+  /** Its inputs that are lights of GLS groups: the controller's key and its share. */
+  glsInputs?: { key: string; intensity: number }[];
 }
 
 export interface EnvironmentGlsColorTarget {
   id: number;
+  /** The controller it is, for those that read its light (a directional light's inputs). */
+  key?: string;
   node?: Object3D;
   materials: ShaderMaterial[];
   colorProperty: string;
