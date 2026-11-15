@@ -745,6 +745,35 @@ class Converter:
             'GranularityMultiplier': num(t['_granularityMultiplier']), 'enabled': bool(t['m_Enabled']),
         }, obj.path_id)
 
+    def c_MaterialPropertyValuesSetter(self, go_id, obj):
+        # (values a renderer keeps for itself: which of the shapes packed into one mesh it shows, …)
+        t = obj.read_typetree()
+        controller = self.comp_ref.get(t['_materialPropertyBlockController']['m_PathID'])
+        if controller is None:
+            return
+        values = {e['_propertyName']: num(e['value']) for e in t.get('_ints', []) + t.get('_floats', [])}
+        if t.get('_vectors') or t.get('_colors'):
+            self.unknown['MaterialPropertyValuesSetter: vector and colour values (not taken)'] += 1
+        self.add(go_id, 'MaterialPropertyBlockFloatSetter', {'Controller': controller, 'Values': values, 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
+    def c_MoveInDirectionEffect(self, go_id, obj):
+        t = obj.read_typetree()
+        target = self.path_ref(t['_transform'])
+        if target is None:
+            return
+        origin = t['_moveOrigin']
+        self.add(go_id, 'MoveInDirectionFx', {
+            'TargetTransform': target, 'MoveOrigin': [num(origin['x']), num(origin['y']), num(origin['z'])], 'MoveScale': num(t['_moveScale']),
+            'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_AlphaFloatFxGroupEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'AlphaFx', {
+            'MpbControllers': [r for r in (self.comp_ref.get(p['m_PathID']) for p in t['_materialPropertyBlockControllers']) if r],
+            'Property': t['_property'], 'StaticColor': color(t['_staticColor']), 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
     def c_FloatLocalScaleEffect(self, go_id, obj):
         t = obj.read_typetree()
         self.add(go_id, 'LocalScaleFx', {

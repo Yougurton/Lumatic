@@ -1,7 +1,7 @@
 import { setSdfPointRadius } from '../materials/sdf-points';
 import { MathUtils, Vector3, type Group, type ShaderMaterial } from 'three';
 
-import { shaderNumberUniform, shaderUniformValue } from '../materials/shared';
+import { shaderColorUniform, shaderNumberUniform, shaderUniformValue } from '../materials/shared';
 import { evaluateAnimationCurve } from './animation-curve';
 import {
   componentAt,
@@ -123,7 +123,27 @@ export function buildEnvironmentGlsFxGroups(
     if (reference.component === 'AlphaFx') {
       const fx = componentAt(data, reference.obj, 'AlphaFx', componentIndex);
       if (fx?.enabled !== true) return [];
-      return [materialFloatTarget(fx.MpbControllers, '_ColorMultiplier', (value) => value)];
+      if (fx.Property === '_Color') return [materialFloatTarget(fx.MpbControllers, '_ColorMultiplier', (value) => value)];
+      // (another property: its fixed colour, the value as that colour's strength)
+      const materials = fx.MpbControllers.flatMap((controller) =>
+        shaderMaterialsForMpbController(data, objectMaterials, controller),
+      );
+      const alphaName = `${fx.Property}Alpha`;
+      const initial = materials.map((material) => shaderNumberUniform(material, alphaName));
+      const setAlpha = (material: ShaderMaterial, value: number | undefined) => {
+        const uniform = material.uniforms[alphaName];
+        if (uniform !== undefined && value !== undefined) uniform.value = value;
+      };
+      return [
+        {
+          apply: (value) =>
+            materials.forEach((material) => {
+              shaderColorUniform(material, fx.Property)?.setRGB(fx.StaticColor[0], fx.StaticColor[1], fx.StaticColor[2]);
+              setAlpha(material, value);
+            }),
+          reset: () => materials.forEach((material, index) => setAlpha(material, initial[index])),
+        },
+      ];
     }
     if (reference.component === 'SwitchGameObjectFx') {
       const fx = componentAt(data, reference.obj, 'SwitchGameObjectFx', componentIndex);

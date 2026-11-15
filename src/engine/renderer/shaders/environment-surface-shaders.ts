@@ -257,6 +257,14 @@ uniform float _NormalScale;
 uniform sampler2D _EmissionTex;
 uniform vec2 _EmissionTexScale;
 uniform vec2 _EmissionTexOffset;
+#ifdef PARALLAX_MAP
+uniform sampler2D _ParallaxMap;
+uniform vec2 _ParallaxMapScale;
+uniform vec2 _ParallaxMapOffset;
+uniform float _ParallaxIntensity;
+uniform float _ParallaxStep;
+uniform vec2 _ParallaxTexSpeed;
+#endif
 uniform sampler2D _EmissionMask;
 uniform vec2 _EmissionMaskScale;
 uniform vec2 _EmissionMaskOffset;
@@ -503,6 +511,17 @@ void main() {
   );
   float vertexEmissionMask = vertexEmissionT * vertexEmissionT * (3.0 - 2.0 * vertexEmissionT)
     * _VertexEmissionStrength;
+    #ifdef PARALLAX_MAP
+  // (the game's "flexible parallax" shader is not readable. Taken so: a picture as if inside the
+  // surface, which slides with the angle of view, and the glow of the vertices shows through it)
+  vec3 parallaxReflected = reflect(-viewDirection, normal);
+  float parallaxDepth = texture2D(
+    _ParallaxMap,
+    (vUv + _ParallaxTexSpeed * materialTime) * _ParallaxMapScale + _ParallaxMapOffset
+      + parallaxReflected.xy * 0.12 * _ParallaxStep
+  ).r;
+  vertexEmissionMask *= mix(0.25, 1.0 + _ParallaxIntensity, parallaxDepth);
+    #endif
   calculated += _EmissionColor * _EmissionColorAlpha * vertexEmissionMask;
   fogSuppression = 1.0 - _EmissionFogSuppression * vertexEmissionMask
     * _EmissionColorAlpha * _EmissionColorAlpha;

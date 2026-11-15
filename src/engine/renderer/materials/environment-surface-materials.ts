@@ -75,6 +75,11 @@ export interface EnvironmentLitSettings {
   normalScale: number;
   emission?: MaterialTexture;
   emissionMask?: MaterialTexture;
+  /** A picture as if inside the surface, showing in the glow of its vertices. */
+  parallaxMap?: MaterialTexture;
+  parallaxIntensity?: number;
+  parallaxStep?: number;
+  parallaxSpeed?: [number, number];
   secondaryEmissionMask?: MaterialTexture;
   emissionMaskSecondaryUvs: boolean;
   secondaryEmissionMaskSecondaryUvs: boolean;
@@ -234,6 +239,7 @@ export function createEnvironmentLitMaterial(
     Object.assign(defines, { TONE_MAP_BEFORE_EMISSION: 1 });
   }
   if (settings.emissionMask !== undefined) Object.assign(defines, { EMISSION_MASK: 1 });
+  if (settings.parallaxMap !== undefined && settings.vertexEmissionEnabled) Object.assign(defines, { PARALLAX_MAP: 1 });
   if (settings.secondaryEmissionMask !== undefined) Object.assign(defines, { SECONDARY_EMISSION_MASK: 1 });
   if (settings.emissionMask !== undefined && settings.emissionMaskSecondaryUvs) {
     Object.assign(defines, { EMISSION_MASK_SECONDARY_UV: 1, USE_SECONDARY_UV: 1 });
@@ -280,6 +286,14 @@ export function createEnvironmentLitMaterial(
       _NormalScale: { value: settings.normalScale },
       ...textureUniforms('_EmissionTex', settings.emission),
       ...textureUniforms('_EmissionMask', settings.emissionMask),
+      ...(settings.parallaxMap !== undefined && settings.vertexEmissionEnabled
+        ? {
+            ...textureUniforms('_ParallaxMap', settings.parallaxMap),
+            _ParallaxIntensity: { value: settings.parallaxIntensity ?? 1 },
+            _ParallaxStep: { value: settings.parallaxStep ?? 1 },
+            _ParallaxTexSpeed: { value: new Vector2(...(settings.parallaxSpeed ?? [0, 0])) },
+          }
+        : {}),
       ...textureUniforms('_SecondaryEmissionMask', settings.secondaryEmissionMask),
       _EmissionMaskSpeed: {
         value: new Vector2(settings.emissionMaskSpeed[0], settings.emissionMaskSpeed[1]),

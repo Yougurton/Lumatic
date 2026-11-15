@@ -185,6 +185,12 @@ export function createLitEnvironmentMaterial(
     normal: (data.floats._EnableNormalMap ?? 0) !== 0 ? materialTexture(data, context, '_NormalTexture') : undefined,
     normalScale: data.floats._NormalScale ?? data.floats._BumpScale ?? 1,
     emission: (data.floats._EmissionTexture ?? 0) !== 0 ? materialTexture(data, context, '_EmissionTex') : undefined,
+    parallaxMap: data.keywords.some((keyword) => keyword.startsWith('_PARALLAX_FLEXIBLE'))
+      ? materialTexture(data, context, '_ParallaxMap')
+      : undefined,
+    parallaxIntensity: data.floats._ParallaxIntensity ?? 1,
+    parallaxStep: data.floats._ParallaxIntensity_Step ?? 1,
+    parallaxSpeed: [data.colors._ParallaxTexSpeed?.[0] ?? 0, data.colors._ParallaxTexSpeed?.[1] ?? 0],
     emissionMask:
       (data.floats._EnableEmissionMask ?? 0) !== 0 ? materialTexture(data, context, '_EmissionMask') : undefined,
     secondaryEmissionMask:
