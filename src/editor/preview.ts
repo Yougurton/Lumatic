@@ -137,6 +137,22 @@ export class Preview {
     this.jump = { speed: speed > 0 ? speed : 16, offset };
   }
 
+  /** The map's own group lighting (the event box groups of a GLS environment's map), as the engine
+   *  parsed them: played as they are, with the editor's events (null: none). */
+  private boxGroups: Pick<Difficulty, 'lightColorEventBoxGroups' | 'lightRotationEventBoxGroups' | 'lightTranslationEventBoxGroups' | 'fxEventBoxGroups'> | null = null;
+
+  setBoxGroups(groups: Pick<Difficulty, 'lightColorEventBoxGroups' | 'lightRotationEventBoxGroups' | 'lightTranslationEventBoxGroups' | 'fxEventBoxGroups'> | null) {
+    this.boxGroups =
+      groups === null
+        ? null
+        : {
+            lightColorEventBoxGroups: groups.lightColorEventBoxGroups,
+            lightRotationEventBoxGroups: groups.lightRotationEventBoxGroups,
+            lightTranslationEventBoxGroups: groups.lightTranslationEventBoxGroups,
+            fxEventBoxGroups: groups.fxEventBoxGroups,
+          };
+  }
+
   /** The lightshow as events (jsonTime beats). */
   setEvents(events: readonly OutEvent[]) {
     const toSong = createBpmConverter(this.bpmEvents, this.songBpm);
@@ -144,6 +160,7 @@ export class Preview {
     difficulty.bpmEvents = this.bpmEvents;
     if (this.noodle !== null) difficulty.noodle = this.noodle;
     if (this.objects !== null) Object.assign(difficulty, this.objects);
+    if (this.boxGroups !== null) Object.assign(difficulty, this.boxGroups);
     difficulty.events = events.map((event): BasicEvent => {
       const customData: Record<string, unknown> = { ...(event.customData ?? {}) };
       if (event.color !== undefined) customData.color = event.color;

@@ -589,6 +589,12 @@ export class Editor {
     this.previewColors(null);
   }
 
+  /** Another environment in the 3D view, to look at (the map stays as it is; opening a difficulty
+   *  brings its own back). */
+  async showEnvironment(id: string): Promise<boolean> {
+    return this.preview.setEnvironment(id, undefined);
+  }
+
   /** The map's cover picture, if it has one. */
   cover(): Blob | null {
     const cover = this.map?.parsed.cover ?? null;
@@ -617,6 +623,8 @@ export class Editor {
     this.ringNoodle = [];
     this.sceneNoodle = null;
     this.preview.setNoodle(difficulty.noodle);
+    // (a GLS environment's map: its event box groups play as the file has them)
+    this.preview.setBoxGroups(difficulty);
     this.ringEnhancementKey = '';
     this.ringAnimationKey = '';
     await this.preview.setEnvironment(environment, difficulty.chromaEnvironment);

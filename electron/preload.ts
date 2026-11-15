@@ -20,6 +20,13 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   log: (kind: string, message: string) => ipcRenderer.send('log', kind, message),
   openLogs: () => ipcRenderer.invoke('open-logs'),
   paletteFromMap: () => ipcRenderer.invoke('palette-from-map'),
+  game: {
+    pickFolder: () => ipcRenderer.invoke('game-pick-folder'),
+    folder: (folder: string) => ipcRenderer.invoke('game-folder', folder),
+    imported: () => ipcRenderer.invoke('game-imported'),
+    importEnvironment: (folder: string, name: string) => ipcRenderer.invoke('game-import', folder, name),
+    remove: (id: string) => ipcRenderer.invoke('game-remove', id),
+  },
   updates: {
     check: () => ipcRenderer.invoke('update-check'),
     canInstall: () => ipcRenderer.invoke('update-can-install'),

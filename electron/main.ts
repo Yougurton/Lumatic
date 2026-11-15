@@ -4,6 +4,7 @@ import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { backupFile } from './backup';
+import { importEnvironment, importedEnvironments, importedFolder, readGameFolder, removeImported } from './game-environments';
 import { pickScreenColor } from './eyedropper';
 import { log, logFolder } from './log';
 import { findAdbServices } from './mdns';
@@ -216,8 +217,14 @@ void app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   protocol.handle('app', (request) => {
     const url = new URL(request.url);
-    const file = path.normalize(path.join(distRoot, decodeURIComponent(url.pathname)));
+    let file = path.normalize(path.join(distRoot, decodeURIComponent(url.pathname)));
     if (!file.startsWith(distRoot)) return new Response('forbidden', { status: 403 });
+    // (an environment made from the user's game: in their data folder, not in the app)
+    const environments = path.join(distRoot, 'environments') + path.sep;
+    if (file.startsWith(environments) && !existsSync(file)) {
+      const made = path.normalize(path.join(importedFolder(), file.slice(environments.length)));
+      if (made.startsWith(importedFolder() + path.sep) && existsSync(made)) file = made;
+    }
     return net.fetch(pathToFileURL(file).toString()).then((response) => {
       if (!file.endsWith('.html')) return response;
       // (the page lets a hang's call stack be taken: see 'unresponsive')
@@ -348,6 +355,15 @@ void app.whenReady().then(() => {
   });
   // the page's own log lines (an error it caught)
   ipcMain.on('log', (_event, kind: string, message: string) => log(String(kind).slice(0, 40), String(message).slice(0, 4000)));
+  ipcMain.handle('game-pick-folder', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = window === null ? await dialog.showOpenDialog({ properties: ['openDirectory'] }) : await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+    return result.canceled || result.filePaths[0] === undefined ? null : result.filePaths[0];
+  });
+  ipcMain.handle('game-folder', (_event, folder: string) => readGameFolder(folder));
+  ipcMain.handle('game-imported', () => importedEnvironments());
+  ipcMain.handle('game-import', (_event, folder: string, name: string) => importEnvironment(folder, name));
+  ipcMain.handle('game-remove', (_event, id: string) => removeImported(id));
   ipcMain.handle('open-logs', async () => {
     await fs.mkdir(logFolder(), { recursive: true });
     return shell.openPath(logFolder());

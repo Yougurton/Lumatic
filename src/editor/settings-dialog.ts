@@ -1,6 +1,7 @@
 import type { Editor } from './editor';
 import { checkUpdates } from './updates';
 import { tr } from './i18n';
+import { gameEnvironmentsSection } from './game-environments';
 import { hotkeysDialog } from './hotkeys-dialog';
 import { DEFAULT_SETTINGS, setSettings, settings, type Settings } from './settings';
 import { oggQualitySlider } from './grids';
@@ -12,7 +13,7 @@ import { CHECK_RULES, CHECK_SOURCES, rulesOf, type CheckRule, type CheckSource }
  * the editor starts again — `restart` is asked to, when it can be done now.
  */
 
-type Section = 'general' | 'view' | 'timeline' | 'sound' | 'checks' | 'saving' | 'about';
+type Section = 'general' | 'view' | 'timeline' | 'sound' | 'checks' | 'saving' | 'game' | 'about';
 
 const SECTIONS: [Section, string][] = [
   ['general', 'Язык и вставка'],
@@ -21,6 +22,7 @@ const SECTIONS: [Section, string][] = [
   ['sound', 'Звук'],
   ['checks', 'Проверка карты'],
   ['saving', 'Сохранение'],
+  ['game', 'Окружения из игры'],
   ['about', 'О редакторе'],
 ];
 
@@ -330,6 +332,7 @@ export function settingsDialog(restart: () => void, editorRef: Editor) {
       return out;
     },
     about: () => [aboutPage()],
+    game: () => gameEnvironmentsSection(editorRef),
     saving: () => [
       row(
         'Автосохранение',

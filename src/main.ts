@@ -1,4 +1,5 @@
 import { Editor } from './editor/editor';
+import { refreshGameEnvironments } from './editor/game-environments';
 import { Inspector } from './editor/inspector';
 import { encodeOgg, findBpm } from './editor/audio-tools';
 import { GlsEditor } from './editor/gls-editor';
@@ -47,6 +48,8 @@ const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) 
 
 const preview = new Preview(byId<HTMLCanvasElement>('preview'));
 const editor = new Editor(preview);
+// (the environments made from the user's game: known before a map is opened)
+void refreshGameEnvironments();
 const timeline = new Timeline(editor, byId('timeline'));
 new Inspector(editor, byId('inspector'));
 const library = new Library(editor, byId('library'));

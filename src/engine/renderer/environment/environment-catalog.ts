@@ -43,13 +43,27 @@ export const environmentCatalog: readonly EnvironmentCatalogEntry[] = [
 
 const environmentIds = new Set(environmentCatalog.map(({ id }) => id));
 
+/** Environments not in the app: made from the user's own game (their data is in the user's folder and
+ *  is served at the same addresses as the app's own). */
+const addedEnvironments = new Map<string, EnvironmentCatalogEntry & { gls: boolean }>();
+
+/** The environments made from the user's game, as they are now (those of before are forgotten). */
+export function setAddedEnvironments(entries: readonly (EnvironmentCatalogEntry & { gls: boolean })[]) {
+  addedEnvironments.clear();
+  for (const entry of entries) if (!environmentIds.has(entry.id)) addedEnvironments.set(entry.id, entry);
+}
+
+export function addedEnvironmentCatalog(): EnvironmentCatalogEntry[] {
+  return [...addedEnvironments.values()].map(({ id, title }) => ({ id, title }));
+}
+
 export function resolveEnvironmentId(id: string) {
-  return environmentIds.has(id) ? id : 'DefaultEnvironment';
+  return environmentIds.has(id) || addedEnvironments.has(id) ? id : 'DefaultEnvironment';
 }
 
 /** Whether this exact environment id is one ChroViewer actually has assets/data for. */
 export function isKnownEnvironmentId(id: string): boolean {
-  return environmentIds.has(id);
+  return environmentIds.has(id) || addedEnvironments.has(id);
 }
 
 // Environments that support the v3 "Group Lighting System" (GLS) — introduced with the Weave
@@ -78,5 +92,5 @@ const glsCapableEnvironmentIds = new Set([
  *  tools). Cheap and doesn't require downloading the map, unlike checking the parsed difficulty
  *  data directly — see hasGroupLightingSystemEvents in wallpaper/main.ts for the accurate check. */
 export function isGLSCapableEnvironment(id: string): boolean {
-  return glsCapableEnvironmentIds.has(id);
+  return glsCapableEnvironmentIds.has(id) || addedEnvironments.get(id)?.gls === true;
 }

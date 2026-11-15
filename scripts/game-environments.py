@@ -1,7 +1,8 @@
 """
 Builds an environment for the editor from the user's own installed copy of Beat Saber.
 
-    python3 scripts/game-environments.py <Beat Saber folder> <environment> <output folder>
+    python3 scripts/game-environments.py <Beat Saber folder> <environment> <output folder> [<reference>]
+    python3 scripts/game-environments.py --dump-reference
 
     <environment>   the name the game's files use for it: panic2, rockmixtape, weave …
     <output folder> gets <Id>.json (the same format as public/environments/*.json), textures/ and
@@ -78,17 +79,31 @@ def curve(c):
     return {'keys': [{'time': num(k['time']), 'value': num(k['value']), 'inSlope': num(k['inSlope']), 'outSlope': num(k['outSlope'])} for k in c['m_Curve']]}
 
 
+def reference_materials(reference):
+    """The engine's own materials, which the converted ones take the engine-only properties from: a
+    folder of the engine's environments, or the list made of them (--dump-reference)."""
+    if os.path.isfile(reference):
+        with open(reference, encoding='utf-8') as f:
+            return json.load(f)
+    materials, seen = [], set()
+    for path in sorted(glob.glob(os.path.join(reference, '*.json'))):
+        with open(path, encoding='utf-8') as f:
+            for mat in json.load(f).get('materials', {}).values():
+                key = (mat['shader'], mat['name'], tuple(mat['keywords']))
+                if key not in seen:
+                    seen.add(key)
+                    materials.append({k: mat[k] for k in ('name', 'shader', 'keywords', 'floats', 'colors')})
+    return materials
+
+
 class Converter:
     def __init__(self, game, name, reference):
-        self.reference = []
-        seen = set()
-        for path in sorted(glob.glob(os.path.join(reference, '*.json'))):
-            with open(path, encoding='utf-8') as f:
-                for mat in json.load(f).get('materials', {}).values():
-                    key = (mat['shader'], mat['name'], tuple(mat['keywords']))
-                    if key not in seen:
-                        seen.add(key)
-                        self.reference.append(mat)
+        self.reference = reference_materials(reference)
+        try:
+            with open(os.path.join(game, 'BeatSaberVersion.txt'), encoding='utf-8') as f:
+                self.game_version = f.read().strip()
+        except OSError:
+            self.game_version = ''
         folder = os.path.join(game, 'Beat Saber_Data', 'StreamingAssets', 'aa', 'StandaloneWindows64')
         wanted = [name + 'environment_scenes', name + 'environment_assets'] + SHARED
         files = [f for f in glob.glob(os.path.join(folder, '*.bundle')) if any(os.path.basename(f).startswith(w) or w in os.path.basename(f) for w in wanted)]
@@ -773,7 +788,8 @@ class Converter:
             'warnings': [],
         }
         report = {
-            'id': self.id, 'unityVersion': str(self.scene.unity_version), 'objects': len(self.objects), 'meshes': len(self.meshes),
+            'id': self.id, 'title': info['_environmentName'], 'groups': len(groups), 'gameVersion': self.game_version,
+            'unityVersion': str(self.scene.unity_version), 'objects': len(self.objects), 'meshes': len(self.meshes),
             'materials': len(self.materials), 'textures': len(self.textures),
             'notUnderstood': dict(sorted(self.unknown.items(), key=lambda kv: -kv[1])), 'notes': self.notes,
         }
@@ -781,10 +797,18 @@ class Converter:
 
 
 def main():
-    if len(sys.argv) != 4:
+    here = os.path.dirname(os.path.abspath(__file__))
+    dumped = os.path.join(here, 'game-environment-materials.json')
+    if sys.argv[1:] == ['--dump-reference']:
+        # (what the packaged app has beside this script instead of the environments' folder)
+        with open(dumped, 'w', encoding='utf-8') as f:
+            json.dump(reference_materials(os.path.join(here, '..', 'public', 'environments')), f, separators=(',', ':'))
+        return
+    if len(sys.argv) not in (4, 5):
         raise SystemExit(__doc__)
-    game, name, out = sys.argv[1:]
-    reference = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public', 'environments')
+    game, name, out = sys.argv[1:4]
+    folder = os.path.join(here, '..', 'public', 'environments')
+    reference = sys.argv[4] if len(sys.argv) == 5 else folder if os.path.isdir(folder) else dumped
     converter = Converter(game, name.lower(), reference)
     data, report = converter.convert()
     os.makedirs(os.path.join(out, 'textures'), exist_ok=True)
@@ -794,7 +818,7 @@ def main():
         image.save(os.path.join(out, asset))
     with open(os.path.join(out, f"{data['id']}.report.json"), 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    sys.stdout.buffer.write(json.dumps(report, ensure_ascii=True).encode('ascii') + b'\n')
 
 
 if __name__ == '__main__':

@@ -16,6 +16,8 @@ export interface Settings {
 
   /** The floor's reflections (read when the 3D view is made: after a restart). */
   mirror: 'none' | 'low' | 'medium' | 'high';
+  /** The folder of the user's Beat Saber, for the environments made from it ('' : not given). */
+  gameFolder: string;
   platform: boolean;
   /** The game's heat haze and other screen distortion. */
   distortion: boolean;
@@ -95,6 +97,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paste: 'own',
   pasteAt: 'cursor',
   mirror: 'medium',
+  gameFolder: '',
   platform: true,
   distortion: true,
   notes: false,

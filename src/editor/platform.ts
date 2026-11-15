@@ -64,12 +64,39 @@ interface NativeApi {
     download(url: string, size: number, progress: (done: number) => void): Promise<boolean>;
     install(): Promise<void>;
   };
+  /** Environments made from the user's own copy of the game (electron/game-environments.ts). */
+  game?: {
+    pickFolder(): Promise<string | null>;
+    folder(folder: string): Promise<GameFolder | null>;
+    imported(): Promise<ImportedEnvironment[]>;
+    importEnvironment(folder: string, name: string): Promise<{ ok: true; environment: ImportedEnvironment } | { ok: false; reason: 'no-python' | 'no-modules' | 'failed'; detail: string }>;
+    remove(id: string): Promise<void>;
+  };
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
   /** A new, empty folder for a new map (the user names it and picks where). */
   createMapFolder(suggested: string): Promise<{ path: string; files: string[] } | null>;
 }
+
+export interface GameFolder {
+  folder: string;
+  version: string;
+  /** The names the game's files use: "panic2", "rockmixtape". */
+  environments: { name: string; size: number }[];
+}
+
+export interface ImportedEnvironment {
+  id: string;
+  title: string;
+  /** Light groups (a GLS environment: more than none). */
+  groups: number;
+  notUnderstood: [string, number][];
+  gameVersion: string;
+}
+
+/** The game's environments in the desktop app (undefined in a browser). */
+export const gameEnvironments = () => window.chroeditorNative?.game;
 
 declare global {
   interface Window {

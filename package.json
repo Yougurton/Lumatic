@@ -44,6 +44,10 @@
       "dist-electron/**",
       "package.json"
     ],
+    "extraResources": [
+      { "from": "scripts/game-environments.py", "to": "game-environments.py" },
+      { "from": "scripts/game-environment-materials.json", "to": "game-environment-materials.json" }
+    ],
     "directories": {
       "output": "release"
     },
