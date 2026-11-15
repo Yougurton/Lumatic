@@ -9,8 +9,10 @@
  * the song (stepping at 60 a second from a little before it), so that it is the same when the song is
  * played, paused or jumped in.
  *
- * Unity's own scale of the spectrum's values is not documented: a pure tone at full volume is taken
- * as 1 in its band here.
+ * Unity's own scale of the spectrum's values is not documented. Here a band's value is the size of
+ * its part of the windowed transform over the window's length — a pure tone at full volume comes out
+ * near 0.18 — which is where the game's spectrograms stop clipping; SPECTRUM_SCALE is the one number
+ * to turn if they sit higher or lower than in the game.
  */
 
 export const SPECTRUM_SAMPLES = 64;
@@ -19,13 +21,12 @@ const STEP = 1 / 60;
 /** How far before a moment the smoothing starts from nothing (seconds): long enough to settle. */
 const LEAD = 1.5;
 const INSTANT_CHANGE_THRESHOLD = 0.1;
+export const SPECTRUM_SCALE = 1;
 
 const window = new Float32Array(WINDOW);
-let windowSum = 0;
 for (let n = 0; n < WINDOW; n++) {
   const x = (2 * Math.PI * n) / (WINDOW - 1);
   window[n] = 0.35875 - 0.48829 * Math.cos(x) + 0.14128 * Math.cos(2 * x) - 0.01168 * Math.cos(3 * x);
-  windowSum += window[n]!;
 }
 const cosTable = new Float32Array(SPECTRUM_SAMPLES * WINDOW);
 const sinTable = new Float32Array(SPECTRUM_SAMPLES * WINDOW);
@@ -71,7 +72,7 @@ export class SongSpectrum {
         re += value * cosTable[row + n]!;
         im -= value * sinTable[row + n]!;
       }
-      this.raw[k] = (2 * Math.hypot(re, im)) / windowSum;
+      this.raw[k] = (SPECTRUM_SCALE * Math.hypot(re, im)) / WINDOW;
     }
   }
 

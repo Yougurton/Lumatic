@@ -50,7 +50,7 @@ DROP_COMPONENTS = {
 # (materials the engine has nothing to draw with)
 SKIP_MATERIALS = {'SaberBurnMarks', 'SaberBurnMarkSparkle'}
 # (renderers the game keeps switched off in the scene file and turns on, or draws batched, itself)
-RUNTIME_RENDERERS = {'StaticBatchableMesh', 'Parametric3SliceSpriteController', 'RectangleFakeGlow'}
+RUNTIME_RENDERERS = {'StaticBatchableMesh', 'Parametric3SliceSpriteController', 'ParametricBoxController', 'RectangleFakeGlow'}
 MANAGERS = ['LightColorGroupEffectManager', 'LightRotationGroupEffectManager', 'LightTranslationGroupEffectManager', 'FloatFxGroupEffectManager']
 
 
@@ -268,7 +268,10 @@ class Converter:
             if handler.m_UV1 is not None and len(handler.m_UV1):
                 data['secondaryUvs'] = [round(float(x), 6) for v in handler.m_UV1 for x in v[:2]]
             if handler.m_Colors is not None and len(handler.m_Colors):
-                data['colors'] = [round(float(x), 5) for v in handler.m_Colors for x in v[:4]]
+                colors = [float(x) for v in handler.m_Colors for x in v[:4]]
+                # (kept as bytes in some meshes: the engine has them from 0 to 1)
+                scale = 255.0 if max(colors) > 1.0 else 1.0
+                data['colors'] = [round(x / scale, 5) for x in colors]
             if len(groups) > 1:
                 data['groups'] = groups
             digest = hashlib.sha1(json.dumps(data['positions']).encode()).hexdigest()[:8]
@@ -648,6 +651,30 @@ class Converter:
             'ScaleSamples': int(t['_scaleSamples']), 'Scale': num(t['_scale']), 'enabled': bool(t['m_Enabled']),
         }, obj.path_id)
 
+    def c_Mirror(self, go_id, obj):
+        """A real mirror: the scene file has the material the game shows with its mirrors switched
+        off; the game puts the mirror's own on when it starts. The engine's planar reflection, as on
+        the floor of Big Mirror."""
+        mirror = obj.read()
+        ref = self.renderer_ref(mirror._renderer)
+        if ref is None:
+            return
+        material = self.material_key(mirror._mirrorMaterial)
+        if material is None or self.materials[material]['family'] != 'mirror':
+            self.unknown['component Mirror (its material is not a mirror the engine has)'] += 1
+            return
+        target = self.objects[ref['obj']]
+        target['materials'] = [material]
+        plane = self.obj_ref(mirror._reflectionPlaneTransform) or {'obj': ref['obj']}
+        comps = target['components'].setdefault('PlanarReflection', [])
+        comps.append({'MirrorRenderer': {'asset': 'b54751a1fc3ac3983afa3aa9d4141095'}, 'Renderer': ref, 'PlaneTransform': plane, 'enabled': bool(obj.read_typetree()['m_Enabled'])})
+
+    def c_DisableWhenMirrorIsEnabled(self, go_id, obj):
+        # (what the game shows in the mirror's place when mirrors are off: the mirror is on here)
+        index = self.index.get(go_id)
+        if index is not None:
+            self.objects[index]['active'] = False
+
     def c_BoxCollider(self, go_id, obj):
         t = obj.read()
         self.add(go_id, 'BoxCollider', {'Center': vec(t.m_Center), 'Size': vec(t.m_Size), 'enabled': bool(t.m_Enabled)})
@@ -684,6 +711,9 @@ class Converter:
 
     def c_BloomPrePassBackgroundColorsGradient(self, go_id, obj):
         t = obj.read_typetree()
+        # (lit by a light — a controller on the same object: that one draws it, in the light's colour)
+        if any(c == 'BloomPrePassBackgroundColorsGradientTintColorWithLightId' for c, _ in self.go_components[go_id]):
+            return
         self.add(go_id, 'BackgroundGradient', {
             'ExecutionTime': int(t['_executionTimeType']), 'TintColor': color(t['_tintColor']),
             'Elements': [{'color': color(e['color']), 'startT': num(e['startT']), 'exp': num(e['exp'])} for e in t['_elements']],
@@ -694,13 +724,18 @@ class Converter:
         t = obj.read_typetree()
         gradient = self.scene.objects.get(t['_bloomPrePassBackgroundColorsGradient']['m_PathID'])
         g = gradient.read_typetree() if gradient is not None else {'_tintColor': {'r': 1, 'g': 1, 'b': 1, 'a': 1}, '_elements': []}
-        self.add(go_id, 'BackgroundGradientController', {
-            'ID': -1, 'LightIntensityData': self.intensity_refs(t['_lightIntensityData'], go_id), 'LightIntensity': 1,
+        lights = t['_lightIntensityData']
+        if len(lights) != 1:
+            self.notes.append(f'background gradient: lit by {len(lights)} lights, the first is taken')
+        first = lights[0] if lights else {'_lightId': -1, '_intensity': 1}
+        data = {
+            **self.address(first['_lightId']), 'LightIntensity': num(first['_intensity']),
             'Intensity': num(t['_intensity']), 'MaxIntensity': num(t['_maxIntensity']), 'MultiplyColorByAlpha': int(t['_multiplyColorByAlpha']),
             'MixType': int(t['_mixType']), 'TintColor': color(g['_tintColor']),
             'Elements': [{'color': color(e['color']), 'startT': num(e['startT']), 'exp': num(e['exp'])} for e in g['_elements']],
             'enabled': bool(t['m_Enabled']),
-        }, obj.path_id)
+        }
+        self.register(self.add(go_id, 'BackgroundGradientController', data, obj.path_id), data)
 
     # ---- group effects ----
 
