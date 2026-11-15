@@ -128,6 +128,12 @@ begin
     if (not CopyOk) or (CopyResult >= 8) then
       RaiseException('Could not install the Electron runtime. Robocopy exit code: ' + IntToStr(CopyResult));
 
+    if FileExists(AppFolder + '\Lumatic.exe') then
+    begin
+      if not DeleteFile(AppFolder + '\Lumatic.exe') then
+        RaiseException('Could not replace the existing Lumatic.exe. Close Lumatic and run the installer again.');
+    end;
+
     if not RenameFile(AppFolder + '\electron.exe', AppFolder + '\Lumatic.exe') then
       RaiseException('Could not rename electron.exe to Lumatic.exe.');
 
