@@ -26,6 +26,7 @@ import {
 
 import { HeckBaseProviderRuntime } from '../core/animation/base-provider';
 import { songBpmTimeToSeconds } from '../core/beatmap/bpm';
+import { applyEnvironmentSpectrograms } from './environment/environment-spectrogram';
 import type { InfoColorScheme } from '../core/beatmap/info';
 import type { ChromaEnvironmentData } from '../core/chroma-environment';
 import type { EnvironmentData } from './environment/types';
@@ -171,6 +172,14 @@ export class MapView implements RenderView {
 
   private data: MapRenderData | null = null;
   private beatSource: () => number = () => 0;
+  /** The song's processed spectrum at a moment of it (seconds), for the environment's spectrograms
+   *  (null: no song). */
+  private spectrumSource: ((seconds: number) => Float32Array | null) | null = null;
+
+  setSpectrumSource(source: ((seconds: number) => Float32Array | null) | null) {
+    this.spectrumSource = source;
+  }
+
   /** Drawn over the finished picture (the editor's note track); `overlayUpdate` runs before. */
   readonly overlayScene = new Scene();
   overlayUpdate: (() => void) | null = null;
@@ -819,6 +828,9 @@ export class MapView implements RenderView {
     if (this.environment !== null) {
       const fog = this.environmentLights.update(now, this.baseProviders);
       if (fog !== undefined) this.pipeline.setFogParams(fog);
+      if (this.environment.spectrograms.length > 0) {
+        applyEnvironmentSpectrograms(this.environment.spectrograms, this.spectrumSource?.(songBpmTimeToSeconds(now, data?.songBpm ?? 120)) ?? null);
+      }
     }
     this.resetPlayerCameraRig();
     if (data === null) return;

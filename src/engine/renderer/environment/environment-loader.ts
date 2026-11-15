@@ -1,3 +1,4 @@
+import { buildEnvironmentSpectrograms } from './environment-spectrogram';
 import type { ChromaEnvironmentData } from '../../core/chroma-environment';
 import { buildChromaEnvironmentVariant } from './chroma-environment';
 import { CHROMA_MATERIAL_SUPPORT_ID, mergeChromaMaterialPresets } from './chroma-material-assets';
@@ -34,6 +35,7 @@ export function buildEnvironment(
   const motion = buildEnvironmentMotion(variant.data, scene.nodes);
   const glsColorGroups = buildEnvironmentGlsColors(variant.data, scene, lighting);
   const glsFxGroups = buildEnvironmentGlsFxGroups(variant.data, scene.objectShaderMaterials, scene.nodes);
+  const spectrograms = buildEnvironmentSpectrograms(variant.data, scene.nodes);
   scene.root.traverse((node) => {
     node.updateMatrix();
     node.matrixAutoUpdate = false;
@@ -50,6 +52,7 @@ export function buildEnvironment(
     glsColorGroups,
     glsRotationGroups: motion.glsRotationGroups,
     glsTranslationGroups: motion.glsTranslationGroups,
+    spectrograms,
     glsFxGroups,
     eventSwitches: scene.eventSwitches,
     boostSwitches: scene.boostSwitches,

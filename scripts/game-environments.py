@@ -448,6 +448,7 @@ class Converter:
             'BloomFogEnvironment', 'LightGroupRotationXTransform', 'LightGroupRotationYTransform', 'LightGroupRotationZTransform',
             'LightGroupTranslationXTransform', 'LightGroupTranslationYTransform', 'LightGroupTranslationZTransform',
             'LightColorGroup', 'LightRotationGroup', 'LightTranslationGroup', 'IgnoreForReflectionProbeBaking', 'BakeIdMapper',
+            'ColorArrayLightWithIdsGroupEntry', 'MaterialController',
         } | set(MANAGERS)
         # in the scene's order, so that the lights of the old event types get their ids in it
         order = sorted(self.go_components, key=lambda go_id: self.index.get(go_id, 1 << 30))
@@ -581,6 +582,71 @@ class Converter:
         data = {**self.address(t['_ID']), 'enabled': bool(t['m_Enabled'])}
         self.register(self.add(go_id, 'LightSink', data, obj.path_id), data)
         self.unknown['SpriteLightWithId (kept as a light sink)'] += 1
+
+    def c_ColorArrayLightWithIds(self, go_id, obj):
+        """A mesh lit in pieces: the game's shader takes each vertex's colour from an array by the index
+        in the mesh's second UVs (x * 10 + y), plus the renderer's offset in the array; every entry of the
+        array is a light. The engine has no such shader, so the mesh is cut into its pieces — an object
+        each, lit as any material light is."""
+        t = obj.read_typetree()
+        entries = {entry['_index']: entry['_lightId'] for entry in t['_colorArrayLightWithIds']}
+        controllers = [self.scene.objects.get(p['m_PathID']) for p in t['_materialPropertyBlockControllers']]
+        controllers = [c for c in controllers if c is not None]
+        if not controllers:
+            return
+        # (the renderers share the array in equal parts, in the controllers' order)
+        share = len(entries) // len(controllers)
+        for k, controller in enumerate(controllers):
+            for pptr in controller.read()._renderers:
+                ref = self.obj_ref(pptr)
+                if ref is None:
+                    continue
+                whole = self.objects[ref['obj']]
+                mesh = self.meshes.get(whole.get('mesh'))
+                if mesh is None or 'secondaryUvs' not in mesh:
+                    self.notes.append(f"colour array on {whole['name']}: its mesh has no second UVs to cut it by")
+                    continue
+                uv2 = mesh['secondaryUvs']
+                pieces = collections.defaultdict(list)
+                indices = mesh['indices']
+                for i in range(0, len(indices), 3):
+                    v = indices[i]
+                    pieces[int(round(uv2[2 * v] * 10 + uv2[2 * v + 1]))].append(indices[i:i + 3])
+                chroma = whole['components']['ChromaIDMarker'][0]['ChromaID']
+                for n, (piece, triangles) in enumerate(sorted(pieces.items())):
+                    used = sorted({v for tri in triangles for v in tri})
+                    remap = {v: i for i, v in enumerate(used)}
+                    data = {'positions': [x for v in used for x in mesh['positions'][3 * v:3 * v + 3]], 'indices': [remap[v] for tri in triangles for v in tri]}
+                    for key, size in (('normals', 3), ('uvs', 2), ('colors', 4)):
+                        if key in mesh:
+                            data[key] = [x for v in used for x in mesh[key][size * v:size * v + size]]
+                    key = f"{whole['mesh']}#{piece}"
+                    self.meshes[key] = data
+                    index = len(self.objects)
+                    light_id = entries.get(piece + k * share)
+                    address = self.address(light_id) if light_id is not None else {'Kind': 0, 'Type': -1, 'ID': -1}
+                    light = {
+                        **address, 'Renderer': {'obj': index, 'component': 'MeshRenderer', 'componentIndex': 0}, 'SetAlphaOnly': 0, 'AlphaIntensity': 1,
+                        'AlphaIntoColor': 0, 'SetColorOnly': 0, 'MultiplyColorWithAlpha': 0, 'MultiplyColor': 0, 'ColorMultiplier': 1, 'Alpha': 0,
+                        'Property': '_Color', 'enabled': True,
+                    }
+                    self.objects.append({
+                        'name': f"{whole['name']}Piece{piece}", 'parent': ref['obj'], 'active': True, 'layer': whole.get('layer', 0),
+                        'position': [0, 0, 0], 'rotation': [0, 0, 0, 1], 'scale': [1, 1, 1], 'mesh': key, 'rendererEnabled': True,
+                        'materials': list(whole.get('materials', [])),
+                        'components': {'ChromaIDMarker': [{'ChromaID': f'{chroma}.[{n}]Piece{piece}', 'enabled': True}], 'MaterialLightController': [light]},
+                    })
+                    self.register({'obj': index, 'component': 'MaterialLightController', 'componentIndex': 0}, light)
+                # (the whole mesh is not drawn any more: its pieces are)
+                whole['rendererEnabled'] = False
+
+    def c_TransformSpectrogram(self, go_id, obj):
+        t = obj.read_typetree()
+        transforms = [r for r in (self.obj_ref(p) for p in obj.read()._transforms) if r]
+        self.add(go_id, 'TransformSpectrogram', {
+            'Transforms': transforms, 'Axis': int(t['_axis']), 'MinPosition': num(t['_minPosition']), 'MaxPosition': num(t['_maxPosition']),
+            'ScaleSamples': int(t['_scaleSamples']), 'Scale': num(t['_scale']), 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
 
     def c_BoxCollider(self, go_id, obj):
         t = obj.read()

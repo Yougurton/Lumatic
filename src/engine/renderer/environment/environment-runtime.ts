@@ -4,6 +4,7 @@ import type { ChromaEnvironmentData } from '../../core/chroma-environment';
 import type { Rgb } from '../../core/colors';
 import type { RingPositionConfig, RingRotationConfig } from '../../core/lighting/ring-motion';
 import type { LightSegment } from '../bloomfog/light-quads';
+import type { EnvironmentSpectrogram } from './environment-spectrogram';
 import type { BloomFogControllerData, EnvironmentData } from './types';
 
 export interface EnvironmentBackgroundGradient {
@@ -22,6 +23,8 @@ export interface LoadedEnvironment {
   glsRotationGroups: EnvironmentGlsRotationGroup[];
   glsTranslationGroups: EnvironmentGlsTranslationGroup[];
   glsFxGroups: EnvironmentGlsFxGroup[];
+  /** What moves with the song's spectrum. */
+  spectrograms: EnvironmentSpectrogram[];
   eventSwitches: EnvironmentEventSwitch[];
   boostSwitches: EnvironmentBoostSwitch[];
   /** See EnvironmentSceneBuild.playerPlatformNodes — carried through unchanged so MapView can toggle

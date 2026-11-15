@@ -1,3 +1,4 @@
+import { SongSpectrum } from '../engine/core/lighting/spectrogram';
 import { bootstrapBpmEvents, createBpmConverter } from '../engine/core/beatmap/bpm';
 import { ringTickSeconds } from '../engine/core/lighting/ring-motion';
 import { generatePatterns } from './note-generator';
@@ -746,6 +747,7 @@ export class Editor {
     if (map === null) return;
     this.clock?.dispose();
     this.clock = null;
+    this.preview.view.setSpectrumSource(null);
     this.spectrogram = null;
     const audio = map.parsed.audioData;
     let buffer: AudioBuffer | null = null;
@@ -755,6 +757,9 @@ export class Editor {
         songBpm: this.songBpm,
         onBuffer: (decoded) => {
           buffer = decoded;
+          // (the environment's spectrograms move with the song's left channel)
+          const spectrum = new SongSpectrum(decoded.getChannelData(0), decoded.sampleRate);
+          this.preview.view.setSpectrumSource((seconds) => spectrum.at(seconds));
         },
       });
       if (result.isOk()) this.clock = result.value;

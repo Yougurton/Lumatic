@@ -543,6 +543,17 @@ export interface ParametricSliceEndWidthFxData {
   enabled: boolean;
 }
 
+export interface TransformSpectrogramData {
+  Transforms: ObjectReference[];
+  /** 0 x, 1 y, 2 z. */
+  Axis: number;
+  MinPosition: number;
+  MaxPosition: number;
+  ScaleSamples: number;
+  Scale: number;
+  enabled: boolean;
+}
+
 export interface EnvironmentObjectData {
   name: string;
   parent: number;
@@ -614,6 +625,7 @@ export interface EnvironmentObjectData {
     MeshCollider?: MeshColliderData[];
     LightReflection?: LightReflectionData[];
     PlanarReflection?: object[];
+    TransformSpectrogram?: TransformSpectrogramData[];
   };
 }
 
