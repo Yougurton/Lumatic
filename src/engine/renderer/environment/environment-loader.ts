@@ -1,3 +1,5 @@
+import { Mesh } from 'three';
+import { BLOOMFOG_BACKGROUND_LAYER } from '../bloomfog/pipeline';
 import { setSdfPoints } from '../materials/sdf-points';
 import { buildEnvironmentSpectrograms } from './environment-spectrogram';
 import type { ChromaEnvironmentData } from '../../core/chroma-environment';
@@ -37,6 +39,17 @@ export function buildEnvironment(
   const glsColorGroups = buildEnvironmentGlsColors(variant.data, scene, lighting);
   const glsFxGroups = buildEnvironmentGlsFxGroups(variant.data, scene.objectShaderMaterials, scene.nodes);
   const spectrograms = buildEnvironmentSpectrograms(variant.data, scene.nodes);
+  let prePassBackground = false;
+  variant.data.objects.forEach((object, index) => {
+    const prePass = object.components?.PrePassRenderer?.find((item) => item.enabled);
+    if (prePass === undefined) return;
+    for (const child of scene.nodes[index]?.children ?? []) {
+      if (!(child instanceof Mesh)) continue;
+      if (prePass.KeepDefaultRendering === 0) child.layers.set(BLOOMFOG_BACKGROUND_LAYER);
+      else child.layers.enable(BLOOMFOG_BACKGROUND_LAYER);
+      prePassBackground = true;
+    }
+  });
   setSdfPoints(
     variant.data.objects.flatMap((object) =>
       (object.components?.SdfPoints ?? []).flatMap((item) =>
@@ -66,6 +79,7 @@ export function buildEnvironment(
     glsRotationGroups: motion.glsRotationGroups,
     glsTranslationGroups: motion.glsTranslationGroups,
     spectrograms,
+    prePassBackground,
     glsFxGroups,
     eventSwitches: scene.eventSwitches,
     boostSwitches: scene.boostSwitches,

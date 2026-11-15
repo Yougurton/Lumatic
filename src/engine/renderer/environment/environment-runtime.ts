@@ -25,6 +25,8 @@ export interface LoadedEnvironment {
   glsFxGroups: EnvironmentGlsFxGroup[];
   /** What moves with the song's spectrum. */
   spectrograms: EnvironmentSpectrogram[];
+  /** Some of its meshes are drawn into the bloom pre-pass. */
+  prePassBackground?: boolean;
   eventSwitches: EnvironmentEventSwitch[];
   boostSwitches: EnvironmentBoostSwitch[];
   /** See EnvironmentSceneBuild.playerPlatformNodes — carried through unchanged so MapView can toggle

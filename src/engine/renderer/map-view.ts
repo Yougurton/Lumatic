@@ -354,6 +354,7 @@ export class MapView implements RenderView {
         chromaEnvironment.componentAnimations.length > 0 ||
         chromaEnvironment.fogTrackEvents.length > 0);
     this.pipeline.setBackgroundGradient(hasCustomEnvironment ? null : environment.backgroundGradient);
+    this.pipeline.setBackgroundRoot(environment.prePassBackground === true ? environment.root : null);
     this.onEnvironmentLoadSettled();
     return Result.ok(undefined);
   }

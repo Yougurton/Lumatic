@@ -31,6 +31,15 @@ import {
 import { worldNoiseTexture } from './world-noise-texture';
 
 export interface CustomParticlesSettings {
+  /** The masks are laid out by the mesh's second UVs. */
+  maskSecondaryUvs?: boolean;
+  mask2SecondaryUvs?: boolean;
+  /** A second colour laid over the first where its texture is bright. */
+  secondaryColor?: Rgb;
+  secondaryColorAlpha?: number;
+  secondaryColorPanning?: [number, number];
+  distortionStrength?: number;
+  distortionPanning?: [number, number];
   vertexColor: boolean;
   vertexRedIsAlpha: boolean;
   vertexSquareAlpha: boolean;
@@ -193,6 +202,8 @@ export function createCustomParticlesMaterial(
     mask2?: MaterialTexture;
     displacement?: MaterialTexture;
     colorGradient?: MaterialTexture;
+    secondaryColor?: MaterialTexture;
+    distortion?: MaterialTexture;
   },
   settings: CustomParticlesSettings,
 ) {
@@ -228,6 +239,10 @@ export function createCustomParticlesMaterial(
     if (settings.mask2Blend === 'maskedAdd') Object.assign(defines, { MASK2_BLEND_MASKED_ADD: 1 });
   }
   if (textures.colorGradient !== undefined) Object.assign(defines, { COLOR_GRADIENT: 1 });
+  if (textures.secondaryColor !== undefined) Object.assign(defines, { SECONDARY_COLOR: 1 });
+  if (textures.distortion !== undefined) Object.assign(defines, { DISTORTION_SIMPLE: 1 });
+  if (settings.maskSecondaryUvs === true) Object.assign(defines, { SECONDARY_UVS: 1, SECONDARY_UVS_MASK: 1 });
+  if (settings.mask2SecondaryUvs === true) Object.assign(defines, { SECONDARY_UVS: 1, SECONDARY_UVS_MASK2: 1 });
   if (settings.fogType === 'lerp') Object.assign(defines, { FOG_LERP: 1 });
   if (settings.fogType === 'alpha') Object.assign(defines, { FOG_ALPHA: 1 });
   const elapsed = { value: 0 };
@@ -244,6 +259,21 @@ export function createCustomParticlesMaterial(
       ...textureUniforms('_Mask2Tex', textures.mask2),
       ...textureUniforms('_DisplacementTex', textures.displacement),
       ...textureUniforms('_ColorGradient', textures.colorGradient),
+      ...(textures.secondaryColor === undefined
+        ? {}
+        : {
+            ...textureUniforms('_SecondaryColorTex', textures.secondaryColor),
+            _SecondaryColor: { value: linearColor(settings.secondaryColor ?? [1, 1, 1]) },
+            _SecondaryColorAlpha: { value: settings.secondaryColorAlpha ?? 1 },
+            _SecondaryColorPanning: { value: new Vector2(...(settings.secondaryColorPanning ?? [0, 0])) },
+          }),
+      ...(textures.distortion === undefined
+        ? {}
+        : {
+            ...textureUniforms('_DistortionTex', textures.distortion),
+            _DistortionStrength: { value: settings.distortionStrength ?? 0 },
+            _DistortionPanning: { value: new Vector2(...(settings.distortionPanning ?? [0, 0])) },
+          }),
       _BillboardScale: { value: settings.billboardScale },
       _TimeSeconds: elapsed,
       _SongTime: settings.songTime ?? { value: 0 },

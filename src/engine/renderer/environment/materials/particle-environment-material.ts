@@ -112,6 +112,8 @@ export function createParticleEnvironmentMaterial(
         ? materialTexture(data, context, '_DisplacementTex')
         : undefined,
       colorGradient: keywords.has('COLOR_GRADIENT') ? materialTexture(data, context, '_ColorGradient') : undefined,
+      secondaryColor: keywords.has('SECONDARY_COLOR') ? materialTexture(data, context, '_SecondaryColorTex') : undefined,
+      distortion: keywords.has('DISTORTION_SIMPLE') ? materialTexture(data, context, '_DistortionTex') : undefined,
     },
     {
       vertexColor:
@@ -129,6 +131,13 @@ export function createParticleEnvironmentMaterial(
       displacementPanning: vectorColor(data.colors._DisplacementPanning, [0, 0, 0]),
       displacementPanningSpeed: data.floats._DisplacementPanningSpeed ?? 1,
       textureColor: keywords.has('TEXTURE_COLOR'),
+      maskSecondaryUvs: keywords.has('SECONDARY_UVS_MASK'),
+      mask2SecondaryUvs: keywords.has('SECONDARY_UVS_MASK2'),
+      secondaryColor: vectorColor(data.colors._SecondaryColor, [1, 1, 1]),
+      secondaryColorAlpha: data.colors._SecondaryColor?.[3] ?? 1,
+      secondaryColorPanning: [data.colors._SecondaryColorPanning?.[0] ?? 0, data.colors._SecondaryColorPanning?.[1] ?? 0],
+      distortionStrength: data.floats._DistortionStrength ?? 0,
+      distortionPanning: [data.colors._DistortionPanning?.[0] ?? 0, data.colors._DistortionPanning?.[1] ?? 0],
       alphaChannelRed: keywords.has('_ALPHACHANNEL_RED'),
       squareAlpha: keywords.has('SQUARE_ALPHA'),
       billboard,

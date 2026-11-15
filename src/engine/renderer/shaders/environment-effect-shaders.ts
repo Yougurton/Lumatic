@@ -16,6 +16,10 @@ varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec2 vUv;
 varying vec4 vScreenPos;
+#ifdef SECONDARY_UVS
+attribute vec2 uv1;
+varying vec2 vSecondaryUv;
+#endif
 #ifdef USE_VERTEX_COLOR
 attribute vec4 color;
 varying vec4 vVertexColor;
@@ -69,6 +73,9 @@ void main() {
   #endif
   vWorldPos = worldPosition;
   vUv = uv;
+  #ifdef SECONDARY_UVS
+  vSecondaryUv = uv1;
+  #endif
   gl_Position = projectionMatrix * viewMatrix * vec4(worldPosition, 1.0);
   vScreenPos = vec4((gl_Position.xy + gl_Position.ww) * 0.5, gl_Position.zw);
 }
@@ -111,6 +118,24 @@ uniform vec2 _MaskPanning;
 uniform vec2 _Mask2Panning;
 uniform float _FogStartOffset;
 uniform float _FogScale;
+#ifdef SECONDARY_UVS
+varying vec2 vSecondaryUv;
+#endif
+#ifdef SECONDARY_COLOR
+uniform vec3 _SecondaryColor;
+uniform float _SecondaryColorAlpha;
+uniform sampler2D _SecondaryColorTex;
+uniform vec2 _SecondaryColorTexScale;
+uniform vec2 _SecondaryColorTexOffset;
+uniform vec2 _SecondaryColorPanning;
+#endif
+#ifdef DISTORTION_SIMPLE
+uniform sampler2D _DistortionTex;
+uniform vec2 _DistortionTexScale;
+uniform vec2 _DistortionTexOffset;
+uniform float _DistortionStrength;
+uniform vec2 _DistortionPanning;
+#endif
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec2 vUv;
@@ -142,9 +167,18 @@ void main() {
     #endif
   #endif
 
+  vec2 baseUv = vUv;
+  #ifdef DISTORTION_SIMPLE
+  // (as the game's shader cannot be read: the texture's red and green shift the picture's place)
+  vec2 distortion = texture2D(
+    _DistortionTex,
+    (vUv + _DistortionPanning * materialTime) * _DistortionTexScale + _DistortionTexOffset
+  ).rg - 0.5;
+  baseUv += distortion * _DistortionStrength;
+  #endif
   vec4 albedo = sourceColor;
   #ifdef MAIN_TEXTURE
-  vec2 mainUv = vUv;
+  vec2 mainUv = baseUv;
     #ifdef TEXTURE_FLIPBOOK
     vec2 atlasSize = max(vec2(_FlipbookColumns, _FlipbookRows), vec2(1.0));
     float frame = floor(materialTime * _FlipbookSpeed);
@@ -165,6 +199,14 @@ void main() {
     albedo.a *= mainSample.a * _BaseLayer;
     #endif
   #endif
+  #ifdef SECONDARY_COLOR
+  // (taken so: where its texture is bright the second colour, a light of its own, replaces the first)
+  float secondaryAmount = texture2D(
+    _SecondaryColorTex,
+    (baseUv + _SecondaryColorPanning * materialTime) * _SecondaryColorTexScale + _SecondaryColorTexOffset
+  ).r * clamp(_SecondaryColorAlpha, 0.0, 1.0);
+  albedo.rgb = mix(albedo.rgb, _SecondaryColor, secondaryAmount);
+  #endif
   albedo.rgb *= _Intensity;
   #ifdef COLOR_GRADIENT
   vec2 gradientUv = vUv * _ColorGradientScale + _ColorGradientOffset;
@@ -173,9 +215,14 @@ void main() {
   #endif
 
   #ifdef MASK
+  #ifdef SECONDARY_UVS_MASK
+  vec2 maskUv = vSecondaryUv;
+  #else
+  vec2 maskUv = vUv;
+  #endif
   vec4 mask = texture2D(
     _MaskTex,
-    (vUv + _MaskPanning * materialTime) * _MaskTexScale + _MaskTexOffset
+    (maskUv + _MaskPanning * materialTime) * _MaskTexScale + _MaskTexOffset
   );
     #ifdef MASK_RED_IS_ALPHA
     mask.a = mask.r;
@@ -196,9 +243,14 @@ void main() {
     #endif
   #endif
   #ifdef MASK2
+  #ifdef SECONDARY_UVS_MASK2
+  vec2 mask2Uv = vSecondaryUv;
+  #else
+  vec2 mask2Uv = vUv;
+  #endif
   vec4 mask2 = texture2D(
     _Mask2Tex,
-    (vUv + _Mask2Panning * materialTime) * _Mask2TexScale + _Mask2TexOffset
+    (mask2Uv + _Mask2Panning * materialTime) * _Mask2TexScale + _Mask2TexOffset
   );
     #ifdef MASK2_RED_IS_ALPHA
     mask2.a = mask2.r;

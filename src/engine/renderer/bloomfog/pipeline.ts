@@ -23,7 +23,8 @@ import {
   Vector2,
   Vector4,
   ZeroFactor,
-  type PerspectiveCamera,
+  PerspectiveCamera,
+  type Object3D,
   type Texture,
   type WebGLRenderer,
   WebGLRenderTarget,
@@ -119,7 +120,20 @@ function passMaterial(fragmentShader: string, uniforms: ShaderMaterial['uniforms
 
 const layout = bloomfogPyramidLayout();
 
+/** The layer of the meshes an environment draws into the pre-pass (those drawn only there are on no other). */
+export const BLOOMFOG_BACKGROUND_LAYER = 7;
+
 export class BloomfogPipeline {
+  private backgroundRoot: Object3D | null = null;
+  private readonly backgroundCamera = new PerspectiveCamera();
+
+  /** The scene whose meshes on the background layer are drawn into the pre-pass with the lights (none: null). */
+  setBackgroundRoot(root: Object3D | null) {
+    this.backgroundRoot = root;
+    this.backgroundCamera.layers.set(BLOOMFOG_BACKGROUND_LAYER);
+    this.invalidate();
+  }
+
   readonly fogUniforms: FogUniforms;
 
   private readonly raw = renderTarget(BLOOMFOG_CAPTURE_SIZE, BLOOMFOG_CAPTURE_SIZE);
@@ -482,8 +496,10 @@ export class BloomfogPipeline {
     }
     const { quadCount, additiveQuadCount } = this.writeQuads(lights, camera.matrixWorldInverse.elements, elements);
 
-    if (this.outputMatches(quadCount, additiveQuadCount)) return;
-    if (quadCount === 0) {
+    // (meshes move and change by themselves: with them the picture is drawn anew each time)
+    const background = this.backgroundRoot;
+    if (background === null && this.outputMatches(quadCount, additiveQuadCount)) return;
+    if (quadCount === 0 && background === null) {
       this.clearPrepass(renderer);
       if (this.gradientTexture !== null) this.renderGradientPass(renderer);
       this.commitOutput(renderer, quadCount, additiveQuadCount);
@@ -498,6 +514,18 @@ export class BloomfogPipeline {
 
     renderer.setRenderTarget(this.raw);
     renderer.render(this.captureScene, this.passCamera);
+    if (background !== null) {
+      const backgroundCamera = this.backgroundCamera;
+      backgroundCamera.matrixWorld.copy(camera.matrixWorld);
+      backgroundCamera.matrixWorldInverse.copy(camera.matrixWorldInverse);
+      backgroundCamera.projectionMatrix.copy(projection);
+      backgroundCamera.projectionMatrixInverse.copy(projection).invert();
+      backgroundCamera.matrixWorldAutoUpdate = false;
+      const previousAutoClear = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.render(background, backgroundCamera);
+      renderer.autoClear = previousAutoClear;
+    }
 
     this.fsMesh.material = this.downsampleMaterial;
     let source = this.raw;

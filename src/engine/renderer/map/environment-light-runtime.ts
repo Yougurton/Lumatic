@@ -105,13 +105,11 @@ export class EnvironmentLightRuntime {
   private readonly glsSegments = new Map<EnvironmentLightSegment, ControlledLight>();
   private readonly glsMaterialLights = new Map<LoadedEnvironment['materialLights'][number], ControlledLight>();
   private readonly glsColorSamples = new Map<GlsColorSource, ReturnType<typeof sampleGlsColorTween>>();
-  private readonly glsDirectMaterials = new Map<
-    ShaderMaterial,
-    {
+  /** (a material may be lit through several of its properties: each write is kept) */
+  private readonly glsDirectMaterials: ({ material: ShaderMaterial } & {
       controlled: ControlledLight;
       colorProperty: string;
-    }
-  >();
+    })[] = [];
   private readonly lightEventsByType = new Map<number, MapRenderData['lightEvents']>();
   private readonly lightEventsByBinding = new Map<EnvironmentLightBinding, MapRenderData['lightEvents']>();
   private readonly lightEventsByBindingKey = new Map<string, MapRenderData['lightEvents']>();
@@ -337,7 +335,7 @@ export class EnvironmentLightRuntime {
   private updateGlsColors(beat: number, boosted: boolean, full: boolean) {
     this.glsSegments.clear();
     this.glsMaterialLights.clear();
-    this.glsDirectMaterials.clear();
+    this.glsDirectMaterials.length = 0;
     this.glsColorSamples.clear();
     if (full) {
       const samples = this.glsColorSamples;
@@ -354,7 +352,8 @@ export class EnvironmentLightRuntime {
         for (const segment of runtime.target.segments) this.glsSegments.set(segment, controlled);
         for (const light of runtime.target.materialLights) this.glsMaterialLights.set(light, controlled);
         for (const material of runtime.target.materials) {
-          this.glsDirectMaterials.set(material, {
+          this.glsDirectMaterials.push({
+            material,
             controlled,
             colorProperty: runtime.target.colorProperty,
           });
@@ -443,16 +442,18 @@ export class EnvironmentLightRuntime {
         const alpha = material.uniforms[`${colorProperty}Alpha`];
         if (alpha !== undefined && light.combined?.setColorOnly !== true) alpha.value = controlled.alpha;
         const multiplier = material.uniforms._ColorMultiplier;
-        if (multiplier !== undefined && light.combined?.setColorOnly !== true) multiplier.value = controlled.alpha;
+        if (multiplier !== undefined && colorProperty === '_Color' && light.combined?.setColorOnly !== true) {
+          multiplier.value = controlled.alpha;
+        }
       }
     }
-    for (const [material, { controlled, colorProperty }] of this.glsDirectMaterials) {
+    for (const { material, controlled, colorProperty } of this.glsDirectMaterials) {
       const color = shaderColorUniform(material, colorProperty);
       if (color !== undefined) this.setControlledMaterialColor(color, controlled.color);
       const alpha = material.uniforms[`${colorProperty}Alpha`];
       if (alpha !== undefined) alpha.value = controlled.alpha;
       const multiplier = material.uniforms._ColorMultiplier;
-      if (multiplier !== undefined) multiplier.value = controlled.alpha;
+      if (multiplier !== undefined && colorProperty === '_Color') multiplier.value = controlled.alpha;
     }
   }
 

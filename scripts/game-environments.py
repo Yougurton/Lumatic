@@ -50,7 +50,8 @@ DROP_COMPONENTS = {
 # (materials the engine has nothing to draw with)
 SKIP_MATERIALS = {'SaberBurnMarks', 'SaberBurnMarkSparkle'}
 # (renderers the game keeps switched off in the scene file and turns on, or draws batched, itself)
-RUNTIME_RENDERERS = {'StaticBatchableMesh', 'Parametric3SliceSpriteController', 'ParametricBoxController', 'RectangleFakeGlow'}
+RUNTIME_RENDERERS = {'StaticBatchableMesh', 'Parametric3SliceSpriteController', 'ParametricBoxController', 'RectangleFakeGlow',
+                     'BloomPrePassBackgroundNonLightRenderer'}
 MANAGERS = ['LightColorGroupEffectManager', 'LightRotationGroupEffectManager', 'LightTranslationGroupEffectManager', 'FloatFxGroupEffectManager']
 
 
@@ -279,6 +280,9 @@ class Converter:
                 data['uvs'] = [round(float(x), 6) for v in handler.m_UV0 for x in v[:2]]
             if handler.m_UV1 is not None and len(handler.m_UV1):
                 data['secondaryUvs'] = [round(float(x), 6) for v in handler.m_UV1 for x in v[:2]]
+            elif handler.m_UV0 is not None and len(handler.m_UV0) and len(handler.m_UV0[0]) >= 4:
+                # (a second set packed into the first: its z and w)
+                data['secondaryUvs'] = [round(float(x), 6) for v in handler.m_UV0 for x in v[2:4]]
             if handler.m_Colors is not None and len(handler.m_Colors):
                 colors = [float(x) for v in handler.m_Colors for x in v[:4]]
                 # (kept as bytes in some meshes: the engine has them from 0 to 1)
@@ -778,6 +782,12 @@ class Converter:
             'ZCurve': curve(t['_zAnimationCurve']), 'enabled': bool(t['m_Enabled']),
         }, obj.path_id)
 
+    def c_BloomPrePassBackgroundNonLightRenderer(self, go_id, obj):
+        # (drawn into the bloom pre-pass, and where the game says so only there; its material for the
+        # pre-pass, when it has one of its own, is not taken: the object's own stands in)
+        t = obj.read_typetree()
+        self.add(go_id, 'PrePassRenderer', {'KeepDefaultRendering': int(t.get('_keepDefaultRendering', 1)), 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
     def c_SDFArrayManager(self, go_id, obj):
         t = obj.read_typetree()
         points, roots = [], []
@@ -1016,6 +1026,14 @@ class Converter:
                 'indices': [0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4, 4, 5, 6, 5, 7, 6],
             }
         groups = sorted(self.group_so.values(), key=lambda so: so['_groupId'])
+        # (a material that lays a texture out by the mesh's second UVs, on a mesh that has none: the
+        # first serve — a missing set would read as one point of the texture)
+        for out in self.objects:
+            mesh = self.meshes.get(out.get('mesh'))
+            if mesh is None or 'secondaryUvs' in mesh or 'uvs' not in mesh:
+                continue
+            if any(k.startswith('SECONDARY_UVS') for m in out.get('materials', []) for k in self.materials.get(m, {}).get('keywords', [])):
+                mesh['secondaryUvs'] = list(mesh['uvs'])
         data = {
             'version': 1,
             'id': self.id,

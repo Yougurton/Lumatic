@@ -626,6 +626,9 @@ export interface EnvironmentObjectData {
     LightReflection?: LightReflectionData[];
     PlanarReflection?: object[];
     TransformSpectrogram?: TransformSpectrogramData[];
+    /** Drawn into the bloom pre-pass (what the fog and the background glow are made of), and unless it
+     * keeps its default rendering, only there. */
+    PrePassRenderer?: { KeepDefaultRendering: number; enabled: boolean }[];
     /** The game's SDF points: the objects that are them, in its order. */
     SdfPoints?: { Points: ObjectReference[]; SqrtRadius?: number[]; enabled: boolean }[];
     /** An FX value as the root of an SDF point's radius. */

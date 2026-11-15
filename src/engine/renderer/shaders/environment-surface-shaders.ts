@@ -270,14 +270,37 @@ uniform float _SecondaryEmissionGain;
 uniform float _ReflectionIntensity;
 uniform vec3 _EmissionTexColor;
 uniform float _EmissionTexColorAlpha;
-#ifdef EMISSION_SOURCE_SDF
-uniform vec4 _SDFPointArray[4];
+#ifdef EMISSION_COLOR_GRADIENT
 uniform sampler2D _EmissionGradientTex;
 uniform float _EmissionGradientPosition;
 uniform float _EmissionGradientIntensity;
+uniform vec2 _EmissionTexSpeed;
+#endif
+#ifdef EMISSION_SOURCE_SDF
+uniform vec4 _SDFPointArray[4];
 uniform float _SDFPointIntensity;
 uniform float _SDFNegativeIntensity;
 uniform float _SDFNoiseIntensity;
+uniform float _SDFNoiseScale;
+uniform vec3 _SDFNoisePanning;
+float sdfHash(vec3 p) {
+  p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+// (a smooth noise over the world, in place of the game's 3D texture, which is not taken)
+float sdfNoise(vec3 p) {
+  vec3 cell = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(sdfHash(cell), sdfHash(cell + vec3(1.0, 0.0, 0.0)), f.x),
+        mix(sdfHash(cell + vec3(0.0, 1.0, 0.0)), sdfHash(cell + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+    mix(mix(sdfHash(cell + vec3(0.0, 0.0, 1.0)), sdfHash(cell + vec3(1.0, 0.0, 1.0)), f.x),
+        mix(sdfHash(cell + vec3(0.0, 1.0, 1.0)), sdfHash(cell + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+    f.z
+  );
+}
 #endif
 uniform float _EmissionBrightness;
 uniform float _EmissionFogSuppression;
@@ -485,7 +508,14 @@ void main() {
     * _EmissionColorAlpha * _EmissionColorAlpha;
   #endif
   #ifdef EMISSION_TEXTURE
+    #if defined(EMISSION_COLOR_GRADIENT) && !defined(EMISSION_SOURCE_SDF)
+  vec4 emission = texture2D(
+    _EmissionTex,
+    (vUv + _EmissionTexSpeed * materialTime) * _EmissionTexScale + _EmissionTexOffset
+  );
+    #else
   vec4 emission = texture2D(_EmissionTex, vUv * _EmissionTexScale + _EmissionTexOffset);
+    #endif
     #ifdef EMISSION_SOURCE_SDF
     // (the game's own shader is not readable. Taken so, by its frames: away from the points the surface
     // glows with the "negative" strength, inside a point's radius — the square of what the game passes —
@@ -505,16 +535,24 @@ void main() {
       mix(_SDFNegativeIntensity, _SDFPointIntensity, sdfGlow) + 0.5 * max(0.0, _SDFNoiseIntensity)
     );
     // (the light's strength dims the colour as well: here it is not a texture's own alpha)
-    emission = vec4(vec3(sdfField * _EmissionTexColorAlpha), sdfField);
+    // (…and a light brighter than full does not wash the colour out to white)
+    emission = vec4(vec3(sdfField * min(_EmissionTexColorAlpha, 1.0)), sdfField);
       #ifdef EMISSION_COLOR_GRADIENT
       // (coloured from the gradient texture where the map puts it — the game's own are a strip read
       // along and a square of hues read upwards — and lit by the light's colour)
+      // (…moved across it by a noise over the world, as far as that is strong and counted from the
+      // noise at the world's middle: a large surface runs through the colours beside each other, a
+      // small one keeps the colour of its place)
+      vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
+      float sdfAcross = (sdfNoise(vWorldPos * _SDFNoiseScale + sdfNoiseShift) - sdfNoise(sdfNoiseShift))
+        * _SDFNoiseIntensity;
+      float sdfPlace = _EmissionGradientPosition + sdfGlow * 0.25;
       vec3 sdfGradient = texture2D(
         _EmissionGradientTex,
-        vec2(fract(_EmissionGradientPosition + sdfGlow * 0.25), fract(_EmissionGradientPosition))
+        vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace))
       ).rgb
         * _EmissionGradientIntensity;
-      vec3 sdfLight = _EmissionColor * _EmissionColorAlpha;
+      vec3 sdfLight = _EmissionColor * min(_EmissionColorAlpha, 1.0);
       emission = vec4(sdfGradient * sdfLight * sdfField, max(max(sdfLight.r, sdfLight.g), sdfLight.b) * sdfField);
       #endif
     #endif
@@ -542,9 +580,20 @@ void main() {
     emission *= mix(vec4(1.0), secondaryMask, _SecondaryEmissionGain);
     #endif
     #ifdef EMISSION_TEXTURE_SIMPLE
+      #ifdef EMISSION_COLOR_GRADIENT
+    // (the game's shader is not readable. Taken so, by its frames: the texture picks the place across
+    // the gradient, the map's position the place along it, and the surface glows evenly)
+    float visibleEmission = _EmissionBrightness * mix(0.7, 1.0, emission.g);
+    bloomEmission = 0.5 * emission.g * _EmissionBrightness;
+    vec3 visibleEmissionColor = texture2D(
+      _EmissionGradientTex,
+      vec2(emission.r, fract(_EmissionGradientPosition))
+    ).rgb * _EmissionGradientIntensity * min(visibleEmission, 1.0);
+      #else
     float visibleEmission = emission.r * _EmissionBrightness;
     bloomEmission = emission.g * _EmissionBrightness;
     vec3 visibleEmissionColor = _EmissionTexColor * visibleEmission * _EmissionTexColorAlpha;
+      #endif
       #ifdef EMISSION_WHITE_BOOST
       float whiteBoostSignal = bloomEmission * bloomEmission * _EmissionTexColorAlpha
         * _EmissionTexWhiteBoostMultiplier;

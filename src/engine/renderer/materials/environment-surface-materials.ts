@@ -97,9 +97,12 @@ export interface EnvironmentLitSettings {
   emissionGradient?: { texture: Texture };
   emissionGradientPosition?: number;
   emissionGradientIntensity?: number;
+  emissionTexSpeed?: [number, number];
   /** How strongly it glows away from the points, at a point, and how strong the noise over it is. */
   sdfNegativeIntensity?: number;
   sdfNoiseIntensity?: number;
+  sdfNoiseScale?: number;
+  sdfNoisePanning?: [number, number, number];
   sdfPointIntensity?: number;
   emissionWhiteBoost: boolean;
   emissionWhiteBoostMultiplier: number;
@@ -221,10 +224,9 @@ export function createEnvironmentLitMaterial(
   if (settings.normal !== undefined) Object.assign(defines, { NORMAL_TEXTURE: 1 });
   if (settings.emission !== undefined) {
     Object.assign(defines, { EMISSION_TEXTURE: 1 });
-    if (settings.emissionSdf === true) {
-      Object.assign(defines, { EMISSION_SOURCE_SDF: 1 });
-      if (settings.emissionGradient !== undefined) Object.assign(defines, { EMISSION_COLOR_GRADIENT: 1 });
-    } else if (settings.emissionAlphaSource === 'green') Object.assign(defines, { EMISSION_TEXTURE_SIMPLE: 1 });
+    if (settings.emissionGradient !== undefined) Object.assign(defines, { EMISSION_COLOR_GRADIENT: 1 });
+    if (settings.emissionSdf === true) Object.assign(defines, { EMISSION_SOURCE_SDF: 1 });
+    else if (settings.emissionAlphaSource === 'green') Object.assign(defines, { EMISSION_TEXTURE_SIMPLE: 1 });
     if (settings.emissionWhiteBoost) Object.assign(defines, { EMISSION_WHITE_BOOST: 1 });
     if (settings.emissionMainEffect) Object.assign(defines, { EMISSION_MAIN_EFFECT: 1 });
   }
@@ -291,14 +293,21 @@ export function createEnvironmentLitMaterial(
       _ReflectionIntensity: { value: settings.reflectionIntensity },
       _EmissionTexColor: { value: linearColor(settings.emissionColor) },
       _EmissionTexColorAlpha: { value: settings.emissionColorAlpha },
+      ...(settings.emissionGradient !== undefined
+        ? {
+            _EmissionGradientTex: { value: settings.emissionGradient.texture },
+            _EmissionGradientPosition: { value: settings.emissionGradientPosition ?? 0 },
+            _EmissionGradientIntensity: { value: settings.emissionGradientIntensity ?? 1 },
+            _EmissionTexSpeed: { value: new Vector2(...(settings.emissionTexSpeed ?? [0, 0])) },
+          }
+        : {}),
       ...(settings.emissionSdf === true
         ? {
             _SDFPointArray: sdfPointUniform,
-            _EmissionGradientTex: { value: settings.emissionGradient?.texture ?? null },
-            _EmissionGradientPosition: { value: settings.emissionGradientPosition ?? 0 },
-            _EmissionGradientIntensity: { value: settings.emissionGradientIntensity ?? 1 },
             _SDFNegativeIntensity: { value: settings.sdfNegativeIntensity ?? 0.5 },
             _SDFNoiseIntensity: { value: settings.sdfNoiseIntensity ?? 0 },
+            _SDFNoiseScale: { value: settings.sdfNoiseScale ?? 0 },
+            _SDFNoisePanning: { value: new Vector3(...(settings.sdfNoisePanning ?? [0, 0, 0])) },
             _SDFPointIntensity: { value: settings.sdfPointIntensity ?? 1 },
           }
         : {}),
