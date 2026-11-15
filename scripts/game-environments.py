@@ -96,6 +96,18 @@ def reference_materials(reference):
     return materials
 
 
+LIT_KEYWORD_FLAGS = {
+    '_EnableDiffuse': 'DIFFUSE', '_EnableDiffuseTexture': 'DIFFUSE_TEXTURE', '_EnableBothSidesDiffuse': 'BOTH_SIDES_DIFFUSE',
+    '_EnableSpecular': 'SPECULAR', '_EnableNormalMap': 'NORMAL_MAP', '_EnableMetalSmoothnessTex': 'METAL_SMOOTHNESS_TEXTURE',
+    '_EnableReflectionProbe': 'REFLECTION_PROBE', '_EnableBoxProjectionOffset': 'REFLECTION_PROBE_BOX_PROJECTION_OFFSET',
+    '_EnableLightmap': 'LIGHTMAP', '_EnableLightFalloff': 'LIGHT_FALLOFF', '_EnablePrivatePointLight': 'INSTANCED_PRIVATE_POINT_LIGHT',
+    '_EnableOcclusion': 'OCCLUSION', '_EnableOcclusionDetail': 'OCCLUSION_DETAIL', '_EnableEmissionMask': 'EMISSION_MASK',
+    '_EnableSecondaryEmissionMask': 'SECONDARY_EMISSION_MASK', '_EnableHeightFog': 'HEIGHT_FOG',
+    '_EnableHeightFogSoften': 'HEIGHT_FOG_DEPTH_SOFTEN', '_EnableGroundFade': 'GROUND_FADE',
+    '_EnableDistanceDarkening': 'DISTANCE_DARKENING', '_EnableNoiseDithering': 'NOISE_DITHERING', '_EnableRimDim': 'ENABLE_RIM_DIM',
+}
+
+
 class Converter:
     def __init__(self, game, name, reference):
         self.reference = reference_materials(reference)
@@ -393,6 +405,10 @@ class Converter:
         floats['_UseFogForLights'] = int('USE_FOG_FOR_LIGHTS' in keywords)
         floats['_EnableYAxisBillboard'] = int('ENABLE_Y_AXIS_BILLBOARD' in keywords)
         floats['_EnableFog'] = int('FOG' in keywords or 'ENABLE_FOG' in keywords)
+        if data['family'] == 'lit':
+            # (in the engine's own materials each of these follows its keyword without exception)
+            for engine, keyword in LIT_KEYWORD_FLAGS.items():
+                floats[engine] = int(keyword in keywords)
 
     def renderers(self):
         for go_id, comps in self.go_components.items():
@@ -761,6 +777,26 @@ class Converter:
             'Ranges': [num(r['x']), num(r['y']), num(r['z'])], 'XCurve': curve(t['_xAnimationCurve']), 'YCurve': curve(t['_yAnimationCurve']),
             'ZCurve': curve(t['_zAnimationCurve']), 'enabled': bool(t['m_Enabled']),
         }, obj.path_id)
+
+    def c_SDFArrayManager(self, go_id, obj):
+        t = obj.read_typetree()
+        points, roots = [], []
+        for pptr in t['_sdfPointArray']:
+            ref = self.path_ref(pptr)
+            if ref is not None:
+                points.append(ref)
+                roots.append(num(self.scene.objects[pptr['m_PathID']].read_typetree().get('_sqrtRadius', 1)))
+        self.add(go_id, 'SdfPoints', {'Points': points, 'SqrtRadius': roots, 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
+    def c_SDFPoint(self, go_id, obj):
+        pass  # (its radius in the file is the game editor's own: the map sets it through the FX group)
+
+    def c_FloatSDFPointScaleEffect(self, go_id, obj):
+        t = obj.read_typetree()
+        point = self.path_ref(t['_colorPoints'])
+        if point is None:
+            return
+        self.add(go_id, 'SdfPointScaleFx', {'Point': point, 'ValueBounds': [num(t['_valueBounds']['x']), num(t['_valueBounds']['y'])], 'enabled': bool(t['m_Enabled'])}, obj.path_id)
 
     def c_FloatFxGroup(self, go_id, obj):
         self.fx_groups.append(obj.read_typetree())

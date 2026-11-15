@@ -626,6 +626,10 @@ export interface EnvironmentObjectData {
     LightReflection?: LightReflectionData[];
     PlanarReflection?: object[];
     TransformSpectrogram?: TransformSpectrogramData[];
+    /** The game's SDF points: the objects that are them, in its order. */
+    SdfPoints?: { Points: ObjectReference[]; SqrtRadius?: number[]; enabled: boolean }[];
+    /** An FX value as the root of an SDF point's radius. */
+    SdfPointScaleFx?: { Point: ObjectReference; ValueBounds: [number, number]; enabled: boolean }[];
   };
 }
 

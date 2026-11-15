@@ -213,6 +213,13 @@ export function createLitEnvironmentMaterial(
     emissionBrightness: data.floats._EmissionBrightness ?? 1,
     emissionFogSuppression: data.floats._EmissionFogSuppression ?? 0,
     emissionAlphaSource: (data.floats._Emission_Alpha_Source ?? 0) === 0 ? 'green' : 'textureAlpha',
+    emissionSdf: data.keywords.includes('_EMISSION_TEXTURE_SOURCE_SDF'),
+    emissionGradient: data.keywords.includes('_EMISSIONCOLORTYPE_GRADIENT') ? materialTexture(data, context, '_EmissionGradientTex') : undefined,
+    emissionGradientPosition: data.floats._EmissionGradientPosition ?? 0,
+    emissionGradientIntensity: data.floats._EmissionGradientIntensity ?? 1,
+    sdfNegativeIntensity: data.floats._SDFNegativeIntensity ?? 0.5,
+    sdfNoiseIntensity: data.floats._SDFNoiseIntensity ?? 0,
+    sdfPointIntensity: data.floats._SDFPointIntensity ?? 1,
     emissionWhiteBoost:
       data.floats._EmissionBloomType === 1 ||
       data.keywords.includes('_EMISSIONCOLORTYPE_WHITEBOOST') ||

@@ -1,3 +1,4 @@
+import { setSdfPoints } from '../materials/sdf-points';
 import { buildEnvironmentSpectrograms } from './environment-spectrogram';
 import type { ChromaEnvironmentData } from '../../core/chroma-environment';
 import { buildChromaEnvironmentVariant } from './chroma-environment';
@@ -36,6 +37,18 @@ export function buildEnvironment(
   const glsColorGroups = buildEnvironmentGlsColors(variant.data, scene, lighting);
   const glsFxGroups = buildEnvironmentGlsFxGroups(variant.data, scene.objectShaderMaterials, scene.nodes);
   const spectrograms = buildEnvironmentSpectrograms(variant.data, scene.nodes);
+  setSdfPoints(
+    variant.data.objects.flatMap((object) =>
+      (object.components?.SdfPoints ?? []).flatMap((item) =>
+        item.enabled
+          ? item.Points.flatMap((point, index) => {
+              const node = scene.nodes[point.obj];
+              return node === undefined ? [] : [{ node, sqrtRadius: item.SqrtRadius?.[index] ?? 1 }];
+            })
+          : [],
+      ),
+    ),
+  );
   scene.root.traverse((node) => {
     node.updateMatrix();
     node.matrixAutoUpdate = false;

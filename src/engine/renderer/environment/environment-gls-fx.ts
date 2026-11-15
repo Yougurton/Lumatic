@@ -1,3 +1,4 @@
+import { setSdfPointRadius } from '../materials/sdf-points';
 import { MathUtils, Vector3, type Group, type ShaderMaterial } from 'three';
 
 import { shaderNumberUniform, shaderUniformValue } from '../materials/shared';
@@ -168,6 +169,17 @@ export function buildEnvironmentGlsFxGroups(
               entry.target.visible = entry.visible;
             });
           },
+        },
+      ];
+    }
+    if (reference.component === 'SdfPointScaleFx') {
+      const fx = componentAt(data, reference.obj, 'SdfPointScaleFx', componentIndex);
+      const target = fx?.enabled === true ? nodes[fx.Point.obj] : undefined;
+      if (fx === undefined || target === undefined) return [];
+      return [
+        {
+          apply: (value) => setSdfPointRadius(target, MathUtils.clamp(value, fx.ValueBounds[0], fx.ValueBounds[1])),
+          reset: () => setSdfPointRadius(target),
         },
       ];
     }

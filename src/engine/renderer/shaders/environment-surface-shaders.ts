@@ -270,6 +270,15 @@ uniform float _SecondaryEmissionGain;
 uniform float _ReflectionIntensity;
 uniform vec3 _EmissionTexColor;
 uniform float _EmissionTexColorAlpha;
+#ifdef EMISSION_SOURCE_SDF
+uniform vec4 _SDFPointArray[4];
+uniform sampler2D _EmissionGradientTex;
+uniform float _EmissionGradientPosition;
+uniform float _EmissionGradientIntensity;
+uniform float _SDFPointIntensity;
+uniform float _SDFNegativeIntensity;
+uniform float _SDFNoiseIntensity;
+#endif
 uniform float _EmissionBrightness;
 uniform float _EmissionFogSuppression;
 uniform float _EmissionTexBloomIntensity;
@@ -460,6 +469,9 @@ void main() {
   #endif
   float bloomEmission = 0.0;
   float fogSuppression = 1.0;
+  #ifdef EMISSION_SOURCE_SDF
+  vec3 sdfEmission = vec3(0.0);
+  #endif
   #ifdef VERTEX_EMISSION
   float vertexEmissionT = clamp(
     (vVertexColor.g - _VertexEmissionThreshold) / (1.0 - _VertexEmissionThreshold),
@@ -474,6 +486,38 @@ void main() {
   #endif
   #ifdef EMISSION_TEXTURE
   vec4 emission = texture2D(_EmissionTex, vUv * _EmissionTexScale + _EmissionTexOffset);
+    #ifdef EMISSION_SOURCE_SDF
+    // (the game's own shader is not readable. Taken so, by its frames: away from the points the surface
+    // glows with the "negative" strength, inside a point's radius — the square of what the game passes —
+    // it rises to the "point" strength at the point itself, the nearest point winning; and the noise the
+    // game lays over it, which is not drawn here, adds its mean)
+    float sdfGlow = 0.0;
+    for (int sdfIndex = 0; sdfIndex < 4; sdfIndex++) {
+      vec4 sdfPoint = _SDFPointArray[sdfIndex];
+      float sdfRadius = sdfPoint.w * sdfPoint.w;
+      if (sdfRadius > 0.0001) {
+        sdfGlow = max(sdfGlow, 1.0 - clamp(distance(vWorldPos, sdfPoint.xyz) / sdfRadius, 0.0, 1.0));
+      }
+    }
+    sdfGlow = sdfGlow * sdfGlow * (3.0 - 2.0 * sdfGlow);
+    float sdfField = min(
+      max(1.0, _SDFPointIntensity),
+      mix(_SDFNegativeIntensity, _SDFPointIntensity, sdfGlow) + 0.5 * max(0.0, _SDFNoiseIntensity)
+    );
+    // (the light's strength dims the colour as well: here it is not a texture's own alpha)
+    emission = vec4(vec3(sdfField * _EmissionTexColorAlpha), sdfField);
+      #ifdef EMISSION_COLOR_GRADIENT
+      // (coloured from the gradient texture where the map puts it — the game's own are a strip read
+      // along and a square of hues read upwards — and lit by the light's colour)
+      vec3 sdfGradient = texture2D(
+        _EmissionGradientTex,
+        vec2(fract(_EmissionGradientPosition + sdfGlow * 0.25), fract(_EmissionGradientPosition))
+      ).rgb
+        * _EmissionGradientIntensity;
+      vec3 sdfLight = _EmissionColor * _EmissionColorAlpha;
+      emission = vec4(sdfGradient * sdfLight * sdfField, max(max(sdfLight.r, sdfLight.g), sdfLight.b) * sdfField);
+      #endif
+    #endif
     #ifdef EMISSION_MASK
     vec2 primaryMaskUv = vUv;
       #ifdef EMISSION_MASK_SECONDARY_UV
@@ -513,12 +557,22 @@ void main() {
     vec4 finalEmission = emission * vec4(_EmissionTexColor, _EmissionTexColorAlpha)
       * _EmissionBrightness;
     bloomEmission = finalEmission.a;
+      #ifdef EMISSION_SOURCE_SDF
+      // (by the game's frames these surfaces keep their colour at any distance: the glow is added
+      // after the fog, which takes only what is under it)
+      sdfEmission = finalEmission.rgb;
+      #else
     calculated += finalEmission.rgb;
+      #endif
     fogSuppression = 1.0 - bloomEmission * _EmissionFogSuppression;
       #ifdef EMISSION_WHITE_BOOST
       float whiteBoostSignal = bloomEmission * bloomEmission * _EmissionTexWhiteBoostMultiplier;
       float whiteEnergy = whiteBoostSignal * whiteBoostSignal * 0.997;
+      #ifdef EMISSION_SOURCE_SDF
+      sdfEmission += vec3(whiteEnergy);
+      #else
       calculated += vec3(whiteEnergy);
+      #endif
       #endif
     #endif
   #endif
@@ -541,6 +595,9 @@ void main() {
   color.rgb = chroToneMap(color.rgb);
   #endif
   color = applyChroFog(color, vScreenPos, vWorldPos, _FogStartOffset, _FogScale * fogSuppression);
+  #ifdef EMISSION_SOURCE_SDF
+  color.rgb += sdfEmission;
+  #endif
   if (_DistanceDarkeningEnabled != 0.0) {
     vec3 offset = vWorldPos - _DarkeningCenter;
     float distanceAlongAxis = max(0.0, dot(offset, normalize(_DarkeningDirection)));

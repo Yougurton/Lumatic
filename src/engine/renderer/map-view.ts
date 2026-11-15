@@ -27,6 +27,7 @@ import {
 import { HeckBaseProviderRuntime } from '../core/animation/base-provider';
 import { songBpmTimeToSeconds } from '../core/beatmap/bpm';
 import { applyEnvironmentSpectrograms } from './environment/environment-spectrogram';
+import { hasSdfPoints, updateSdfPoints } from './materials/sdf-points';
 import type { InfoColorScheme } from '../core/beatmap/info';
 import type { ChromaEnvironmentData } from '../core/chroma-environment';
 import type { EnvironmentData } from './environment/types';
@@ -828,6 +829,7 @@ export class MapView implements RenderView {
     if (this.environment !== null) {
       const fog = this.environmentLights.update(now, this.baseProviders);
       if (fog !== undefined) this.pipeline.setFogParams(fog);
+      if (hasSdfPoints()) updateSdfPoints();
       if (this.environment.spectrograms.length > 0) {
         applyEnvironmentSpectrograms(this.environment.spectrograms, this.spectrumSource?.(songBpmTimeToSeconds(now, data?.songBpm ?? 120)) ?? null);
       }
