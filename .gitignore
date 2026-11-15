@@ -4,3 +4,4 @@ dist-electron/
 release/
 *.log
 branding/lumatic-logos.zip
+installer/build-info.iss
