@@ -176,6 +176,17 @@ export function createLitEnvironmentMaterial(
     metallicTextureEnabled: data.keywords.includes('_METALLIC_TEXTURE_MPM_R'),
     smoothnessTextureSource,
     occlusionEnabled: data.keywords.includes('OCCLUSION') && data.keywords.includes('_OCCLUSION_SOURCE_MPM_B'),
+    emissionDistortion:
+      data.keywords.includes('DISTORTION_SIMPLE') && data.keywords.includes('_DISTORTION_TARGET_EMISSIONTEX')
+        ? materialTexture(data, context, '_DistortionTex')
+        : undefined,
+    distortionStrength: data.floats._DistortionStrength ?? 0,
+    distortionAxes: [data.colors._DistortionAxes?.[0] ?? 1, data.colors._DistortionAxes?.[1] ?? 1],
+    distortionPanning: [data.colors._DistortionPanning?.[0] ?? 0, data.colors._DistortionPanning?.[1] ?? 0],
+    occlusionDirt:
+      data.keywords.includes('OCCLUSION') && !data.keywords.some((keyword) => keyword.startsWith('_OCCLUSION_SOURCE_'))
+        ? materialTexture(data, context, '_DirtTex')
+        : undefined,
     occlusionBeforeEmission: data.keywords.includes('OCCLUSION_BEFORE_EMISSION'),
     occlusionIntensity: data.floats._OcclusionIntensity ?? 1,
     occlusionDetail: dirtDetail,

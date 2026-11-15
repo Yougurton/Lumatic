@@ -1,4 +1,5 @@
 import { setSdfPointRadius } from '../materials/sdf-points';
+import { setSpectrumPropertyMultiplier } from './environment-spectrogram';
 import { MathUtils, Vector3, type Group, type ShaderMaterial } from 'three';
 
 import { shaderColorUniform, shaderNumberUniform, shaderUniformValue } from '../materials/shared';
@@ -201,6 +202,21 @@ export function buildEnvironmentGlsFxGroups(
           apply: (value) => setSdfPointRadius(target, MathUtils.clamp(value, fx.ValueBounds[0], fx.ValueBounds[1])),
           reset: () => setSdfPointRadius(target),
         },
+      ];
+    }
+    if (reference.component === 'StepMpbFx') {
+      const fx = componentAt(data, reference.obj, 'StepMpbFx', componentIndex);
+      if (fx?.enabled !== true) return [];
+      return [
+        materialFloatTarget([fx.MpbController], fx.PropertyName, (value) => Math.floor(value / fx.StepFactor) * fx.StepSize),
+      ];
+    }
+    if (reference.component === 'SpectrogramMultiplierFx') {
+      const fx = componentAt(data, reference.obj, 'SpectrogramMultiplierFx', componentIndex);
+      if (fx?.enabled !== true || fx.Spectrogram === null) return [];
+      const key = referenceKey(fx.Spectrogram);
+      return [
+        { apply: (value) => setSpectrumPropertyMultiplier(key, value), reset: () => setSpectrumPropertyMultiplier(key) },
       ];
     }
     if (reference.component === 'CollectionFx') {

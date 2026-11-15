@@ -271,8 +271,11 @@ export class EnvironmentTransformRuntime {
     for (const runtime of this.glsTranslationRuntime) {
       const firstEventTime = runtime.tween[0]?.time;
       if (!full || firstEventTime === undefined || beat < firstEventTime) {
+        // (only its own axis: a transform may be moved along another axis by another entry)
         for (const { target, value } of runtime.initial) {
-          target.position.copy(value);
+          if (runtime.entry.axis === 0) target.position.x = value.x;
+          else if (runtime.entry.axis === 1) target.position.y = value.y;
+          else target.position.z = value.z;
           changed.add(target);
         }
         continue;

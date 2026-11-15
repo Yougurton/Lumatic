@@ -75,6 +75,13 @@ export interface EnvironmentLitSettings {
   normalScale: number;
   emission?: MaterialTexture;
   emissionMask?: MaterialTexture;
+  /** Shifts where the emission texture is read. */
+  emissionDistortion?: MaterialTexture;
+  distortionStrength?: number;
+  distortionAxes?: [number, number];
+  distortionPanning?: [number, number];
+  /** The occlusion is the dirt texture's own (no packed surface texture gives it). */
+  occlusionDirt?: MaterialTexture;
   /** A picture as if inside the surface, showing in the glow of its vertices. */
   parallaxMap?: MaterialTexture;
   parallaxIntensity?: number;
@@ -223,6 +230,13 @@ export function createEnvironmentLitMaterial(
       Object.assign(defines, { OCCLUSION_BEFORE_EMISSION: 1 });
     }
   }
+  if (settings.emissionDistortion !== undefined && settings.emission !== undefined) {
+    Object.assign(defines, { DISTORTION_EMISSION: 1 });
+  }
+  if (settings.occlusionDirt !== undefined) {
+    Object.assign(defines, { OCCLUSION: 1, OCCLUSION_DIRT: 1 });
+    if (settings.occlusionBeforeEmission) Object.assign(defines, { OCCLUSION_BEFORE_EMISSION: 1 });
+  }
   if (settings.occlusionDetail !== undefined && settings.occlusionDetailEnabled) {
     Object.assign(defines, { OCCLUSION_DETAIL: 1 });
   }
@@ -278,6 +292,15 @@ export function createEnvironmentLitMaterial(
       ...textureUniforms('_MetalSmoothnessTex', settings.metalSmoothness),
       _OcclusionIntensity: { value: settings.occlusionIntensity },
       ...textureUniforms('_DirtDetailTex', settings.occlusionDetail),
+      ...(settings.occlusionDirt === undefined ? {} : textureUniforms('_DirtTex', settings.occlusionDirt)),
+      ...(settings.emissionDistortion === undefined
+        ? {}
+        : {
+            ...textureUniforms('_DistortionTex', settings.emissionDistortion),
+            _DistortionStrength: { value: settings.distortionStrength ?? 0 },
+            _DistortionAxes: { value: new Vector2(...(settings.distortionAxes ?? [1, 1])) },
+            _DistortionPanning: { value: new Vector2(...(settings.distortionPanning ?? [0, 0])) },
+          }),
       _OcclusionDetailOffset: {
         value: new Vector2(...settings.occlusionDetailOffset),
       },

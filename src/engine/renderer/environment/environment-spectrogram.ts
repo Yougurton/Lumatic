@@ -1,6 +1,8 @@
-import type { Group, Object3D } from 'three';
+import type { Group, IUniform, Object3D, ShaderMaterial } from 'three';
 
 import { SPECTRUM_SAMPLES } from '../../core/lighting/spectrogram';
+import { evaluateAnimationCurve, type AnimationCurveData } from './animation-curve';
+import { referenceKey, shaderMaterialsForMpbController } from './environment-component-utils';
 import type { EnvironmentData } from './types';
 
 /**
@@ -56,5 +58,54 @@ export function applyEnvironmentSpectrograms(spectrograms: readonly EnvironmentS
       }
       target.updateMatrix();
     }
+  }
+}
+
+/**
+ * Material properties that follow the spectrum (the game's SpectrogramRowPropertyAnimator): each takes
+ * one of the processed values through a curve and a multiplier, which an FX group may set. One
+ * environment is shown at a time, so they are kept here.
+ */
+interface SpectrumProperty {
+  uniforms: IUniform<number>[];
+  dataIndex: number;
+  curve: AnimationCurveData;
+  multiplier: number;
+  initialMultiplier: number;
+}
+
+let spectrumProperties: SpectrumProperty[] = [];
+const spectrumPropertyByKey = new Map<string, SpectrumProperty>();
+
+export function buildSpectrumProperties(data: EnvironmentData, objectMaterials: readonly ShaderMaterial[][]) {
+  spectrumProperties = [];
+  spectrumPropertyByKey.clear();
+  data.objects.forEach((object, obj) => {
+    (object.components?.SpectrogramMpbProperty ?? []).forEach((item, componentIndex) => {
+      if (!item.enabled) return;
+      const uniforms = shaderMaterialsForMpbController(data, objectMaterials, item.MpbController).flatMap((material) => {
+        const uniform: IUniform<number> | undefined = material.uniforms[item.PropertyName];
+        return uniform !== undefined && typeof uniform.value === 'number' ? [uniform] : [];
+      });
+      const property = { uniforms, dataIndex: item.DataIndex, curve: item.Curve, multiplier: item.Multiplier, initialMultiplier: item.Multiplier };
+      spectrumProperties.push(property);
+      spectrumPropertyByKey.set(referenceKey({ obj, component: 'SpectrogramMpbProperty', componentIndex }), property);
+    });
+  });
+}
+
+/** (no value: back to the environment's own) */
+export function setSpectrumPropertyMultiplier(key: string, multiplier?: number) {
+  const property = spectrumPropertyByKey.get(key);
+  if (property !== undefined) property.multiplier = multiplier ?? property.initialMultiplier;
+}
+
+export const hasSpectrumProperties = () => spectrumProperties.length > 0;
+
+export function applySpectrumProperties(samples: Float32Array | null) {
+  for (const property of spectrumProperties) {
+    const sample = samples === null ? 0 : (samples[property.dataIndex % SPECTRUM_SAMPLES] ?? 0);
+    const value = property.multiplier * evaluateAnimationCurve(property.curve, sample);
+    for (const uniform of property.uniforms) uniform.value = value;
   }
 }

@@ -245,6 +245,11 @@ uniform sampler2D _MetalSmoothnessTex;
 uniform vec2 _MetalSmoothnessTexScale;
 uniform vec2 _MetalSmoothnessTexOffset;
 uniform float _OcclusionIntensity;
+#ifdef OCCLUSION_DIRT
+uniform sampler2D _DirtTex;
+uniform vec2 _DirtTexScale;
+uniform vec2 _DirtTexOffset;
+#endif
 uniform sampler2D _DirtDetailTex;
 uniform vec2 _DirtDetailTexScale;
 uniform vec2 _DirtDetailTexOffset;
@@ -257,6 +262,14 @@ uniform float _NormalScale;
 uniform sampler2D _EmissionTex;
 uniform vec2 _EmissionTexScale;
 uniform vec2 _EmissionTexOffset;
+#ifdef DISTORTION_EMISSION
+uniform sampler2D _DistortionTex;
+uniform vec2 _DistortionTexScale;
+uniform vec2 _DistortionTexOffset;
+uniform float _DistortionStrength;
+uniform vec2 _DistortionAxes;
+uniform vec2 _DistortionPanning;
+#endif
 #ifdef PARALLAX_MAP
 uniform sampler2D _ParallaxMap;
 uniform vec2 _ParallaxMapScale;
@@ -483,7 +496,12 @@ void main() {
   calculated += reflection * reflectionWeight * _ReflectionIntensity;
   #endif
   #ifdef OCCLUSION
+    #ifdef OCCLUSION_DIRT
+  // (the surface's own picture — stone, dirt — darkening what the lights give it)
+  float occlusion = mix(1.0, texture2D(_DirtTex, vUv * _DirtTexScale + _DirtTexOffset).b, _OcclusionIntensity);
+    #else
   float occlusion = mix(1.0, packedSurface.b, _OcclusionIntensity);
+    #endif
     #ifdef OCCLUSION_DETAIL
     float detailOcclusion = texture2D(
       _DirtDetailTex,
@@ -527,13 +545,25 @@ void main() {
     * _EmissionColorAlpha * _EmissionColorAlpha;
   #endif
   #ifdef EMISSION_TEXTURE
+  vec2 emissionUv = vUv;
+    #ifdef DISTORTION_EMISSION
+  // (the game's shader is not readable. Taken so: the distortion texture's red and green shift where
+  // the emission texture is read, along the material's axes; the material's time offset — a map may
+  // step it — moves the pattern)
+  vec2 distortionShift = texture2D(
+    _DistortionTex,
+    (vUv + _DistortionPanning * materialTime + vec2(0.1234, 0.0723) * _TimeOffset) * _DistortionTexScale
+      + _DistortionTexOffset
+  ).rg - 0.5;
+  emissionUv += distortionShift * _DistortionAxes * _DistortionStrength * 2.0;
+    #endif
     #if defined(EMISSION_COLOR_GRADIENT) && !defined(EMISSION_SOURCE_SDF)
   vec4 emission = texture2D(
     _EmissionTex,
-    (vUv + _EmissionTexSpeed * materialTime) * _EmissionTexScale + _EmissionTexOffset
+    (emissionUv + _EmissionTexSpeed * materialTime) * _EmissionTexScale + _EmissionTexOffset
   );
     #else
-  vec4 emission = texture2D(_EmissionTex, vUv * _EmissionTexScale + _EmissionTexOffset);
+  vec4 emission = texture2D(_EmissionTex, emissionUv * _EmissionTexScale + _EmissionTexOffset);
     #endif
     #ifdef EMISSION_SOURCE_SDF
     // (the game's own shader is not readable. Taken so, by its frames: away from the points the surface

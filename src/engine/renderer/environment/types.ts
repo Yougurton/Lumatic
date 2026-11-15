@@ -615,6 +615,19 @@ export interface EnvironmentObjectData {
     SwitchGameObjectFx?: SwitchGameObjectFxData[];
     SwitchGameObjectArrayFx?: SwitchGameObjectArrayFxData[];
     CollectionFx?: CollectionFxData[];
+    /** An FX value in steps as a material property: floor(value / StepFactor) * StepSize. */
+    StepMpbFx?: { MpbController: ObjectReference; PropertyName: string; StepFactor: number; StepSize: number; enabled: boolean }[];
+    /** A material property following one value of the song's spectrum: Multiplier * Curve(value). */
+    SpectrogramMpbProperty?: {
+      MpbController: ObjectReference;
+      DataIndex: number;
+      PropertyName: string;
+      Multiplier: number;
+      Curve: AnimationCurveData;
+      enabled: boolean;
+    }[];
+    /** An FX value as the multiplier of a spectrum-driven property. */
+    SpectrogramMultiplierFx?: { Spectrogram: ObjectReference | null; enabled: boolean }[];
     ParametricSliceEndWidthFx?: ParametricSliceEndWidthFxData[];
     VertexDisplacementFx?: VertexDisplacementFxData[];
     BackgroundGradientController?: BackgroundGradientControllerData[];

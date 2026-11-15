@@ -132,6 +132,8 @@ class Converter:
         self.index = {}            # GameObject path id → output index
         self.comp_ref = {}         # game component path id → ObjectReference of what it became
         self.meshes = {}
+        self.collections = []
+        self.late_refs = []
         self.mesh_keys = {}
         self.materials = {}
         self.material_keys = {}
@@ -774,6 +776,34 @@ class Converter:
             'Property': t['_property'], 'StaticColor': color(t['_staticColor']), 'enabled': bool(t['m_Enabled']),
         }, obj.path_id)
 
+    def c_FloatFxGroupEffectCollectionTarget(self, go_id, obj):
+        # (its targets are other FX targets, some of them read later: their references are filled in at the end)
+        t = obj.read_typetree()
+        data = {'Targets': [], 'enabled': bool(t['m_Enabled'])}
+        self.add(go_id, 'CollectionFx', data, obj.path_id)
+        self.collections.append((data, [p['m_PathID'] for p in t['_floatFxGroupEffectTargets']]))
+
+    def c_StepFloatMaterialPropertyEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'StepMpbFx', {
+            'MpbController': self.comp_ref.get(t['_materialPropertyBlockController']['m_PathID']), 'PropertyName': t['_propertyName'],
+            'StepFactor': num(t['_stepFactor']), 'StepSize': num(t['_stepSize']), 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_SpectrogramRowPropertyAnimator(self, go_id, obj):
+        t = obj.read_typetree()
+        self.add(go_id, 'SpectrogramMpbProperty', {
+            'MpbController': self.comp_ref.get(t['_materialPropertyBlockController']['m_PathID']), 'DataIndex': int(t['_dataIndex']),
+            'PropertyName': t['_propertyName'], 'Multiplier': num(t['_multiplier']), 'Curve': curve(t['_animationCurve']),
+            'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_SpectrogramMultiplierFloatFxEffectTarget(self, go_id, obj):
+        t = obj.read_typetree()
+        data = {'Spectrogram': None, 'enabled': bool(t['m_Enabled'])}
+        self.add(go_id, 'SpectrogramMultiplierFx', data, obj.path_id)
+        self.late_refs.append((data, 'Spectrogram', t['_spectrogram']['m_PathID']))
+
     def c_FloatLocalScaleEffect(self, go_id, obj):
         t = obj.read_typetree()
         self.add(go_id, 'LocalScaleFx', {
@@ -905,6 +935,10 @@ class Converter:
     # ---- group effects ----
 
     def managers(self):
+        for data, path_ids in self.collections:
+            data['Targets'] = [r for r in (self.comp_ref.get(p) for p in path_ids) if r]
+        for data, key, path_id in self.late_refs:
+            data[key] = self.comp_ref.get(path_id)
         root = 0
         def manager(name, extra=None):
             index = len(self.objects)

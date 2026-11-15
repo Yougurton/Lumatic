@@ -1,7 +1,7 @@
 import { Mesh } from 'three';
 import { BLOOMFOG_BACKGROUND_LAYER } from '../bloomfog/pipeline';
 import { setSdfPoints } from '../materials/sdf-points';
-import { buildEnvironmentSpectrograms } from './environment-spectrogram';
+import { buildEnvironmentSpectrograms, buildSpectrumProperties } from './environment-spectrogram';
 import type { ChromaEnvironmentData } from '../../core/chroma-environment';
 import { buildChromaEnvironmentVariant } from './chroma-environment';
 import { CHROMA_MATERIAL_SUPPORT_ID, mergeChromaMaterialPresets } from './chroma-material-assets';
@@ -39,6 +39,7 @@ export function buildEnvironment(
   const glsColorGroups = buildEnvironmentGlsColors(variant.data, scene, lighting);
   const glsFxGroups = buildEnvironmentGlsFxGroups(variant.data, scene.objectShaderMaterials, scene.nodes);
   const spectrograms = buildEnvironmentSpectrograms(variant.data, scene.nodes);
+  buildSpectrumProperties(variant.data, scene.objectShaderMaterials);
   let prePassBackground = false;
   variant.data.objects.forEach((object, index) => {
     const prePass = object.components?.PrePassRenderer?.find((item) => item.enabled);
