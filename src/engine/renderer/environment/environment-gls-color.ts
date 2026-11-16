@@ -165,6 +165,22 @@ export function buildEnvironmentGlsColors(
     return '_Color';
   }
 
+  function controllerAlphaProperty(reference: ObjectReference) {
+    if (reference.component !== 'InstancedMaterialLightController') return undefined;
+    const setterReference =
+      data.objects[reference.obj]?.components?.InstancedMaterialLightController?.[reference.componentIndex ?? 0]
+        ?.MpbColorSetter;
+    const setter =
+      setterReference === undefined
+        ? undefined
+        : data.objects[setterReference.obj]?.components?.MaterialPropertyBlockColorSetter?.[
+            setterReference.componentIndex ?? 0
+          ];
+    return setter?.SendAlphaToProperty === 1 && setter.AlphaProperty !== undefined && setter.AlphaProperty !== ''
+      ? setter.AlphaProperty
+      : undefined;
+  }
+
   data.objects.forEach((object, objectIndex) => {
     for (const component of controlledMaterialTypes) {
       object.components?.[component]?.forEach((controller, componentIndex) => {
@@ -201,6 +217,7 @@ export function buildEnvironmentGlsColors(
           node: reference.component === 'ParametricBloomFogLightController' ? undefined : scene.nodes[reference.obj],
           materials: controllerMaterials(reference),
           colorProperty: controllerColorProperty(reference) ?? '_Color',
+          alphaProperty: controllerAlphaProperty(reference),
           segments: parametric?.segments ?? [],
           materialLights: parametric?.materialLights ?? [],
           transform: controllerColorTransform(reference),

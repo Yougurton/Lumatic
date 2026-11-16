@@ -1,22 +1,34 @@
 import { ACES_CHUNK, BASE_COLOR_CHUNK, DXT5_NORMAL_CHUNK, FOG_CHUNK } from './chunks';
 
 // (a volume texture of the game — its 3D noise — as the converter lays it out: its slices side by
-// side in an atlas, the first at the bottom left. Read at two slices and blended, always at the full
-// size: a neighbouring pixel may fall on another slice's tile, and the jump would pick a blurred
-// level of the atlas)
+// side in an atlas, the first at the bottom left. Read texel by texel and blended in all three
+// directions, wrapping as the game's texture does: the same values the game's sampler gives)
 const VOLUME_ATLAS_CHUNK = /* glsl */ `
-float volumeAtlasSlice(sampler2D atlas, vec4 volume, vec2 p, float slice) {
-  float columns = volume.w;
-  float rows = ceil(volume.z / columns);
-  slice = mod(slice, volume.z);
-  vec2 tile = vec2(mod(slice, columns), floor(slice / columns));
-  vec2 inTile = fract(p) * (volume.xy - 1.0) + 0.5;
-  return textureLod(atlas, (tile * volume.xy + inTile) / (volume.xy * vec2(columns, rows)), 0.0).r;
+float volumeAtlasTexel(sampler2D atlas, vec4 volume, ivec3 texel) {
+  ivec3 size = ivec3(volume.xyz);
+  int columns = int(volume.w);
+  ivec3 wrapped = ((texel % size) + size) % size;
+  ivec2 tile = ivec2(wrapped.z % columns, wrapped.z / columns);
+  return texelFetch(atlas, tile * size.xy + wrapped.xy, 0).r;
 }
 float volumeAtlas(sampler2D atlas, vec4 volume, vec3 p) {
-  float z = fract(p.z) * volume.z - 0.5;
-  float slice = floor(z);
-  return mix(volumeAtlasSlice(atlas, volume, p.xy, slice), volumeAtlasSlice(atlas, volume, p.xy, slice + 1.0), z - slice);
+  vec3 place = fract(p) * volume.xyz - 0.5;
+  vec3 base = floor(place);
+  vec3 f = place - base;
+  ivec3 i = ivec3(base);
+  float c000 = volumeAtlasTexel(atlas, volume, i);
+  float c100 = volumeAtlasTexel(atlas, volume, i + ivec3(1, 0, 0));
+  float c010 = volumeAtlasTexel(atlas, volume, i + ivec3(0, 1, 0));
+  float c110 = volumeAtlasTexel(atlas, volume, i + ivec3(1, 1, 0));
+  float c001 = volumeAtlasTexel(atlas, volume, i + ivec3(0, 0, 1));
+  float c101 = volumeAtlasTexel(atlas, volume, i + ivec3(1, 0, 1));
+  float c011 = volumeAtlasTexel(atlas, volume, i + ivec3(0, 1, 1));
+  float c111 = volumeAtlasTexel(atlas, volume, i + ivec3(1, 1, 1));
+  return mix(
+    mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
+    mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y),
+    f.z
+  );
 }
 `;
 
@@ -664,15 +676,16 @@ void main() {
     float sdfStrength = min(_EmissionTexColorAlpha, 1.0);
     emission = vec4(vec3(sdfField * sdfStrength * sdfStrength), sdfField);
       #ifdef EMISSION_COLOR_GRADIENT
-      // (as the game's own shader does it, read from its compiled code: each point adds its reach —
-      // its radius less the square root of the distance — times the point strength, a negative point
-      // multiplies by one less its reach times the negative strength; the 3D noise times its intensity
-      // is added to that; the sum, times the gradient's intensity, is the place across the gradient
-      // texture (which repeats) and also how bright its colour is, up to full at 1; the map's position
-      // is the place up it. Lit by the light's colour and strength)
+      // (as the game's own shader does it, read from its compiled code and its parameter table: each
+      // point adds its reach — its radius less the square root of the distance — times the point
+      // strength, a negative point multiplies by one less its reach times the negative strength; the 3D
+      // noise times its intensity is added to that; the sum, times the emission brightness, is the place
+      // across the gradient texture (which repeats) and also how bright its colour is, up to full at 1;
+      // the map's position is the place up it. The light does not tint it: its strength comes in as the
+      // gradient intensity — the game's light sends it there — and scales the colour and the glow)
       float sdfReach = 0.0;
       float sdfDim = 1.0;
-      for (int sdfIndex = 0; sdfIndex < 4; sdfIndex++) {
+      for (int sdfIndex = 0; sdfIndex < 3; sdfIndex++) {
         vec4 sdfPoint = _SDFPointArray[sdfIndex];
         float reach = max(abs(sdfPoint.w) - sqrt(distance(vWorldPos, sdfPoint.xyz)), 0.0);
         if (sdfPoint.w > 0.0) sdfReach += reach * _SDFPointIntensity;
@@ -680,13 +693,16 @@ void main() {
       }
       vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
       float sdfNoiseValue = sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift);
-      float sdfPlace = (sdfReach * sdfDim + sdfNoiseValue * _SDFNoiseIntensity) * _EmissionGradientIntensity;
+      float sdfPlace = (sdfReach * sdfDim + sdfNoiseValue * _SDFNoiseIntensity) * _EmissionBrightness;
       vec4 sdfGradient = texture2D(
         _EmissionGradientTex,
         vec2(sdfPlace, fract(_EmissionGradientPosition + _EmissionGradientPanningSpeed * 0.05 * materialTime))
       );
       vec3 sdfColor = clamp(sdfGradient.rgb * sdfPlace, 0.0, 1.0);
-      emission = vec4(sdfColor * _EmissionColor * _EmissionColorAlpha, 1.0);
+      emission = vec4(
+        sdfColor * _EmissionGradientIntensity * _EmissionTexColor * _EmissionTexColorAlpha,
+        _EmissionTexBloomIntensity * _EmissionGradientIntensity
+      );
       #endif
     #endif
     #ifdef EMISSION_MASK
@@ -736,8 +752,12 @@ void main() {
     calculated += visibleEmissionColor;
     fogSuppression = 1.0 - visibleEmission * _EmissionFogSuppression * _EmissionTexColorAlpha;
     #else
+      #if defined(EMISSION_SOURCE_SDF) && defined(EMISSION_COLOR_GRADIENT)
+    vec4 finalEmission = emission;
+      #else
     vec4 finalEmission = emission * vec4(_EmissionTexColor, _EmissionTexColorAlpha)
       * _EmissionBrightness;
+      #endif
     bloomEmission = finalEmission.a;
       #ifdef EMISSION_SOURCE_SDF
       // (by the game's frames these surfaces keep their colour at any distance: the glow is added

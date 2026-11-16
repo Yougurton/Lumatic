@@ -109,6 +109,7 @@ export class EnvironmentLightRuntime {
   private readonly glsDirectMaterials: ({ material: ShaderMaterial } & {
       controlled: ControlledLight;
       colorProperty: string;
+      alphaProperty?: string;
     })[] = [];
   private readonly lightEventsByType = new Map<number, MapRenderData['lightEvents']>();
   private readonly lightEventsByBinding = new Map<EnvironmentLightBinding, MapRenderData['lightEvents']>();
@@ -360,6 +361,7 @@ export class EnvironmentLightRuntime {
             material,
             controlled,
             colorProperty: runtime.target.colorProperty,
+            alphaProperty: runtime.target.alphaProperty,
           });
         }
       }
@@ -451,7 +453,13 @@ export class EnvironmentLightRuntime {
         }
       }
     }
-    for (const { material, controlled, colorProperty } of this.glsDirectMaterials) {
+    for (const { material, controlled, colorProperty, alphaProperty } of this.glsDirectMaterials) {
+      // (the game's light may send its strength to another property as well: the spheres' gradient
+      // intensity)
+      if (alphaProperty !== undefined) {
+        const sent = material.uniforms[alphaProperty];
+        if (sent !== undefined && typeof sent.value === 'number') sent.value = controlled.alpha;
+      }
       const color = shaderColorUniform(material, colorProperty);
       if (color !== undefined) this.setControlledMaterialColor(color, controlled.color);
       const alpha = material.uniforms[`${colorProperty}Alpha`];

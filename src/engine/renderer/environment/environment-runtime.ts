@@ -83,6 +83,8 @@ export interface EnvironmentGlsColorTarget {
   node?: Object3D;
   materials: ShaderMaterial[];
   colorProperty: string;
+  /** A float property the light's strength is written to as well (the game's "send alpha to property"). */
+  alphaProperty?: string;
   segments: EnvironmentLightSegment[];
   materialLights: EnvironmentMaterialLight[];
   transform: (color: Rgb, alpha: number) => { color: Rgb; alpha: number; visible: boolean };

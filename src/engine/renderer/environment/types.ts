@@ -476,6 +476,9 @@ export interface MaterialPropertyBlockColorSetterData {
   Controller: ObjectReference;
   Property: string;
   MultiplyWithAlpha: number;
+  /** (1: the light's strength is written to AlphaProperty too) */
+  SendAlphaToProperty?: number;
+  AlphaProperty?: string;
   enabled: boolean;
 }
 
