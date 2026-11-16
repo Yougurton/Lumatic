@@ -57,7 +57,7 @@ function linearTextureAssets(data: EnvironmentData) {
       ].flatMap((property) => textures[property]?.asset ?? []);
       // (the game's own word, where it is given: its hue gradients are stored as linear data, its 3D
       // noise as sRGB)
-      for (const property of ['_EmissionGradientTex', '_SDFNoiseTex']) {
+      for (const property of ['_EmissionGradientTex', '_SDFNoiseTex', '_VertexDisplacement3DTexture']) {
         const texture = textures[property];
         if (texture?.colorSpace === 'linear') assets.push(texture.asset);
       }

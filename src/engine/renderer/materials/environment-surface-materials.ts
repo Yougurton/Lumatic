@@ -57,6 +57,16 @@ export interface EnvironmentLitSettings {
   displacementBidirectional: boolean;
   displacementStrength: number;
   displacementAxisMultiplier: Rgb;
+  /** The game's 3D noise pushing the vertices out (its "vertex displacement mask" from a 3D texture). */
+  displacement3d?: {
+    texture: Texture;
+    volume: [number, number, number, number];
+    scale: number;
+    offset: [number, number, number];
+    panning: [number, number, number];
+    maskMultiplier: number;
+    maskOffset: number;
+  };
   meshPackingEnabled: boolean;
   meshPackingId: number;
   diffuse?: MaterialTexture;
@@ -214,6 +224,9 @@ export function createEnvironmentLitMaterial(
     Object.assign(defines, { VERTEX_EMISSION_MAIN_EFFECT: 1 });
   }
   if (settings.displacementEnabled) Object.assign(defines, { VERTEX_DISPLACEMENT: 1 });
+  if (settings.displacementEnabled && settings.displacement3d !== undefined) {
+    Object.assign(defines, { VERTEX_DISPLACEMENT_3D: 1 });
+  }
   if (settings.displacementSpatial) Object.assign(defines, { DISPLACEMENT_SPATIAL: 1 });
   if (settings.displacementBidirectional) Object.assign(defines, { DISPLACEMENT_BIDIRECTIONAL: 1 });
   if (settings.meshPackingEnabled) Object.assign(defines, { MESH_PACKING: 1 });
@@ -418,6 +431,17 @@ export function createEnvironmentLitMaterial(
         value: new Vector3(...settings.displacementAxisMultiplier),
       },
       _MeshPackingId: { value: settings.meshPackingId },
+      ...(settings.displacement3d !== undefined
+        ? {
+            _VertexDisplacement3DTex: { value: settings.displacement3d.texture },
+            _VertexDisplacement3DVolume: { value: new Vector4(...settings.displacement3d.volume) },
+            _VertexDisplacement3DTexScale: { value: settings.displacement3d.scale },
+            _VertexDisplacement3DTexOffset: { value: new Vector3(...settings.displacement3d.offset) },
+            _VertexDisplacement3DTexPanning: { value: new Vector3(...settings.displacement3d.panning) },
+            _VertexDisplacementMaskMultiplier: { value: settings.displacement3d.maskMultiplier },
+            _VertexDisplacementMaskOffset: { value: settings.displacement3d.maskOffset },
+          }
+        : {}),
     },
   });
   if (settings.customTime === 'continuous') {

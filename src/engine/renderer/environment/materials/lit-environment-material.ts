@@ -168,6 +168,7 @@ export function createLitEnvironmentMaterial(
       (data.floats._DisplacementBidirectional ?? 0) !== 0 || data.keywords.includes('DISPLACEMENT_BIDIRECTIONAL'),
     displacementStrength: data.floats._DisplacementStrength ?? 0.1,
     displacementAxisMultiplier: unityVectorColor(data.colors._DisplacementAxisMultiplier, [1, 1, 1]),
+    displacement3d: displacement3d(data, context),
     meshPackingEnabled: data.keywords.includes('MESH_PACKING'),
     meshPackingId: data.floats._MeshPackingId ?? 0,
     diffuse: (data.floats._EnableDiffuseTexture ?? 0) !== 0 ? diffuse : undefined,
@@ -263,4 +264,26 @@ function sdfNoiseTexture(data: EnvironmentMaterialData, context: EnvironmentMate
   const volume = data.textures?._SDFNoiseTex?.volume;
   const texture = materialTexture(data, context, '_SDFNoiseTex');
   return volume === undefined || texture === undefined ? undefined : { texture: texture.texture, volume };
+}
+
+function displacement3d(data: EnvironmentMaterialData, context: EnvironmentMaterialContext) {
+  if (!data.keywords.includes('VERTEXDISPLACEMENT_MASK')) return undefined;
+  if (!data.keywords.includes('_VERTEXDISPLACEMENT_MASK_SOURCE_3D_TEXTURE')) return undefined;
+  const volume = data.textures?._VertexDisplacement3DTexture?.volume;
+  const texture = materialTexture(data, context, '_VertexDisplacement3DTexture');
+  if (volume === undefined || texture === undefined) return undefined;
+  const vector = (name: string): [number, number, number] => [
+    data.colors[name]?.[0] ?? 0,
+    data.colors[name]?.[1] ?? 0,
+    data.colors[name]?.[2] ?? 0,
+  ];
+  return {
+    texture: texture.texture,
+    volume,
+    scale: data.floats._VertexDisplacement3DTexScale ?? 1,
+    offset: vector('_VertexDisplacement3DTexOffset'),
+    panning: vector('_VertexDisplacement3DTexPanning'),
+    maskMultiplier: data.floats._VertexDisplacementMaskMultiplier ?? 1,
+    maskOffset: data.floats._VertexDisplacementMaskOffset ?? 0,
+  };
 }

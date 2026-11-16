@@ -1,6 +1,39 @@
 import { ACES_CHUNK, BASE_COLOR_CHUNK, DXT5_NORMAL_CHUNK, FOG_CHUNK } from './chunks';
 
+// (a volume texture of the game — its 3D noise — as the converter lays it out: its slices side by
+// side in an atlas, the first at the bottom left. Read at two slices and blended, always at the full
+// size: a neighbouring pixel may fall on another slice's tile, and the jump would pick a blurred
+// level of the atlas)
+const VOLUME_ATLAS_CHUNK = /* glsl */ `
+float volumeAtlasSlice(sampler2D atlas, vec4 volume, vec2 p, float slice) {
+  float columns = volume.w;
+  float rows = ceil(volume.z / columns);
+  slice = mod(slice, volume.z);
+  vec2 tile = vec2(mod(slice, columns), floor(slice / columns));
+  vec2 inTile = fract(p) * (volume.xy - 1.0) + 0.5;
+  return textureLod(atlas, (tile * volume.xy + inTile) / (volume.xy * vec2(columns, rows)), 0.0).r;
+}
+float volumeAtlas(sampler2D atlas, vec4 volume, vec3 p) {
+  float z = fract(p.z) * volume.z - 0.5;
+  float slice = floor(z);
+  return mix(volumeAtlasSlice(atlas, volume, p.xy, slice), volumeAtlasSlice(atlas, volume, p.xy, slice + 1.0), z - slice);
+}
+`;
+
 export const ENVIRONMENT_LIT_VERT = /* glsl */ `
+${VOLUME_ATLAS_CHUNK}
+#ifdef VERTEX_DISPLACEMENT_3D
+uniform sampler2D _VertexDisplacement3DTex;
+uniform vec4 _VertexDisplacement3DVolume;
+uniform float _VertexDisplacement3DTexScale;
+uniform vec3 _VertexDisplacement3DTexOffset;
+uniform vec3 _VertexDisplacement3DTexPanning;
+uniform float _VertexDisplacementMaskMultiplier;
+uniform float _VertexDisplacementMaskOffset;
+uniform float _TimeSeconds;
+uniform float _SongTime;
+uniform float _TimeOffset;
+#endif
 uniform vec3 _DisplacementAxisMultiplier;
 uniform float _DisplacementStrength;
 uniform float _MeshPackingId;
@@ -33,7 +66,28 @@ void main() {
   #ifdef MESH_PACKING
   if (abs(uv1.y - _MeshPackingId) > 0.1) localPosition = vec3(0.0);
   #endif
-  #ifdef VERTEX_DISPLACEMENT
+  #ifdef VERTEX_DISPLACEMENT_3D
+  // (as the game's own vertex shader does it, read from its compiled code: the 3D noise, read where
+  // the vertex stands in the game's world, pushes it along its normal — each axis by its own share —
+  // as far as the strength the map gives)
+  float displacementTime = _TimeSeconds;
+    #ifdef CUSTOM_TIME_SONG
+  displacementTime = _SongTime;
+    #elif defined(CUSTOM_TIME_FREEZE)
+  displacementTime = _TimeOffset;
+    #endif
+  vec4 displacementWorld = vec4(position, 1.0);
+    #ifdef USE_INSTANCING
+  displacementWorld = instanceMatrix * displacementWorld;
+    #endif
+  displacementWorld = modelMatrix * displacementWorld;
+  vec3 displacementPlace = vec3(displacementWorld.x, displacementWorld.y, -displacementWorld.z)
+    * _VertexDisplacement3DTexScale + _VertexDisplacement3DTexOffset
+    + _VertexDisplacement3DTexPanning * 0.1 * displacementTime;
+  float displacementNoise = volumeAtlas(_VertexDisplacement3DTex, _VertexDisplacement3DVolume, displacementPlace)
+    * _VertexDisplacementMaskMultiplier + _VertexDisplacementMaskOffset;
+  localPosition += localNormal * displacementNoise * _DisplacementStrength * _DisplacementAxisMultiplier;
+  #elif defined(VERTEX_DISPLACEMENT)
   vec3 displacement = color.rgb;
   #ifdef DISPLACEMENT_BIDIRECTIONAL
   displacement = displacement * 2.0 - 1.0;
@@ -213,6 +267,7 @@ void main() {
 `;
 
 export const ENVIRONMENT_LIT_FRAG = /* glsl */ `
+${VOLUME_ATLAS_CHUNK}
 uniform vec3 _DirectionalLightDirections[5];
 uniform vec3 _DirectionalLightColors[5];
 uniform vec3 _DirectionalLightPositions[5];
@@ -319,24 +374,10 @@ float sdfHash(vec3 p) {
   return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
 #ifdef SDF_NOISE_TEXTURE
-// (the game's own 3D noise, its slices side by side in an atlas: read at two slices and blended)
 uniform sampler2D _SDFNoiseTex;
 uniform vec4 _SDFNoiseVolume;
-float sdfNoiseSlice(vec2 p, float slice) {
-  float depth = _SDFNoiseVolume.z;
-  float columns = _SDFNoiseVolume.w;
-  float rows = ceil(depth / columns);
-  slice = mod(slice, depth);
-  vec2 tile = vec2(mod(slice, columns), floor(slice / columns));
-  vec2 inTile = fract(p) * (_SDFNoiseVolume.xy - 1.0) + 0.5;
-  // (read at the full size: a neighbouring pixel may fall on another slice's tile, and the jump
-  // would pick a blurred level of the atlas — dotted stripes over the spheres)
-  return textureLod(_SDFNoiseTex, (tile * _SDFNoiseVolume.xy + inTile) / (_SDFNoiseVolume.xy * vec2(columns, rows)), 0.0).r;
-}
 float sdfNoise(vec3 p) {
-  float z = fract(p.z) * _SDFNoiseVolume.z - 0.5;
-  float slice = floor(z);
-  return mix(sdfNoiseSlice(p.xy, slice), sdfNoiseSlice(p.xy, slice + 1.0), z - slice);
+  return volumeAtlas(_SDFNoiseTex, _SDFNoiseVolume, p);
 }
 #else
 // (a smooth noise over the world, in place of the game's 3D texture, when it is not taken)
