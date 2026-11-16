@@ -240,6 +240,7 @@ export function createLitEnvironmentMaterial(
     sdfNoiseScale: data.floats._SDFNoiseScale ?? 0,
     sdfNoisePanning: [data.colors._SDFNoisePanning?.[0] ?? 0, data.colors._SDFNoisePanning?.[1] ?? 0, data.colors._SDFNoisePanning?.[2] ?? 0],
     sdfPointIntensity: data.floats._SDFPointIntensity ?? 1,
+    sdfNoiseTexture: sdfNoiseTexture(data, context),
     emissionWhiteBoost:
       data.floats._EmissionBloomType === 1 ||
       data.keywords.includes('_EMISSIONCOLORTYPE_WHITEBOOST') ||
@@ -255,4 +256,10 @@ export function createLitEnvironmentMaterial(
     timeOffset: data.floats._TimeOffset ?? 0,
     fog: materialFog(data),
   });
+}
+
+function sdfNoiseTexture(data: EnvironmentMaterialData, context: EnvironmentMaterialContext) {
+  const volume = data.textures?._SDFNoiseTex?.volume;
+  const texture = materialTexture(data, context, '_SDFNoiseTex');
+  return volume === undefined || texture === undefined ? undefined : { texture: texture.texture, volume };
 }

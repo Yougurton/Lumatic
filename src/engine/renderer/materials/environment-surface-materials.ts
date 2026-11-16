@@ -116,6 +116,8 @@ export interface EnvironmentLitSettings {
   sdfNoiseScale?: number;
   sdfNoisePanning?: [number, number, number];
   sdfPointIntensity?: number;
+  /** The game's 3D noise for the points' surfaces, as an atlas of its slices. */
+  sdfNoiseTexture?: { texture: Texture; volume: [number, number, number, number] };
   emissionWhiteBoost: boolean;
   emissionWhiteBoostMultiplier: number;
   emissionMainEffect: boolean;
@@ -245,6 +247,7 @@ export function createEnvironmentLitMaterial(
     Object.assign(defines, { EMISSION_TEXTURE: 1 });
     if (settings.emissionGradient !== undefined) Object.assign(defines, { EMISSION_COLOR_GRADIENT: 1 });
     if (settings.emissionSdf === true) Object.assign(defines, { EMISSION_SOURCE_SDF: 1 });
+    if (settings.emissionSdf === true && settings.sdfNoiseTexture !== undefined) Object.assign(defines, { SDF_NOISE_TEXTURE: 1 });
     else if (settings.emissionAlphaSource === 'green') Object.assign(defines, { EMISSION_TEXTURE_SIMPLE: 1 });
     if (settings.emissionWhiteBoost) Object.assign(defines, { EMISSION_WHITE_BOOST: 1 });
     if (settings.emissionMainEffect) Object.assign(defines, { EMISSION_MAIN_EFFECT: 1 });
@@ -346,6 +349,12 @@ export function createEnvironmentLitMaterial(
             _SDFNoiseScale: { value: settings.sdfNoiseScale ?? 0 },
             _SDFNoisePanning: { value: new Vector3(...(settings.sdfNoisePanning ?? [0, 0, 0])) },
             _SDFPointIntensity: { value: settings.sdfPointIntensity ?? 1 },
+            ...(settings.sdfNoiseTexture !== undefined
+              ? {
+                  _SDFNoiseTex: { value: settings.sdfNoiseTexture.texture },
+                  _SDFNoiseVolume: { value: new Vector4(...settings.sdfNoiseTexture.volume) },
+                }
+              : {}),
           }
         : {}),
       _EmissionBrightness: { value: settings.emissionBrightness },

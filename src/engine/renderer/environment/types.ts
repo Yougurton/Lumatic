@@ -31,6 +31,9 @@ export interface EnvironmentTextureData {
   asset: string;
   scale: [number, number];
   offset: [number, number];
+  /** A volume texture's width, height and depth, its slices laid side by side in this many columns
+   *  of the image, the first at the bottom left. */
+  volume?: [number, number, number, number];
 }
 
 export interface EnvironmentMeshData {

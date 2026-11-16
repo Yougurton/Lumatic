@@ -152,6 +152,7 @@ class Converter:
         self.material_keys = {}
         self.textures = {}         # asset path → PIL image
         self.texture_keys = {}
+        self.texture_volumes = {}  # asset path → [width, height, depth, atlas columns] of a volume texture
 
     # ---- reading ----
 
@@ -319,6 +320,8 @@ class Converter:
             return None
         try:
             tex = pptr.read()
+            if tex.object_reader.type.name == 'Texture3D':
+                return self.texture3d(pptr, tex)
             if tex.object_reader.type.name != 'Texture2D':
                 self.unknown[f'texture type {tex.object_reader.type.name}'] += 1
                 return None
@@ -333,6 +336,41 @@ class Converter:
         except Exception as error:
             self.notes.append(f'texture: {type(error).__name__}: {error}')
             return None
+
+    def texture3d(self, pptr, tex):
+        """A volume texture (the game's 3D noise), laid out as its slices side by side in a square
+        atlas, the first slice at the bottom left as the game reads it."""
+        ident = (tex.object_reader.assets_file.name, pptr.path_id)
+        if ident not in self.texture_keys:
+            from PIL import Image
+            from UnityPy.helpers.ResourceReader import get_resource_data
+            t = tex.object_reader.read_typetree()
+            w, h, d = t['m_Width'], t['m_Height'], t['m_Depth']
+            channels = {3: 3, 4: 4, 5: 4, 1: 1, 63: 1}.get(t['m_Format'])
+            if channels is None:
+                self.unknown[f"texture 3D format {t['m_Format']}"] += 1
+                return None
+            stream = t.get('m_StreamData') or {}
+            data = get_resource_data(stream['path'], tex.object_reader.assets_file, stream['offset'], stream['size']) \
+                if stream.get('size') else bytes(t['image data'])
+            raw = bytes(data[:w * h * d * channels])
+            columns = math.ceil(math.sqrt(d))
+            rows = math.ceil(d / columns)
+            atlas = bytearray(columns * w * rows * h)
+            for z in range(d):
+                cx, cy = z % columns, z // columns
+                for y in range(h):
+                    line = raw[(z * h + y) * w * channels:(z * h + y + 1) * w * channels:channels]
+                    row = cy * h + y
+                    start = row * columns * w + cx * w
+                    atlas[start:start + w] = line
+            image = Image.frombytes('L', (columns * w, rows * h), bytes(atlas)).transpose(Image.FLIP_TOP_BOTTOM)
+            digest = hashlib.sha1(image.tobytes()).hexdigest()[:16]
+            asset = f'textures/game-{digest}.png'
+            self.textures[asset] = image
+            self.texture_keys[ident] = asset
+            self.texture_volumes[asset] = [w, h, d, columns]
+        return self.texture_keys[ident]
 
     def material_key(self, pptr):
         if pptr is None or pptr.path_id == 0:
@@ -359,6 +397,8 @@ class Converter:
             asset = self.texture(env.m_Texture)
             if asset is not None:
                 textures[name] = {'asset': asset, 'scale': vec(env.m_Scale, 'xy'), 'offset': vec(env.m_Offset, 'xy')}
+                if asset in self.texture_volumes:
+                    textures[name]['volume'] = self.texture_volumes[asset]
         data = {
             'name': mat.m_Name,
             'shader': mapped[0],

@@ -54,6 +54,7 @@ function linearTextureAssets(data: EnvironmentData) {
         '_EmissionMask',
         '_SecondaryEmissionMask',
         '_NormalTexture',
+        '_SDFNoiseTex',
       ].flatMap((property) => textures[property]?.asset ?? []);
       const main = textures._MainTex;
       if (

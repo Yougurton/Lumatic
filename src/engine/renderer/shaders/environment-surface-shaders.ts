@@ -56,12 +56,9 @@ void main() {
   vec4 viewPos = viewMatrix * worldPos;
   vWorldPos = worldPos.xyz;
   #ifdef EMISSION_SOURCE_SDF
-  // (where it is from its object's middle, in the world's size: a noise over it is the object's own)
-  vec4 sdfOrigin = vec4(0.0, 0.0, 0.0, 1.0);
-    #ifdef USE_INSTANCING
-    sdfOrigin = instanceMatrix * sdfOrigin;
-    #endif
-  vSdfLocal = worldPos.xyz - (modelMatrix * sdfOrigin).xyz;
+  // (the mesh's own coordinates: the noise over it is the object's own, however large it is drawn —
+  // by the game's frames a huge sphere is as smooth as a small one)
+  vSdfLocal = position;
   #endif
   vWorldNormal = normalize(mat3(modelMatrix) * instanceBasis * localNormal);
   #ifdef USE_TANGENT
@@ -320,7 +317,26 @@ float sdfHash(vec3 p) {
   p *= 17.0;
   return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
-// (a smooth noise over the world, in place of the game's 3D texture, which is not taken)
+#ifdef SDF_NOISE_TEXTURE
+// (the game's own 3D noise, its slices side by side in an atlas: read at two slices and blended)
+uniform sampler2D _SDFNoiseTex;
+uniform vec4 _SDFNoiseVolume;
+float sdfNoiseSlice(vec2 p, float slice) {
+  float depth = _SDFNoiseVolume.z;
+  float columns = _SDFNoiseVolume.w;
+  float rows = ceil(depth / columns);
+  slice = mod(slice, depth);
+  vec2 tile = vec2(mod(slice, columns), floor(slice / columns));
+  vec2 inTile = fract(p) * (_SDFNoiseVolume.xy - 1.0) + 0.5;
+  return texture2D(_SDFNoiseTex, (tile * _SDFNoiseVolume.xy + inTile) / (_SDFNoiseVolume.xy * vec2(columns, rows))).r;
+}
+float sdfNoise(vec3 p) {
+  float z = fract(p.z) * _SDFNoiseVolume.z - 0.5;
+  float slice = floor(z);
+  return mix(sdfNoiseSlice(p.xy, slice), sdfNoiseSlice(p.xy, slice + 1.0), z - slice);
+}
+#else
+// (a smooth noise over the world, in place of the game's 3D texture, when it is not taken)
 float sdfNoise(vec3 p) {
   vec3 cell = floor(p);
   vec3 f = fract(p);
@@ -333,6 +349,7 @@ float sdfNoise(vec3 p) {
     f.z
   );
 }
+#endif
 #endif
 uniform float _EmissionBrightness;
 uniform float _EmissionFogSuppression;
@@ -611,21 +628,39 @@ void main() {
       vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
       float sdfAcross = (sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift) - sdfNoise(sdfNoiseShift))
         * _SDFNoiseIntensity;
-      // (by the game's frames, its square of hues is read so: the map's position moves up it, one
-      // turn of the hues a unit; across it the place is a third in, moved by the noise and pushed to the
-      // white edge near a point — a strong noise spreads a surface over many hues and lights its peaks
-      // white)
-      // (a strip of hues — the flowers' — is read along by the position, moved by the noise and the
-      // points as before)
+      // (a square of hues — the spheres', the ribbons' — is read as the user's recordings of the game's
+      // editor show: the noise times its intensity is both the surface's glow — dark at no intensity,
+      // full by about 4 — and its place across the square, round and round from near its right edge (a
+      // turn every 4.25 of intensity: yellow, pink, red, yellow…); the map's position moves up it, one
+      // turn of the hues a unit; a points' glow lights the surface too)
+      if (textureSize(_EmissionGradientTex, 0).y > 8) {
+        float sdfNoiseField = sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift) * 0.5
+          * max(_SDFNoiseIntensity, 0.0);
+        float sdfSquareField = max(sdfNoiseField, sdfGlow * _SDFPointIntensity);
+        vec3 sdfSquare = texture2D(
+          _EmissionGradientTex,
+          vec2(fract(0.85 + sdfNoiseField), fract(_EmissionGradientPosition))
+        ).rgb * _EmissionGradientIntensity;
+        float sdfSquareLightStrength = min(_EmissionColorAlpha, 1.0);
+        vec3 sdfSquareLight = _EmissionColor * sdfSquareLightStrength * sdfSquareLightStrength;
+        float sdfSquareGlow = min(sdfSquareField, 1.0);
+        emission = vec4(
+          sdfSquare * sdfSquareLight * sdfSquareGlow,
+          max(max(sdfSquareLight.r, sdfSquareLight.g), sdfSquareLight.b) * sdfSquareGlow
+        );
+      } else {
+      // (a strip of hues — the rainbow variants' — is read along by the position, moved by the noise and the
+      // points)
       float sdfPlace = _EmissionGradientPosition + sdfGlow * 0.25;
-      vec2 sdfGradientUv = textureSize(_EmissionGradientTex, 0).y > 8
-        ? vec2(clamp(0.3 + sdfAcross + sdfGlow * 0.7, 0.0, 1.0), fract(_EmissionGradientPosition))
-        : vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace));
-      vec3 sdfGradient = texture2D(_EmissionGradientTex, sdfGradientUv).rgb
+      vec3 sdfGradient = texture2D(
+        _EmissionGradientTex,
+        vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace))
+      ).rgb
         * _EmissionGradientIntensity;
       float sdfLightStrength = min(_EmissionColorAlpha, 1.0);
       vec3 sdfLight = _EmissionColor * sdfLightStrength * sdfLightStrength;
       emission = vec4(sdfGradient * sdfLight * sdfField, max(max(sdfLight.r, sdfLight.g), sdfLight.b) * sdfField);
+      }
       #endif
     #endif
     #ifdef EMISSION_MASK
