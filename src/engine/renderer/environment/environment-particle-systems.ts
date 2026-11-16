@@ -1,10 +1,15 @@
 import {
   AddEquation,
+  BoxGeometry,
   BufferGeometry,
+  DoubleSide,
   CustomBlending,
   Euler,
   Float32BufferAttribute,
   Group,
+  InstancedBufferAttribute,
+  InstancedBufferGeometry,
+  Mesh,
   OneFactor,
   Points,
   Quaternion,
@@ -13,6 +18,7 @@ import {
   Vector3,
   Vector4,
   type Material,
+  type Texture,
 } from 'three';
 
 import { materialFogUniforms } from '../materials/shared';
@@ -116,6 +122,123 @@ void main() {
 `;
 }
 
+const MESH_PARTICLE_VERT = /* glsl */ `
+attribute float particleStart;
+attribute float particleLifetime;
+attribute float particleSize;
+attribute float particleRotation;
+uniform float _SongTime;
+uniform float _Cycle;
+uniform float _Prewarm;
+uniform float _RotationSpeed;
+varying float vAge;
+varying float vLifetime;
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec4 vScreenPos;
+void main() {
+  float elapsed = _SongTime - particleStart;
+  float alive = step(0.0, elapsed);
+  if (_Prewarm != 0.0) {
+    elapsed += _Cycle;
+    alive = 1.0;
+  }
+  float age = mod(max(elapsed, 0.0), _Cycle);
+  alive *= 1.0 - step(particleLifetime, age);
+  // (the mesh turned about its own z, by its start rotation and its spin since)
+  float angle = particleRotation + _RotationSpeed * age;
+  float sine = sin(angle);
+  float cosine = cos(angle);
+  vec3 local = position * particleSize * alive;
+  local.xy = mat2(cosine, sine, -sine, cosine) * local.xy;
+  vec4 worldPosition = modelMatrix * vec4(local, 1.0);
+  gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  vScreenPos = vec4((gl_Position.xy + gl_Position.ww) * 0.5, gl_Position.zw);
+  vAge = age;
+  vLifetime = particleLifetime;
+  vUv = uv;
+  vWorldPos = worldPosition.xyz;
+}
+`;
+
+function meshParticleFragmentShader(system: EnvironmentParticleSystemData) {
+  const fogColor = system.fogColor ?? system.name === 'BigSmokePS';
+  return /* glsl */ `
+uniform sampler2D _MainTex;
+uniform vec4 _Tint;
+uniform float _Brightness;
+uniform float _AlphaMultiplier;
+uniform float _StartAlpha;
+uniform float _FogStartOffset;
+uniform float _FogScale;
+varying float vAge;
+varying float vLifetime;
+varying vec2 vUv;
+varying vec3 vWorldPos;
+varying vec4 vScreenPos;
+${FOG_CHUNK}
+float particleAlpha(float t) {
+  ${alphaCurve(system.alphaKeys)}
+}
+void main() {
+  vec4 sampleColor = texture2D(_MainTex, vUv);
+  float textureAlpha = ${system.alphaChannelRed ? 'sampleColor.r' : 'sampleColor.a'};
+  float alpha = textureAlpha * _Tint.a * _AlphaMultiplier * _StartAlpha
+    * particleAlpha(clamp(vAge / max(vLifetime, 0.0001), 0.0, 1.0));
+  ${system.squareAlpha ? 'alpha *= alpha;' : ''}
+  ${
+    fogColor
+      ? // (the haze takes the colour of the fog behind it: it brightens the sky in its own pattern)
+        'vec3 color = chroFogColor(vScreenPos).rgb * _Tint.rgb * 2.0 * (1.0 + _Brightness) * 4.0;'
+      : 'vec3 color = _Tint.rgb * (1.0 + _Brightness);'
+  }
+  ${system.whiteBoost ? 'color += vec3(alpha);' : ''}
+  vec4 outputColor = vec4(color * alpha, alpha);
+  ${system.fogEnabled && !fogColor ? 'outputColor = applyTransparentLightFog(outputColor, vWorldPos, _FogStartOffset, _FogScale);' : ''}
+  if (outputColor.a <= 0.0001) discard;
+  ${
+    fogColor
+      ? // (the haze is drawn over the sky but writes no glow: its alpha would bloom the whole view white)
+        'outputColor.a = 0.0;'
+      : ''
+  }
+  gl_FragColor = outputColor;
+}
+`;
+}
+
+/** Particles drawn as a mesh each — the game's haze around the player (BigSmokePS): a few cubes
+ *  of smoke texture, 24 m across, that the player stands inside; each fades in and out over its
+ *  life and turns slowly about the track's axis. */
+function meshParticleGeometry(system: EnvironmentParticleSystemData) {
+  const box = new BoxGeometry(1, 1, 1);
+  const geometry = new InstancedBufferGeometry();
+  geometry.index = box.index;
+  geometry.setAttribute('position', box.getAttribute('position'));
+  geometry.setAttribute('uv', box.getAttribute('uv'));
+  const starts: number[] = [];
+  const lifetimes: number[] = [];
+  const sizes: number[] = [];
+  const rotations: number[] = [];
+  for (let index = 0; index < system.maxParticles; index += 1) {
+    starts.push(system.rate > 0 ? index / system.rate : 0);
+    lifetimes.push(system.lifetime[0] + (system.lifetime[1] - system.lifetime[0]) * random(index, 4));
+    sizes.push(system.size[0] + (system.size[1] - system.size[0]) * random(index, 5));
+    rotations.push(system.rotationRange[0] + (system.rotationRange[1] - system.rotationRange[0]) * random(index, 6));
+  }
+  geometry.setAttribute('particleStart', new InstancedBufferAttribute(new Float32Array(starts), 1));
+  geometry.setAttribute('particleLifetime', new InstancedBufferAttribute(new Float32Array(lifetimes), 1));
+  geometry.setAttribute('particleSize', new InstancedBufferAttribute(new Float32Array(sizes), 1));
+  geometry.setAttribute('particleRotation', new InstancedBufferAttribute(new Float32Array(rotations), 1));
+  geometry.instanceCount = system.maxParticles;
+  box.dispose();
+  return geometry;
+}
+
+function isMeshParticleSystem(system: EnvironmentParticleSystemData) {
+  return system.renderMode === 'mesh' || (system.renderMode === undefined && system.name === 'BigSmokePS');
+}
+
 function random(index: number, salt: number) {
   const value = Math.sin((index + 1) * 12.9898 + salt * 78.233) * 43_758.5453;
   return value - Math.floor(value);
@@ -203,6 +326,10 @@ export function buildEnvironmentParticleSystems(
   for (const [index, system] of systems.entries()) {
     const texture = context.textures?.get(system.texture);
     if (texture === undefined || system.maxParticles === 0 || system.rate <= 0) continue;
+    if (isMeshParticleSystem(system)) {
+      buildMeshParticleSystem(system, index, texture, context, root, geometries, materials);
+      continue;
+    }
     if (isPlayerEnvelopingSmoke(system)) continue;
     const geometry = particleGeometry(system);
     const material = new ShaderMaterial({
@@ -251,4 +378,60 @@ export function buildEnvironmentParticleSystems(
     geometries.set(`particle-system:${index}:${system.name}`, geometry);
     materials.add(material);
   }
+}
+
+function buildMeshParticleSystem(
+  system: EnvironmentParticleSystemData,
+  index: number,
+  texture: Texture,
+  context: EnvironmentMaterialContext,
+  root: Group,
+  geometries: Map<string, BufferGeometry>,
+  materials: Set<Material>,
+) {
+  const geometry = meshParticleGeometry(system);
+  const fogColor = system.fogColor ?? system.name === 'BigSmokePS';
+  const material = new ShaderMaterial({
+    vertexShader: MESH_PARTICLE_VERT,
+    fragmentShader: meshParticleFragmentShader(system),
+    uniforms: {
+      ...materialFogUniforms(context.fog, {
+        enabled: system.fogEnabled,
+        heightEnabled: system.heightFogEnabled,
+      }),
+      _MainTex: { value: texture },
+      _Tint: { value: new Vector4(...system.tint) },
+      _Brightness: { value: system.brightness },
+      _AlphaMultiplier: { value: system.alphaMultiplier },
+      _StartAlpha: { value: system.startAlpha ?? 1 },
+      _SongTime: context.songTime ?? { value: 0 },
+      _Cycle: { value: system.maxParticles / system.rate },
+      _Prewarm: { value: system.prewarm ? 1 : 0 },
+      _RotationSpeed: { value: system.rotationSpeed ?? (system.name === 'BigSmokePS' ? Math.PI / 180 : 0) },
+    },
+    defines: fogColor ? { FOG_COLOR_HAZE: 1 } : {},
+    transparent: true,
+    depthWrite: false,
+    side: DoubleSide,
+    blending: CustomBlending,
+    blendEquation: AddEquation,
+    blendSrc: OneFactor,
+    blendDst: OneFactor,
+    blendEquationAlpha: AddEquation,
+    blendSrcAlpha: OneFactor,
+    blendDstAlpha: OneFactor,
+  });
+  const node = new Group();
+  node.name = system.name;
+  node.position.set(...system.position);
+  node.quaternion.set(...system.rotation);
+  node.scale.set(...system.scale);
+  const mesh = new Mesh(geometry, material);
+  mesh.name = `${system.name}:particles`;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = system.sortingOrder;
+  node.add(mesh);
+  root.add(node);
+  geometries.set(`particle-system:${index}:${system.name}`, geometry);
+  materials.add(material);
 }

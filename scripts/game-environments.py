@@ -76,6 +76,19 @@ def num(v):
     return round(float(v), 7) if isinstance(v, float) else int(v)
 
 
+def quat_mul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz]
+
+
+def quat_apply(q, v):
+    x, y, z, w = q
+    conj = quat_mul(quat_mul(q, [v[0], v[1], v[2], 0.0]), [-x, -y, -z, w])
+    return conj[:3]
+
+
 def curve(c):
     return {'keys': [{'time': num(k['time']), 'value': num(k['value']), 'inSlope': num(k['inSlope']), 'outSlope': num(k['outSlope'])} for k in c['m_Curve']]}
 
@@ -494,7 +507,7 @@ class Converter:
             'BloomFogEnvironment', 'LightGroupRotationXTransform', 'LightGroupRotationYTransform', 'LightGroupRotationZTransform',
             'LightGroupTranslationXTransform', 'LightGroupTranslationYTransform', 'LightGroupTranslationZTransform',
             'LightColorGroup', 'LightRotationGroup', 'LightTranslationGroup', 'IgnoreForReflectionProbeBaking', 'BakeIdMapper',
-            'ColorArrayLightWithIdsGroupEntry', 'MaterialController',
+            'ColorArrayLightWithIdsGroupEntry', 'MaterialController', 'ParticleSystem', 'ParticleSystemRenderer',
         } | set(MANAGERS)
         # in the scene's order, so that the lights of the old event types get their ids in it
         order = sorted(self.go_components, key=lambda go_id: self.index.get(go_id, 1 << 30))
@@ -1039,6 +1052,108 @@ class Converter:
 
     # ---- the whole thing ----
 
+    # ---- particle systems ----
+
+    def particle_systems(self):
+        """The scene's particle systems, as the engine draws them: billboards, or a mesh per particle
+        (the haze around the player: a cube of smoke textures, BigSmokePS)."""
+        out = []
+        def world(index):
+            # (the object's transform in the environment, from its chain of parents)
+            pos, rot, scl = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0]
+            chain = []
+            while index >= 0:
+                chain.append(self.objects[index])
+                index = self.objects[index]['parent']
+            for o in reversed(chain):
+                p = [o['position'][i] * scl[i] for i in range(3)]
+                p = quat_apply(rot, p)
+                pos = [pos[i] + p[i] for i in range(3)]
+                rot = quat_mul(rot, o['rotation'])
+                scl = [scl[i] * o['scale'][i] for i in range(3)]
+            return pos, rot, scl
+        def active(index):
+            while index >= 0:
+                if not self.objects[index]['active']:
+                    return False
+                index = self.objects[index]['parent']
+            return True
+        def minmax(m):
+            # (a constant, or a random pick between two constants; curves are read as their constant)
+            low = m['minScalar'] if m['minMaxState'] == 3 else m['scalar']
+            return [num(float(low)), num(float(m['scalar']))]
+        for obj in self.scene.objects.values():
+            if obj.type.name != 'ParticleSystem':
+                continue
+            ps = obj.read()
+            go_id = ps.m_GameObject.path_id
+            index = self.index.get(go_id)
+            if index is None or not active(index):
+                continue
+            renderer = next((co for c, co in self.go_components.get(go_id, []) if c == 'ParticleSystemRenderer'), None)
+            if renderer is None:
+                continue
+            rt = renderer.read_typetree()
+            if not rt['m_Enabled'] or not rt['m_Materials']:
+                continue
+            t = obj.read_typetree()
+            initial, shape, emission, colors = t['InitialModule'], t['ShapeModule'], t['EmissionModule'], t['ColorModule']
+            name = self.objects[index]['name']
+            render_mode = rt['m_RenderMode']
+            mesh = None
+            if render_mode == 4:
+                try:
+                    mesh = renderer.read().m_Mesh.read().m_Name
+                except Exception:
+                    mesh = None
+                if mesh != 'Cube':
+                    self.unknown[f'particle mesh {mesh}'] += 1
+                    continue
+            elif render_mode != 0:
+                self.unknown[f'particle render mode {render_mode}'] += 1
+                continue
+            try:
+                mat = renderer.read().m_Materials[0].read()
+            except Exception:
+                continue
+            props = mat.m_SavedProperties
+            floats = {k: float(v) for k, v in props.m_Floats}
+            tint = next((color({k: getattr(c, k) for k in 'rgba'}) for k, c in props.m_Colors if k == '_TintColor'), [1, 1, 1, 1])
+            texture = next((self.texture(env.m_Texture) for k, env in props.m_TexEnvs if k == '_MainTex'), None)
+            if texture is None:
+                continue
+            keywords = set(getattr(mat, 'm_ValidKeywords', None) or [])
+            gradient = colors['gradient']['maxGradient']
+            alpha_keys = [[num(gradient[f'atime{i}'] / 65535), num(float(gradient[f'key{i}']['a']))] for i in range(gradient['m_NumAlphaKeys'])] \
+                if colors['enabled'] else [[0, 1], [1, 1]]
+            rotation_module = t.get('RotationModule', {})
+            spin = rotation_module['curve'] if rotation_module.get('enabled') else None
+            pos, rot, scl = world(index)
+            data = {
+                'name': name, 'path': name, 'position': [round(v, 7) for v in pos], 'rotation': [round(v, 7) for v in rot],
+                'scale': [round(v, 7) for v in scl], 'prewarm': bool(t['prewarm']), 'maxParticles': int(initial['maxNumParticles']),
+                'rate': num(float(emission['rateOverTime']['scalar'])), 'lifetime': minmax(initial['startLifetime']),
+                'speed': minmax(initial['startSpeed']), 'size': minmax(initial['startSize']), 'rotationRange': minmax(initial['startRotation']),
+                'shapeType': int(shape['type']) if shape['enabled'] else 0, 'shapeRadius': num(float(shape['radius']['value'])) if shape['enabled'] else 0,
+                'shapePosition': position(type('V', (), shape['m_Position'])), 'shapeRotation': [num(-float(shape['m_Rotation']['x'])) + 0.0, num(-float(shape['m_Rotation']['y'])) + 0.0, num(float(shape['m_Rotation']['z']))],
+                'shapeScale': [num(float(shape['m_Scale'][k])) for k in 'xyz'], 'randomDirection': num(float(shape['randomDirectionAmount'])),
+                'alphaKeys': alpha_keys, 'texture': texture, 'tint': tint,
+                'alphaChannelRed': '_ALPHACHANNEL_RED' in keywords, 'squareAlpha': 'SQUARE_ALPHA' in keywords,
+                'whiteBoost': '_WHITEBOOSTTYPE_MAINEFFECT' in keywords, 'brightness': num(floats.get('_BrightnessBoost', 0.0)),
+                'alphaMultiplier': num(floats.get('_AlphaMultiplier', 1.0)), 'fogEnabled': floats.get('_EnableFog', 0) != 0,
+                'heightFogEnabled': floats.get('_EnableHeightFog', 0) != 0, 'sortingOrder': int(rt.get('m_SortingOrder', 0)),
+                'startAlpha': num(float(initial['startColor']['maxColor']['a'])),
+            }
+            if mesh is not None:
+                data['renderMode'] = 'mesh'
+                data['mesh'] = 'cube'
+                data['rotationSpeed'] = num(float(spin['scalar'])) if spin is not None and spin['minMaxState'] == 0 else 0
+            if '_FOGTYPE_COLOR' in keywords:
+                # (lit by the fog's colour where it is drawn: the haze takes the colour of the sky behind it)
+                data['fogColor'] = True
+            out.append(data)
+        return out
+
     def convert(self):
         info_obj = self.info()
         if info_obj is None:
@@ -1110,6 +1225,7 @@ class Converter:
             'meshes': self.meshes,
             'materials': self.materials,
             'objects': self.objects,
+            'particleSystems': self.particle_systems(),
             'warnings': [],
         }
         report = {

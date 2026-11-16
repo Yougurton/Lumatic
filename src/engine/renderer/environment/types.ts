@@ -79,6 +79,16 @@ export interface EnvironmentParticleSystemData {
   fogEnabled: boolean;
   heightFogEnabled: boolean;
   sortingOrder: number;
+  /** How a particle is drawn: a camera-facing sprite (the default) or a mesh. */
+  renderMode?: 'billboard' | 'mesh';
+  /** The mesh a particle is drawn with, when drawn as one (the game's haze uses its unit cube). */
+  mesh?: 'cube';
+  /** The particles' turn about their own z, in radians a second. */
+  rotationSpeed?: number;
+  /** Coloured by the fog behind them (the game's _FOGTYPE_COLOR) instead of their tint. */
+  fogColor?: boolean;
+  /** The particles' start alpha. */
+  startAlpha?: number;
 }
 
 export interface PositionConstraintData {
