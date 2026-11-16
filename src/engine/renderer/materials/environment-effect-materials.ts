@@ -68,6 +68,9 @@ export interface CustomParticlesSettings {
   alphaMultiplier: number;
   forcedWhiteBoost: boolean;
   whiteBoostStart: number;
+  /** The forced white boost: its multiplier, and how far the base colour boost is past its threshold. */
+  whiteBoostScale?: number;
+  whiteBoostAmount?: number;
   bloomType: number;
   bloomMultiplier: number;
   bloomWhite: number;
@@ -296,6 +299,8 @@ export function createCustomParticlesMaterial(
       _Intensity: { value: settings.intensity },
       _AlphaMultiplier: { value: settings.alphaMultiplier },
       _WhiteBoostStart: { value: settings.whiteBoostStart },
+      _WhiteBoostScale: { value: settings.whiteBoostScale ?? 1 },
+      _WhiteBoostAmount: { value: settings.whiteBoostAmount ?? 0.9 },
       _BloomType: { value: settings.bloomType },
       _BloomMultiplier: { value: settings.bloomMultiplier },
       _BloomWhite: { value: settings.bloomWhite },

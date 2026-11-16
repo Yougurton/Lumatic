@@ -99,6 +99,8 @@ uniform float _BaseLayer;
 uniform float _Intensity;
 uniform float _AlphaMultiplier;
 uniform float _WhiteBoostStart;
+uniform float _WhiteBoostScale;
+uniform float _WhiteBoostAmount;
 uniform float _BloomType;
 uniform float _BloomMultiplier;
 uniform float _BloomWhite;
@@ -275,14 +277,6 @@ void main() {
   #ifdef FOG_LERP
   albedo = applyChroFog(albedo, vScreenPos, vWorldPos, _FogStartOffset, _FogScale);
   #endif
-  #ifdef FORCED_WHITE_BOOST
-  float whiteMix = clamp(
-    (abs(albedo.a) - _WhiteBoostStart) / (_WhiteBoostStart < 0.999 ? 1.0 - _WhiteBoostStart : 1.0),
-    0.0,
-    1.0
-  );
-  albedo.rgb = mix(albedo.rgb, vec3(1.0), whiteMix);
-  #endif
   #ifdef SQUARE_ALPHA
   albedo.a *= clamp(albedo.a, 0.0, 1.0);
   #endif
@@ -291,6 +285,14 @@ void main() {
   #endif
 
   float bloomMagnitude = abs(albedo.a);
+  #ifdef FORCED_WHITE_BOOST
+  // (as the game's own shader does it, read from its compiled code: white is added, the square of the
+  // strength times the white-boost multiplier, as much as the base colour boost is past its threshold;
+  // the strength itself is what the pass is given)
+  float forcedWhite = bloomMagnitude * _WhiteBoostScale;
+  albedo.rgb = clamp(albedo.rgb * bloomMagnitude + vec3(forcedWhite * forcedWhite * _WhiteBoostAmount), 0.0, 1.0);
+  albedo.a = clamp(bloomMagnitude, 0.0, 1.0);
+  #else
   if (_BloomType < 0.5) {
     albedo.rgb *= bloomMagnitude;
     albedo.a = clamp(bloomMagnitude, 0.0, 1.0);
@@ -303,6 +305,7 @@ void main() {
     albedo.rgb = clamp(albedo.rgb * bloomMagnitude + vec3(whiteEnergy), 0.0, 1.0);
     albedo.a = clamp(bloomMagnitude * _BloomMultiplier, 0.0, 1.0);
   }
+  #endif
   // game writes to a unorm target: blend sources clamp to [0,1] per draw
   albedo.rgb = clamp(albedo.rgb, 0.0, 1.0);
   gl_FragColor = albedo;

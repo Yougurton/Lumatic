@@ -76,13 +76,13 @@ segs = [CompressionHelper.decompress_lz4(blob[off:off+cl], dl) for off, cl, dl i
 table = segs[0]
 p = pf.m_SubShaders[0].m_Passes[passi]
 prog = {'fp': p.progFragment, 'vp': p.progVertex}[stage]
-subs = [s for tier in prog.m_PlayerSubPrograms for s in tier]
+subs = [(t, i, s) for t, tier in enumerate(prog.m_PlayerSubPrograms) for i, s in enumerate(tier)]
 best = None
-for sp in subs:
+for tier_index, sub_index, sp in subs:
     kws = set(names[k] for k in sp.m_KeywordIndices)
     score = len(kws & want) * 10 - len(kws - want) - len(want - kws) * 5
-    if best is None or score > best[0]: best = (score, sp, kws)
-score, sp, kws = best
+    if best is None or score > best[0]: best = (score, sp, kws, tier_index, sub_index)
+score, sp, kws, tier_index, sub_index = best
 print('extra', sorted(kws - want), 'missing', sorted(want - kws))
 off, ln, sg = struct.unpack_from('<iii', table, 4 + sp.m_BlobIndex * 12)
 data = segs[sg][off:off+ln]
@@ -95,3 +95,24 @@ subprocess.run(['vkd3d-compiler', '-x', 'dxbc-tpf', '-b', 'spirv-binary', '-o', 
 glsl = subprocess.run(['spirv-cross', '--version', '330', '--no-es', base + '.spv'], capture_output=True, text=True).stdout
 open(base + '.glsl', 'w').write(glsl)
 print('lines', glsl.count('\n'), base + '.glsl')
+
+# (the program's parameter table: each constant's name and its place — byte offset in its buffer,
+# divided by 16 the vec4 index in the GLSL above, the remainder /4 the component)
+import re
+pbi = prog.m_ParameterBlobIndices[tier_index][sub_index]
+off, ln, sg = struct.unpack_from('<iii', table, 4 + pbi * 12)
+params = segs[sg][off:off + ln]
+lines = []
+for m in re.finditer(rb'[\x01-\x40]\x00\x00\x00([_$A-Za-z][_A-Za-z0-9]{0,63})', params):
+    length = struct.unpack_from('<I', params, m.start())[0]
+    name = m.group(1)[:length].decode()
+    if len(name) != length:
+        continue
+    end = (m.start() + 4 + length + 3) & ~3
+    values = struct.unpack_from('<6i', params, end) if end + 24 <= len(params) else ()
+    if len(values) == 6 and values[0] == 0 and values[1] == 1:
+        lines.append(f'  {name}: [{values[5] // 16}].{"xyzw"[(values[5] % 16) // 4]} ({values[2]} wide)')
+    else:
+        lines.append(f'{name}')
+open(base + '.params.txt', 'w').write('\n'.join(lines) + '\n')
+print('parameters', base + '.params.txt')

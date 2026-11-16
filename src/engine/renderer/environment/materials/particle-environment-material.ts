@@ -167,6 +167,8 @@ export function createParticleEnvironmentMaterial(
         (data.floats._EnableRemapWhiteBoostStart ?? 1) === 0
           ? 1
           : (data.floats._WhiteboostRemapStart ?? data.floats._WhiteBoostRemapStart ?? data.floats._WhiteBoostOffset ?? 0),
+      whiteBoostScale: data.floats._QuestWhiteboostMultiplier ?? 1,
+      whiteBoostAmount: (data.floats._BaseColorBoost ?? 1) - (data.floats._BaseColorBoostThreshold ?? 0.1),
       bloomType: data.floats._BloomType ?? 0,
       bloomMultiplier: data.floats._BloomMultiplier ?? 1,
       bloomWhite: data.floats._BloomWhite ?? data.floats._BloomWhiteMultiplier ?? 1,
