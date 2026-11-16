@@ -220,8 +220,12 @@ function meshParticleGeometry(system: EnvironmentParticleSystemData) {
   const lifetimes: number[] = [];
   const sizes: number[] = [];
   const rotations: number[] = [];
-  for (let index = 0; index < system.maxParticles; index += 1) {
-    starts.push(system.rate > 0 ? index / system.rate : 0);
+  const { count, cycle } = meshParticleSchedule(system);
+  for (let index = 0; index < count; index += 1) {
+    const perLoop = Math.max(1, Math.floor(system.rate * (system.duration ?? 0) + 1e-6));
+    const loop = Math.floor(index / perLoop);
+    // (emitted through each loop of the system — the first a whole interval in — and each loop again)
+    starts.push(system.duration === undefined ? index / system.rate : ((index % perLoop) + 1) / system.rate + loop * system.duration);
     lifetimes.push(system.lifetime[0] + (system.lifetime[1] - system.lifetime[0]) * random(index, 4));
     sizes.push(system.size[0] + (system.size[1] - system.size[0]) * random(index, 5));
     rotations.push(system.rotationRange[0] + (system.rotationRange[1] - system.rotationRange[0]) * random(index, 6));
@@ -230,9 +234,22 @@ function meshParticleGeometry(system: EnvironmentParticleSystemData) {
   geometry.setAttribute('particleLifetime', new InstancedBufferAttribute(new Float32Array(lifetimes), 1));
   geometry.setAttribute('particleSize', new InstancedBufferAttribute(new Float32Array(sizes), 1));
   geometry.setAttribute('particleRotation', new InstancedBufferAttribute(new Float32Array(rotations), 1));
-  geometry.instanceCount = system.maxParticles;
+  geometry.instanceCount = count;
   box.dispose();
-  return geometry;
+  return { geometry, cycle };
+}
+
+/** How many particles are drawn and how long their pattern takes to repeat. The game's emission
+ *  starts over with each loop of the system (BigSmokePS: a cube 2 s and 4 s into each 5 s loop, each
+ *  living 5 s — two cubes at any time); without the loop's length, one every interval. */
+function meshParticleSchedule(system: EnvironmentParticleSystemData) {
+  const longest = Math.max(system.lifetime[0], system.lifetime[1]);
+  if (system.duration === undefined || system.duration <= 0) {
+    return { count: system.maxParticles, cycle: system.maxParticles / system.rate };
+  }
+  const perLoop = Math.max(1, Math.floor(system.rate * system.duration + 1e-6));
+  const loops = Math.max(1, Math.ceil(longest / system.duration));
+  return { count: Math.min(perLoop * loops, Math.max(system.maxParticles, 1) * loops), cycle: system.duration * loops };
 }
 
 function isMeshParticleSystem(system: EnvironmentParticleSystemData) {
@@ -389,7 +406,7 @@ function buildMeshParticleSystem(
   geometries: Map<string, BufferGeometry>,
   materials: Set<Material>,
 ) {
-  const geometry = meshParticleGeometry(system);
+  const { geometry, cycle } = meshParticleGeometry(system);
   const fogColor = system.fogColor ?? system.name === 'BigSmokePS';
   const material = new ShaderMaterial({
     vertexShader: MESH_PARTICLE_VERT,
@@ -405,7 +422,7 @@ function buildMeshParticleSystem(
       _AlphaMultiplier: { value: system.alphaMultiplier },
       _StartAlpha: { value: system.startAlpha ?? 1 },
       _SongTime: context.songTime ?? { value: 0 },
-      _Cycle: { value: system.maxParticles / system.rate },
+      _Cycle: { value: cycle },
       _Prewarm: { value: system.prewarm ? 1 : 0 },
       _RotationSpeed: { value: system.rotationSpeed ?? (system.name === 'BigSmokePS' ? Math.PI / 180 : 0) },
     },

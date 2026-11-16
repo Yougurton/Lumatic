@@ -1143,6 +1143,7 @@ class Converter:
                 'alphaMultiplier': num(floats.get('_AlphaMultiplier', 1.0)), 'fogEnabled': floats.get('_EnableFog', 0) != 0,
                 'heightFogEnabled': floats.get('_EnableHeightFog', 0) != 0, 'sortingOrder': int(rt.get('m_SortingOrder', 0)),
                 'startAlpha': num(float(initial['startColor']['maxColor']['a'])),
+                'duration': num(float(t['lengthInSec'])),
             }
             if mesh is not None:
                 data['renderMode'] = 'mesh'

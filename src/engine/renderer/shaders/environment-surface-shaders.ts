@@ -611,11 +611,17 @@ void main() {
       vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
       float sdfAcross = (sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift) - sdfNoise(sdfNoiseShift))
         * _SDFNoiseIntensity;
+      // (by the game's frames, its square of hues is read so: the map's position moves up it, one
+      // turn of the hues a unit; across it the place is a third in, moved by the noise and pushed to the
+      // white edge near a point — a strong noise spreads a surface over many hues and lights its peaks
+      // white)
+      // (a strip of hues — the flowers' — is read along by the position, moved by the noise and the
+      // points as before)
       float sdfPlace = _EmissionGradientPosition + sdfGlow * 0.25;
-      vec3 sdfGradient = texture2D(
-        _EmissionGradientTex,
-        vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace))
-      ).rgb
+      vec2 sdfGradientUv = textureSize(_EmissionGradientTex, 0).y > 8
+        ? vec2(clamp(0.3 + sdfAcross + sdfGlow * 0.7, 0.0, 1.0), fract(_EmissionGradientPosition))
+        : vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace));
+      vec3 sdfGradient = texture2D(_EmissionGradientTex, sdfGradientUv).rgb
         * _EmissionGradientIntensity;
       float sdfLightStrength = min(_EmissionColorAlpha, 1.0);
       vec3 sdfLight = _EmissionColor * sdfLightStrength * sdfLightStrength;

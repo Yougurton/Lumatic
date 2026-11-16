@@ -89,6 +89,8 @@ export interface EnvironmentParticleSystemData {
   fogColor?: boolean;
   /** The particles' start alpha. */
   startAlpha?: number;
+  /** The length of the system's loop in seconds: its emission starts over with each. */
+  duration?: number;
 }
 
 export interface PositionConstraintData {
