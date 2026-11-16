@@ -248,14 +248,9 @@ export function createLitEnvironmentMaterial(
       data.keywords.includes('_EMISSIONCOLORTYPE_WHITEBOOST') ||
       data.keywords.includes('_EMISSIONBLOOMTYPE_PP'),
     emissionWhiteBoostMultiplier: data.floats._EmissionTexWhiteboostMultiplier ?? 1,
-    // (a simple emission texture with no colour type set takes the first of the shader's options, the
-    // main effect: the game's compiled shader for such a material — Coldplay's background sphere —
-    // writes its glow)
     emissionMainEffect:
       data.keywords.includes('_EMISSIONCOLORTYPE_MAINEFFECT') ||
-      data.keywords.includes('_EMISSIONCOLORTYPE_WHITEBOOST') ||
-      (data.keywords.includes('_EMISSIONTEXTURE_SIMPLE') &&
-        !data.keywords.some((keyword) => keyword.startsWith('_EMISSIONCOLORTYPE_'))),
+      data.keywords.includes('_EMISSIONCOLORTYPE_WHITEBOOST'),
     emissionBloomIntensity: data.floats._EmissionTexBloomIntensity ?? 1,
     toneMapBeforeEmission: data.keywords.includes('_ACES_APPROACH_BEFORE_EMISSIVE'),
     customTime: materialTimeMode(data.keywords),
