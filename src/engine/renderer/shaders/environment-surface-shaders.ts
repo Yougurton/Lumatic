@@ -4,6 +4,9 @@ export const ENVIRONMENT_LIT_VERT = /* glsl */ `
 uniform vec3 _DisplacementAxisMultiplier;
 uniform float _DisplacementStrength;
 uniform float _MeshPackingId;
+#ifdef EMISSION_SOURCE_SDF
+varying vec3 vSdfLocal;
+#endif
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec3 vWorldTangent;
@@ -52,6 +55,14 @@ void main() {
   vec4 worldPos = modelMatrix * localPos;
   vec4 viewPos = viewMatrix * worldPos;
   vWorldPos = worldPos.xyz;
+  #ifdef EMISSION_SOURCE_SDF
+  // (where it is from its object's middle, in the world's size: a noise over it is the object's own)
+  vec4 sdfOrigin = vec4(0.0, 0.0, 0.0, 1.0);
+    #ifdef USE_INSTANCING
+    sdfOrigin = instanceMatrix * sdfOrigin;
+    #endif
+  vSdfLocal = worldPos.xyz - (modelMatrix * sdfOrigin).xyz;
+  #endif
   vWorldNormal = normalize(mat3(modelMatrix) * instanceBasis * localNormal);
   #ifdef USE_TANGENT
   vWorldTangent = normalize(mat3(modelMatrix) * instanceBasis * tangent.xyz);
@@ -332,6 +343,9 @@ uniform float _SongTime;
 uniform float _TimeOffset;
 uniform float _FogStartOffset;
 uniform float _FogScale;
+#ifdef EMISSION_SOURCE_SDF
+varying vec3 vSdfLocal;
+#endif
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec3 vViewPos;
@@ -583,17 +597,19 @@ void main() {
       max(1.0, _SDFPointIntensity),
       mix(_SDFNegativeIntensity, _SDFPointIntensity, sdfGlow) + 0.5 * max(0.0, _SDFNoiseIntensity)
     );
-    // (the light's strength dims the colour as well: here it is not a texture's own alpha)
-    // (…and a light brighter than full does not wash the colour out to white)
-    emission = vec4(vec3(sdfField * min(_EmissionTexColorAlpha, 1.0)), sdfField);
+    // (the light's strength dims the colour as well: here it is not a texture's own alpha. By the
+    // game's frames it counts as its square — a dim light leaves these surfaces nearly dark — and a
+    // light brighter than full does not wash the colour out to white)
+    float sdfStrength = min(_EmissionTexColorAlpha, 1.0);
+    emission = vec4(vec3(sdfField * sdfStrength * sdfStrength), sdfField);
       #ifdef EMISSION_COLOR_GRADIENT
       // (coloured from the gradient texture where the map puts it — the game's own are a strip read
       // along and a square of hues read upwards — and lit by the light's colour)
-      // (…moved across it by a noise over the world, as far as that is strong and counted from the
-      // noise at the world's middle: a large surface runs through the colours beside each other, a
-      // small one keeps the colour of its place)
+      // (…moved across it by a noise over the object, counted from its middle and as far as the
+      // noise is strong: a large surface runs through the colours beside each other, a small one keeps
+      // the place the map gives it)
       vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
-      float sdfAcross = (sdfNoise(vWorldPos * _SDFNoiseScale + sdfNoiseShift) - sdfNoise(sdfNoiseShift))
+      float sdfAcross = (sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift) - sdfNoise(sdfNoiseShift))
         * _SDFNoiseIntensity;
       float sdfPlace = _EmissionGradientPosition + sdfGlow * 0.25;
       vec3 sdfGradient = texture2D(
@@ -601,7 +617,8 @@ void main() {
         vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace))
       ).rgb
         * _EmissionGradientIntensity;
-      vec3 sdfLight = _EmissionColor * min(_EmissionColorAlpha, 1.0);
+      float sdfLightStrength = min(_EmissionColorAlpha, 1.0);
+      vec3 sdfLight = _EmissionColor * sdfLightStrength * sdfLightStrength;
       emission = vec4(sdfGradient * sdfLight * sdfField, max(max(sdfLight.r, sdfLight.g), sdfLight.b) * sdfField);
       #endif
     #endif

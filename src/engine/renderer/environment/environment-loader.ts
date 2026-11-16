@@ -1,4 +1,4 @@
-import { Mesh } from 'three';
+import { Mesh, ShaderMaterial } from 'three';
 import { BLOOMFOG_BACKGROUND_LAYER } from '../bloomfog/pipeline';
 import { setSdfPoints } from '../materials/sdf-points';
 import { buildEnvironmentSpectrograms, buildSpectrumProperties } from './environment-spectrogram';
@@ -46,6 +46,21 @@ export function buildEnvironment(
     if (prePass === undefined) return;
     for (const child of scene.nodes[index]?.children ?? []) {
       if (!(child instanceof Mesh)) continue;
+      // (the game's pre-pass weighs what is drawn by the glow it writes: a lit surface without the
+      // main-effect glow — Coldplay's background sphere — adds nothing there, and drawn in full it
+      // raised the pass's exposure and washed the fog out to grey)
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const writesNoGlow = materials.every(
+        (material) =>
+          material instanceof ShaderMaterial &&
+          material.uniforms._EmissionTexColor !== undefined &&
+          material.defines.EMISSION_MAIN_EFFECT === undefined &&
+          material.defines.VERTEX_EMISSION_MAIN_EFFECT === undefined,
+      );
+      if (writesNoGlow) {
+        if (prePass.KeepDefaultRendering === 0) child.visible = false;
+        continue;
+      }
       if (prePass.KeepDefaultRendering === 0) child.layers.set(BLOOMFOG_BACKGROUND_LAYER);
       else child.layers.enable(BLOOMFOG_BACKGROUND_LAYER);
       prePassBackground = true;

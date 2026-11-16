@@ -277,7 +277,7 @@ void main() {
   #endif
   #ifdef FORCED_WHITE_BOOST
   float whiteMix = clamp(
-    (abs(albedo.a) - _WhiteBoostStart) / max(1.0 - _WhiteBoostStart, 0.0001),
+    (abs(albedo.a) - _WhiteBoostStart) / (_WhiteBoostStart < 0.999 ? 1.0 - _WhiteBoostStart : 1.0),
     0.0,
     1.0
   );

@@ -161,8 +161,12 @@ export function createParticleEnvironmentMaterial(
       intensity: data.floats._Intensity ?? 1,
       alphaMultiplier: data.floats._AlphaMultiplier ?? 1,
       forcedWhiteBoost: keywords.has('_WHITEBOOSTTYPE_MAINEFFECT') && (data.floats._EnableForcedWhiteBoost ?? 0) !== 0,
+      // (without its remap the boost starts where the light goes past full: only an overbright
+      // light turns white, and a light at full keeps its colour)
       whiteBoostStart:
-        data.floats._WhiteboostRemapStart ?? data.floats._WhiteBoostRemapStart ?? data.floats._WhiteBoostOffset ?? 0,
+        (data.floats._EnableRemapWhiteBoostStart ?? 1) === 0
+          ? 1
+          : (data.floats._WhiteboostRemapStart ?? data.floats._WhiteBoostRemapStart ?? data.floats._WhiteBoostOffset ?? 0),
       bloomType: data.floats._BloomType ?? 0,
       bloomMultiplier: data.floats._BloomMultiplier ?? 1,
       bloomWhite: data.floats._BloomWhite ?? data.floats._BloomWhiteMultiplier ?? 1,
