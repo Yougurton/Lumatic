@@ -302,6 +302,7 @@ uniform float _EmissionTexColorAlpha;
 #ifdef EMISSION_COLOR_GRADIENT
 uniform sampler2D _EmissionGradientTex;
 uniform float _EmissionGradientPosition;
+uniform float _EmissionGradientPanningSpeed;
 uniform float _EmissionGradientIntensity;
 uniform vec2 _EmissionTexSpeed;
 #endif
@@ -622,47 +623,29 @@ void main() {
     float sdfStrength = min(_EmissionTexColorAlpha, 1.0);
     emission = vec4(vec3(sdfField * sdfStrength * sdfStrength), sdfField);
       #ifdef EMISSION_COLOR_GRADIENT
-      // (coloured from the gradient texture where the map puts it — the game's own are a strip read
-      // along and a square of hues read upwards — and lit by the light's colour)
-      // (…moved across it by a noise over the object, counted from its middle and as far as the
-      // noise is strong: a large surface runs through the colours beside each other, a small one keeps
-      // the place the map gives it)
-      vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
-      float sdfAcross = (sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift) - sdfNoise(sdfNoiseShift))
-        * _SDFNoiseIntensity;
-      // (a square of hues — the spheres', the ribbons' — is read as the user's recordings of the game's
-      // editor show: the noise times its intensity is both the surface's glow — dark at no intensity,
-      // full by about 4 — and its place across the square, round and round from near its right edge (a
-      // turn every 4.25 of intensity: yellow, pink, red, yellow…); the map's position moves up it, one
-      // turn of the hues a unit; a points' glow lights the surface too)
-      if (textureSize(_EmissionGradientTex, 0).y > 8) {
-        float sdfNoiseField = sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift) * 0.5
-          * max(_SDFNoiseIntensity, 0.0);
-        float sdfSquareField = max(sdfNoiseField, sdfGlow * _SDFPointIntensity);
-        vec3 sdfSquare = texture2D(
-          _EmissionGradientTex,
-          vec2(fract(0.85 + sdfNoiseField), fract(_EmissionGradientPosition))
-        ).rgb * _EmissionGradientIntensity;
-        float sdfSquareLightStrength = min(_EmissionColorAlpha, 1.0);
-        vec3 sdfSquareLight = _EmissionColor * sdfSquareLightStrength * sdfSquareLightStrength;
-        float sdfSquareGlow = min(sdfSquareField, 1.0);
-        emission = vec4(
-          sdfSquare * sdfSquareLight * sdfSquareGlow,
-          max(max(sdfSquareLight.r, sdfSquareLight.g), sdfSquareLight.b) * sdfSquareGlow
-        );
-      } else {
-      // (a strip of hues — the rainbow variants' — is read along by the position, moved by the noise and the
-      // points)
-      float sdfPlace = _EmissionGradientPosition + sdfGlow * 0.25;
-      vec3 sdfGradient = texture2D(
-        _EmissionGradientTex,
-        vec2(fract(sdfPlace + clamp(sdfAcross, -0.35, 0.35)), fract(sdfPlace))
-      ).rgb
-        * _EmissionGradientIntensity;
-      float sdfLightStrength = min(_EmissionColorAlpha, 1.0);
-      vec3 sdfLight = _EmissionColor * sdfLightStrength * sdfLightStrength;
-      emission = vec4(sdfGradient * sdfLight * sdfField, max(max(sdfLight.r, sdfLight.g), sdfLight.b) * sdfField);
+      // (as the game's own shader does it, read from its compiled code: each point adds its reach —
+      // its radius less the square root of the distance — times the point strength, a negative point
+      // multiplies by one less its reach times the negative strength; the 3D noise times its intensity
+      // is added to that; the sum, times the gradient's intensity, is the place across the gradient
+      // texture (which repeats) and also how bright its colour is, up to full at 1; the map's position
+      // is the place up it. Lit by the light's colour and strength)
+      float sdfReach = 0.0;
+      float sdfDim = 1.0;
+      for (int sdfIndex = 0; sdfIndex < 4; sdfIndex++) {
+        vec4 sdfPoint = _SDFPointArray[sdfIndex];
+        float reach = max(abs(sdfPoint.w) - sqrt(distance(vWorldPos, sdfPoint.xyz)), 0.0);
+        if (sdfPoint.w > 0.0) sdfReach += reach * _SDFPointIntensity;
+        else if (sdfPoint.w < 0.0) sdfDim *= clamp(1.0 - reach * _SDFNegativeIntensity, 0.0, 1.0);
       }
+      vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
+      float sdfNoiseValue = sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift);
+      float sdfPlace = (sdfReach * sdfDim + sdfNoiseValue * _SDFNoiseIntensity) * _EmissionGradientIntensity;
+      vec4 sdfGradient = texture2D(
+        _EmissionGradientTex,
+        vec2(sdfPlace, fract(_EmissionGradientPosition + _EmissionGradientPanningSpeed * 0.05 * materialTime))
+      );
+      vec3 sdfColor = clamp(sdfGradient.rgb * sdfPlace, 0.0, 1.0);
+      emission = vec4(sdfColor * _EmissionColor * _EmissionColorAlpha, 1.0);
       #endif
     #endif
     #ifdef EMISSION_MASK

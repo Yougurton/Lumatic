@@ -54,8 +54,13 @@ function linearTextureAssets(data: EnvironmentData) {
         '_EmissionMask',
         '_SecondaryEmissionMask',
         '_NormalTexture',
-        '_SDFNoiseTex',
       ].flatMap((property) => textures[property]?.asset ?? []);
+      // (the game's own word, where it is given: its hue gradients are stored as linear data, its 3D
+      // noise as sRGB)
+      for (const property of ['_EmissionGradientTex', '_SDFNoiseTex']) {
+        const texture = textures[property];
+        if (texture?.colorSpace === 'linear') assets.push(texture.asset);
+      }
       const main = textures._MainTex;
       if (
         main !== undefined &&

@@ -34,6 +34,8 @@ export interface EnvironmentTextureData {
   /** A volume texture's width, height and depth, its slices laid side by side in this many columns
    *  of the image, the first at the bottom left. */
   volume?: [number, number, number, number];
+  /** How the game stores the texture: as linear data or as sRGB colour (read only where noted). */
+  colorSpace?: 'linear' | 'srgb';
 }
 
 export interface EnvironmentMeshData {

@@ -153,6 +153,7 @@ class Converter:
         self.textures = {}         # asset path → PIL image
         self.texture_keys = {}
         self.texture_volumes = {}  # asset path → [width, height, depth, atlas columns] of a volume texture
+        self.texture_linear = {}   # asset path → stored as linear data (not sRGB colour) in the game
 
     # ---- reading ----
 
@@ -332,6 +333,7 @@ class Converter:
                 asset = f'textures/game-{digest}.png'
                 self.textures[asset] = image
                 self.texture_keys[ident] = asset
+                self.texture_linear[asset] = getattr(tex, 'm_ColorSpace', 1) == 0
             return self.texture_keys[ident]
         except Exception as error:
             self.notes.append(f'texture: {type(error).__name__}: {error}')
@@ -370,6 +372,7 @@ class Converter:
             self.textures[asset] = image
             self.texture_keys[ident] = asset
             self.texture_volumes[asset] = [w, h, d, columns]
+            self.texture_linear[asset] = t.get('m_ColorSpace', 1) == 0
         return self.texture_keys[ident]
 
     def material_key(self, pptr):
@@ -399,6 +402,7 @@ class Converter:
                 textures[name] = {'asset': asset, 'scale': vec(env.m_Scale, 'xy'), 'offset': vec(env.m_Offset, 'xy')}
                 if asset in self.texture_volumes:
                     textures[name]['volume'] = self.texture_volumes[asset]
+                textures[name]['colorSpace'] = 'linear' if self.texture_linear.get(asset) else 'srgb'
         data = {
             'name': mat.m_Name,
             'shader': mapped[0],
