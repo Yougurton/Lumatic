@@ -1144,8 +1144,9 @@ class Converter:
         gradient = self.scene.objects.get(t['_bloomPrePassBackgroundColorsGradient']['m_PathID'])
         g = gradient.read_typetree() if gradient is not None else {'_tintColor': {'r': 1, 'g': 1, 'b': 1, 'a': 1}, '_elements': []}
         lights = t['_lightIntensityData']
-        if len(lights) != 1:
-            self.notes.append(f'background gradient: lit by {len(lights)} lights, the first is taken')
+        # (the same light listed more than once mixes to itself: only different ones would need mixing)
+        if len({(e['_lightId'], e['_intensity']) for e in lights}) > 1:
+            self.notes.append(f'background gradient: lit by {len(lights)} different lights, the first is taken')
         first = lights[0] if lights else {'_lightId': -1, '_intensity': 1}
         data = {
             **self.address(first['_lightId']), 'LightIntensity': num(first['_intensity']),
