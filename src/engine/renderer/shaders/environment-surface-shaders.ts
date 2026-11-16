@@ -653,47 +653,26 @@ void main() {
   vec4 emission = texture2D(_EmissionTex, emissionUv * _EmissionTexScale + _EmissionTexOffset);
     #endif
     #ifdef EMISSION_SOURCE_SDF
-    // (the game's own shader is not readable. Taken so, by its frames: away from the points the surface
-    // glows with the "negative" strength, inside a point's radius — the square of what the game passes —
-    // it rises to the "point" strength at the point itself, the nearest point winning; and the noise the
-    // game lays over it, which is not drawn here, adds its mean)
-    float sdfGlow = 0.0;
-    for (int sdfIndex = 0; sdfIndex < 4; sdfIndex++) {
+    // (as the game's own shader does it, read from its compiled code and its parameter table: each
+    // point adds its reach — its radius less the square root of the distance — times the point
+    // strength, a negative point multiplies by one less its reach times the negative strength; the 3D
+    // noise times its intensity is added to that; the sum times the emission brightness is the field)
+    float sdfReach = 0.0;
+    float sdfDim = 1.0;
+    for (int sdfIndex = 0; sdfIndex < 3; sdfIndex++) {
       vec4 sdfPoint = _SDFPointArray[sdfIndex];
-      float sdfRadius = sdfPoint.w * sdfPoint.w;
-      if (sdfRadius > 0.0001) {
-        sdfGlow = max(sdfGlow, 1.0 - clamp(distance(vWorldPos, sdfPoint.xyz) / sdfRadius, 0.0, 1.0));
-      }
+      float reach = max(abs(sdfPoint.w) - sqrt(distance(vWorldPos, sdfPoint.xyz)), 0.0);
+      if (sdfPoint.w > 0.0) sdfReach += reach * _SDFPointIntensity;
+      else if (sdfPoint.w < 0.0) sdfDim *= clamp(1.0 - reach * _SDFNegativeIntensity, 0.0, 1.0);
     }
-    sdfGlow = sdfGlow * sdfGlow * (3.0 - 2.0 * sdfGlow);
-    float sdfField = min(
-      max(1.0, _SDFPointIntensity),
-      mix(_SDFNegativeIntensity, _SDFPointIntensity, sdfGlow) + 0.5 * max(0.0, _SDFNoiseIntensity)
-    );
-    // (the light's strength dims the colour as well: here it is not a texture's own alpha. By the
-    // game's frames it counts as its square — a dim light leaves these surfaces nearly dark — and a
-    // light brighter than full does not wash the colour out to white)
-    float sdfStrength = min(_EmissionTexColorAlpha, 1.0);
-    emission = vec4(vec3(sdfField * sdfStrength * sdfStrength), sdfField);
+    vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
+    float sdfNoiseValue = sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift);
+    float sdfPlace = (sdfReach * sdfDim + sdfNoiseValue * _SDFNoiseIntensity) * _EmissionBrightness;
       #ifdef EMISSION_COLOR_GRADIENT
-      // (as the game's own shader does it, read from its compiled code and its parameter table: each
-      // point adds its reach — its radius less the square root of the distance — times the point
-      // strength, a negative point multiplies by one less its reach times the negative strength; the 3D
-      // noise times its intensity is added to that; the sum, times the emission brightness, is the place
-      // across the gradient texture (which repeats) and also how bright its colour is, up to full at 1;
-      // the map's position is the place up it. The light does not tint it: its strength comes in as the
-      // gradient intensity — the game's light sends it there — and scales the colour and the glow)
-      float sdfReach = 0.0;
-      float sdfDim = 1.0;
-      for (int sdfIndex = 0; sdfIndex < 3; sdfIndex++) {
-        vec4 sdfPoint = _SDFPointArray[sdfIndex];
-        float reach = max(abs(sdfPoint.w) - sqrt(distance(vWorldPos, sdfPoint.xyz)), 0.0);
-        if (sdfPoint.w > 0.0) sdfReach += reach * _SDFPointIntensity;
-        else if (sdfPoint.w < 0.0) sdfDim *= clamp(1.0 - reach * _SDFNegativeIntensity, 0.0, 1.0);
-      }
-      vec3 sdfNoiseShift = _SDFNoisePanning * materialTime;
-      float sdfNoiseValue = sdfNoise(vSdfLocal * _SDFNoiseScale + sdfNoiseShift);
-      float sdfPlace = (sdfReach * sdfDim + sdfNoiseValue * _SDFNoiseIntensity) * _EmissionBrightness;
+      // (the field is the place across the gradient texture (which repeats) and also how bright its
+      // colour is, up to full at 1; the map's position is the place up it. The light does not tint it:
+      // its strength comes in as the gradient intensity — the game's light sends it there — and scales
+      // the colour and the glow)
       vec4 sdfGradient = texture2D(
         _EmissionGradientTex,
         vec2(sdfPlace, fract(_EmissionGradientPosition + _EmissionGradientPanningSpeed * 0.05 * materialTime))
@@ -702,6 +681,13 @@ void main() {
       emission = vec4(
         sdfColor * _EmissionGradientIntensity * _EmissionTexColor * _EmissionTexColorAlpha,
         _EmissionTexBloomIntensity * _EmissionGradientIntensity
+      );
+      #else
+      // (without a gradient the field is how bright the light's colour is — not clamped — times the
+      // light's strength, and the glow is its square times 3.5, the strength and the bloom intensity)
+      emission = vec4(
+        sdfPlace * _EmissionTexColor * _EmissionTexColorAlpha,
+        sdfPlace * sdfPlace * 3.5 * _EmissionTexColorAlpha * _EmissionTexBloomIntensity
       );
       #endif
     #endif
@@ -728,7 +714,7 @@ void main() {
     );
     emission *= mix(vec4(1.0), secondaryMask, _SecondaryEmissionGain);
     #endif
-    #ifdef EMISSION_TEXTURE_SIMPLE
+    #if defined(EMISSION_TEXTURE_SIMPLE) && !defined(EMISSION_SOURCE_SDF)
       #ifdef EMISSION_COLOR_GRADIENT
     // (the game's shader is not readable. Taken so, by its frames: the texture picks the place across
     // the gradient, the map's position the place along it, and the surface glows evenly)
@@ -751,30 +737,20 @@ void main() {
       #endif
     calculated += visibleEmissionColor;
     fogSuppression = 1.0 - visibleEmission * _EmissionFogSuppression * _EmissionTexColorAlpha;
+    #elif defined(EMISSION_SOURCE_SDF)
+    // (the game's shader adds no white boost and no distance fog here: the glow is its own)
+    sdfEmission = emission.rgb;
+    bloomEmission = emission.a;
     #else
-      #if defined(EMISSION_SOURCE_SDF) && defined(EMISSION_COLOR_GRADIENT)
-    vec4 finalEmission = emission;
-      #else
     vec4 finalEmission = emission * vec4(_EmissionTexColor, _EmissionTexColorAlpha)
       * _EmissionBrightness;
-      #endif
     bloomEmission = finalEmission.a;
-      #ifdef EMISSION_SOURCE_SDF
-      // (by the game's frames these surfaces keep their colour at any distance: the glow is added
-      // after the fog, which takes only what is under it)
-      sdfEmission = finalEmission.rgb;
-      #else
     calculated += finalEmission.rgb;
-      #endif
     fogSuppression = 1.0 - bloomEmission * _EmissionFogSuppression;
       #ifdef EMISSION_WHITE_BOOST
       float whiteBoostSignal = bloomEmission * bloomEmission * _EmissionTexWhiteBoostMultiplier;
       float whiteEnergy = whiteBoostSignal * whiteBoostSignal * 0.997;
-      #ifdef EMISSION_SOURCE_SDF
-      sdfEmission += vec3(whiteEnergy);
-      #else
       calculated += vec3(whiteEnergy);
-      #endif
       #endif
     #endif
   #endif
@@ -796,9 +772,21 @@ void main() {
   #ifndef TONE_MAP_BEFORE_EMISSION
   color.rgb = chroToneMap(color.rgb);
   #endif
-  color = applyChroFog(color, vScreenPos, vWorldPos, _FogStartOffset, _FogScale * fogSuppression);
   #ifdef EMISSION_SOURCE_SDF
-  color.rgb += sdfEmission;
+  // (as the game's shader does it: no distance fog; the colour and the glow are the emission over
+  // the surface's own. Its code also takes them to a dim grey low down by the height fog, but its
+  // frames do not show it — the hill of spheres under the player keeps its colour — so it is left out)
+  // (and the surface's own is only its colour times the larger of the nominal diffuse level times the
+  // ambient multiplier and the ambient minimum: no lighting and no reflections.
+  // The game's code also writes a glow (its alpha) — the bloom intensity times the light's strength
+  // for the gradient, the field's square for the flat one — but its frames show no glow and no
+  // whitening on these spheres even where the light is at 2, so it is left at none.)
+  color = vec4(
+    baseColor() * max(_NominalDiffuseLevel * _AmbientMultiplier, vec3(_AmbientMinimalValue)) + sdfEmission,
+    0.0
+  );
+  #else
+  color = applyChroFog(color, vScreenPos, vWorldPos, _FogStartOffset, _FogScale * fogSuppression);
   #endif
   if (_DistanceDarkeningEnabled != 0.0) {
     vec3 offset = vWorldPos - _DarkeningCenter;
