@@ -56,9 +56,9 @@ void main() {
   vec4 viewPos = viewMatrix * worldPos;
   vWorldPos = worldPos.xyz;
   #ifdef EMISSION_SOURCE_SDF
-  // (the mesh's own coordinates: the noise over it is the object's own, however large it is drawn —
-  // by the game's frames a huge sphere is as smooth as a small one)
-  vSdfLocal = position;
+  // (the game's world coordinates — the engine's with z turned back: the noise lies over the world,
+  // so each flower takes its own colour from where it stands)
+  vSdfLocal = vec3(worldPos.x, worldPos.y, -worldPos.z);
   #endif
   vWorldNormal = normalize(mat3(modelMatrix) * instanceBasis * localNormal);
   #ifdef USE_TANGENT
@@ -328,7 +328,9 @@ float sdfNoiseSlice(vec2 p, float slice) {
   slice = mod(slice, depth);
   vec2 tile = vec2(mod(slice, columns), floor(slice / columns));
   vec2 inTile = fract(p) * (_SDFNoiseVolume.xy - 1.0) + 0.5;
-  return texture2D(_SDFNoiseTex, (tile * _SDFNoiseVolume.xy + inTile) / (_SDFNoiseVolume.xy * vec2(columns, rows))).r;
+  // (read at the full size: a neighbouring pixel may fall on another slice's tile, and the jump
+  // would pick a blurred level of the atlas — dotted stripes over the spheres)
+  return textureLod(_SDFNoiseTex, (tile * _SDFNoiseVolume.xy + inTile) / (_SDFNoiseVolume.xy * vec2(columns, rows)), 0.0).r;
 }
 float sdfNoise(vec3 p) {
   float z = fract(p.z) * _SDFNoiseVolume.z - 0.5;
