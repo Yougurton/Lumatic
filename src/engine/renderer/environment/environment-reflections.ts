@@ -7,6 +7,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   Raycaster,
+  SphereGeometry,
   Vector3,
   type BufferGeometry,
   type Object3D,
@@ -27,6 +28,7 @@ const RAY_EPSILON = 0.001;
 const inverseParent = new Matrix4();
 const localPosition = new Vector3();
 const localDirection = new Vector3();
+const worldAxisScale = new Vector3();
 
 interface ReflectionCollider {
   mesh: Mesh;
@@ -60,7 +62,7 @@ function buildReflectionColliders(
   data: EnvironmentData,
   scene: EnvironmentSceneBuild,
   collisionMaterial: MeshBasicMaterial,
-  ownedGeometries: BoxGeometry[],
+  ownedGeometries: BufferGeometry[],
 ) {
   const colliders: ReflectionCollider[] = [];
   const explicitColliders = new Set<string>();
@@ -88,6 +90,14 @@ function buildReflectionColliders(
       geometry.translate(...boxCollider.Center);
       ownedGeometries.push(geometry);
       addCollider(geometry, scene.nodes[objectIndex], registeredColliders.get(key) ?? false);
+    }
+    for (const sphereCollider of object.components?.SphereCollider ?? []) {
+      // (Coldplay's spheres: what its lasers stop at)
+      if (!sphereCollider.enabled) continue;
+      const geometry = new SphereGeometry(sphereCollider.Radius, 16, 12);
+      geometry.translate(...sphereCollider.Center);
+      ownedGeometries.push(geometry);
+      addCollider(geometry, scene.nodes[objectIndex], false);
     }
     for (const [componentIndex, meshCollider] of (object.components?.MeshCollider ?? []).entries()) {
       const reference: ObjectReference = { obj: objectIndex, component: 'MeshCollider', componentIndex };
@@ -248,7 +258,7 @@ export function buildEnvironmentReflections(
   if (sources.length === 0) return { apply: () => undefined, dispose: () => undefined };
 
   const collisionMaterial = new MeshBasicMaterial({ side: DoubleSide });
-  const ownedGeometries: BoxGeometry[] = [];
+  const ownedGeometries: BufferGeometry[] = [];
   const colliders = buildReflectionColliders(data, scene, collisionMaterial, ownedGeometries);
 
   const raycaster = new Raycaster();
@@ -309,7 +319,10 @@ export function buildEnvironmentReflections(
       }
       source.main.target.node.getWorldPosition(origin);
       direction.copy(LOCAL_UP).transformDirection(source.main.target.node.matrixWorld);
-      let hit = trace(origin, direction, maximumLength);
+      // (the light's length is in its own units: a laser drawn scaled up reaches as far as it looks)
+      const lengthScale = Math.max(worldAxisScale.setFromMatrixColumn(source.main.target.node.matrixWorld, 1).length(), 1e-6);
+      let hit = trace(origin, direction, maximumLength * lengthScale);
+      if (hit !== undefined) hit.distance /= lengthScale;
       const mainLength = hit?.distance ?? maximumLength;
       setReflectedSegment(
         source.main,

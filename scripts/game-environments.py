@@ -154,6 +154,9 @@ class Converter:
         self.texture_keys = {}
         self.texture_volumes = {}  # asset path → [width, height, depth, atlas columns] of a volume texture
         self.texture_linear = {}   # asset path → stored as linear data (not sRGB colour) in the game
+        self.sprite_textures = {}  # sprite quad mesh key → its texture asset
+        self.probe = None          # the baked reflection probe, as the engine takes it
+        self.probe_lights = []
 
     # ---- reading ----
 
@@ -552,6 +555,11 @@ class Converter:
             'LightGroupTranslationXTransform', 'LightGroupTranslationYTransform', 'LightGroupTranslationZTransform',
             'LightColorGroup', 'LightRotationGroup', 'LightTranslationGroup', 'IgnoreForReflectionProbeBaking', 'BakeIdMapper',
             'ColorArrayLightWithIdsGroupEntry', 'MaterialController', 'ParticleSystem', 'ParticleSystemRenderer',
+            # (editor helpers that filled the lights' own lists; the game's machinery for its own needs;
+            # what is read elsewhere — the particle systems, the sprites of sprite lights)
+            'DirectionalLightWithIdsGroupEntry', 'LightmapLightWithIdsGroupEntry', 'GraphicSettingsConditionalActivator',
+            'SetParticleSystemSeed', 'EnvironmentShaderWarmup', 'SaberBurnMarkArea', 'MoveAndRotateWithMainCamera',
+            'SpriteRenderer',
         } | set(MANAGERS)
         # in the scene's order, so that the lights of the old event types get their ids in it
         order = sorted(self.go_components, key=lambda go_id: self.index.get(go_id, 1 << 30))
@@ -647,7 +655,10 @@ class Converter:
             'MultiplyLengthByAlphaBloomFogMultiplier': 1, 'CollisionLength': 3.4028235e+38,
             'enabled': bool(light['m_Enabled']) and bool(t['m_Enabled']),
         }
-        self.register(self.add(light_go, 'ParametricBloomFogLightController', data, obj.path_id), data)
+        ref = self.add(light_go, 'ParametricBloomFogLightController', data, obj.path_id)
+        self.register(ref, data)
+        # (what a collision effect names: the tube light itself)
+        self.comp_ref[t['_tubeBloomPrePassLight']['m_PathID']] = ref
 
     def c_MaterialLightWithId(self, go_id, obj):
         t = obj.read_typetree()
@@ -680,11 +691,58 @@ class Converter:
         self.register(self.add(go_id, 'RectangleFakeGlowLightController', data, obj.path_id), data)
 
     def c_SpriteLightWithId(self, go_id, obj):
-        # (sprites are not drawn by the engine: the light keeps its place in the ids as a sink)
+        # (the sprite is drawn as a quad of its size with its material; the light sets its colour)
         t = obj.read_typetree()
-        data = {**self.address(t['_ID']), 'enabled': bool(t['m_Enabled'])}
-        self.register(self.add(go_id, 'LightSink', data, obj.path_id), data)
-        self.unknown['SpriteLightWithId (kept as a light sink)'] += 1
+        renderer = self.sprite_quad(obj.read()._spriteRenderer)
+        data = {
+            **self.address(t['_ID']), 'Renderer': renderer, 'HideIfAlphaOutOfRange': int(t['_hideIfAlphaOutOfRange']),
+            'HideAlphaRangeMin': num(t['_hideAlphaRangeMin']), 'HideAlphaRangeMax': num(t['_hideAlphaRangeMax']),
+            'Intensity': num(t['_intensity']), 'MinAlpha': num(t['_minAlpha']), 'MultiplyColorByAlpha': int(t['_multiplyColorByAlpha']),
+            'SetColorOnly': int(t['_setColorOnly']), 'SetAlphaOnly': int(t['_setAlphaOnly']), 'SetOnlyOnce': int(t['_setOnlyOnce']),
+            'enabled': bool(t['m_Enabled']),
+        }
+        if renderer is None:
+            self.unknown['SpriteLightWithId without a sprite it can draw'] += 1
+        self.register(self.add(go_id, 'SpriteLightController', data, obj.path_id), data)
+
+    def sprite_quad(self, pptr):
+        """A SpriteRenderer's sprite as a quad mesh on its object (white vertices: the light's colour
+        comes in through the material)."""
+        if pptr is None or pptr.path_id == 0:
+            return None
+        try:
+            renderer = pptr.read()
+            sprite = renderer.m_Sprite.read()
+        except Exception as error:
+            self.notes.append(f'sprite: {type(error).__name__}: {error}')
+            return None
+        index = self.index.get(renderer.m_GameObject.path_id)
+        if index is None:
+            return None
+        rect, ppu, pivot = sprite.m_Rect, float(sprite.m_PixelsToUnits), sprite.m_Pivot
+        w, h = float(rect.width) / ppu, float(rect.height) / ppu
+        x0, y0 = -float(pivot.x) * w, -float(pivot.y) * h
+        key = f'sprite:{sprite.m_Name}'
+        if key not in self.meshes:
+            texture = self.texture(sprite.m_RD.texture)
+            self.meshes[key] = {
+                'positions': [x0, y0, 0, x0 + w, y0, 0, x0, y0 + h, 0, x0 + w, y0 + h, 0],
+                'uvs': [0, 0, 1, 0, 0, 1, 1, 1],
+                'normals': [0, 0, 1] * 4,
+                'colors': [1, 1, 1, 1] * 4,
+                'indices': [0, 2, 1, 1, 2, 3],
+            }
+            self.sprite_textures[key] = texture
+        material = self.material_key(renderer.m_Materials[0]) if renderer.m_Materials else None
+        if material is not None and self.sprite_textures.get(key) is not None:
+            # (the sprite's own texture is its material's main texture)
+            data = self.materials[material]
+            data.setdefault('textures', {})['_MainTex'] = {'asset': self.sprite_textures[key], 'scale': [1, 1], 'offset': [0, 0], 'colorSpace': 'srgb'}
+        out = self.objects[index]
+        out['mesh'] = key
+        out['materials'] = [material] if material is not None else []
+        out['rendererEnabled'] = bool(renderer.m_Enabled)
+        return {'obj': index, 'component': 'MeshRenderer', 'componentIndex': 0}
 
     def c_ColorArrayLightWithIds(self, go_id, obj):
         """A mesh lit in pieces: the game's shader takes each vertex's colour from an array by the index
@@ -903,6 +961,115 @@ class Converter:
         # pre-pass, when it has one of its own, is not taken: the object's own stands in)
         t = obj.read_typetree()
         self.add(go_id, 'PrePassRenderer', {'KeepDefaultRendering': int(t.get('_keepDefaultRendering', 1)), 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
+    def c_BloomPrePassBackgroundNonLightInstancedGroupRenderer(self, go_id, obj):
+        # (the game draws its renderers — the baked glows of the hearts and flares — only into the
+        # bloom pre-pass, together, as one instanced group)
+        t = obj.read_typetree()
+        for pptr in obj.read()._renderers:
+            ref = self.obj_ref(pptr)
+            if ref is None:
+                continue
+            renderer_go = pptr.read().m_GameObject.path_id
+            self.add(renderer_go, 'PrePassRenderer', {'KeepDefaultRendering': 0, 'enabled': bool(t['m_Enabled'])})
+
+    def c_TubeBloomPrePassLightCollisionEffect(self, go_id, obj):
+        # (the laser stops where it meets a collider of the environment's layer — Coldplay's spheres —
+        # and a glow shows at the hit, fading with the distance: the engine's laser reflections do this
+        # with no bounce)
+        t = obj.read_typetree()
+        main = {
+            'Light': None, 'ShowHitPoint': int(t['_showHitPoint']), 'HitPointGameObject': self.obj_ref(obj.read()._hitPointGameObject),
+            'HitPointTransform': self.obj_ref(obj.read()._hitPointTransform), 'HitPointLightWithId': None,
+            'HitPointDistanceToAlphaCurve': curve(t['_hitPointDistanceToAlphaCurve']),
+        }
+        if main['HitPointGameObject'] is None or main['HitPointTransform'] is None:
+            self.unknown['laser collision without its hit point'] += 1
+            return
+        self.late_refs.append((main, 'Light', t['_tubeBloomPrePassLight']['m_PathID']))
+        self.late_refs.append((main, 'HitPointLightWithId', t['_hitPointLightWithId']['m_PathID']))
+        self.add(go_id, 'LightReflection', {'MainParametricLight': main, 'ParametricLightReflection': [], 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
+    def c_SphereCollider(self, go_id, obj):
+        # (what the lasers stop at: the colliders of the environment's layer)
+        t = obj.read_typetree()
+        self.add(go_id, 'SphereCollider', {
+            'Center': position(type('V', (), t['m_Center'])), 'Radius': num(float(t['m_Radius'])), 'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
+
+    def c_BakedReflectionProbe(self, go_id, obj):
+        # (the probe's two cubemaps: each colour channel is the light of one "bake id", as the lights of
+        # the environment colour it — the engine decodes them so)
+        t = obj.read_typetree()
+        b = obj.read()
+        try:
+            data = b._reflectionProbeData.read()
+            cubemaps = [self.cubemap_faces(data._reflectionProbeCubemap1), self.cubemap_faces(data._reflectionProbeCubemap2)]
+        except Exception as error:
+            self.notes.append(f'baked reflection probe: {type(error).__name__}: {error}')
+            return
+        if None in cubemaps:
+            return
+        index = self.index.get(go_id)
+        world = self.objects[index]['position'] if index is not None else [0, 0, 0]
+        parent = self.objects[index]['parent'] if index is not None else -1
+        while parent >= 0:
+            world = [world[i] + self.objects[parent]['position'][i] for i in range(3)]
+            parent = self.objects[parent]['parent']
+        # (in the game's own coordinates: the engine's shader turns its positions back to them)
+        self.probe = {
+            'textures': cubemaps,
+            'position': [world[0] + num(t['_offset']['x']), world[1] + num(t['_offset']['y']), -world[2] + num(t['_offset']['z'])],
+            'size': [num(t['_size']['x']), num(t['_size']['y']), num(t['_size']['z'])],
+        }
+
+    def cubemap_faces(self, pptr):
+        """The six faces of a cubemap as images, in the engine's order (+x, -x, +y, -y, +z, -z), each
+        turned upside down as the engine's cube textures take them."""
+        from PIL import Image
+        from UnityPy.helpers.ResourceReader import get_resource_data
+        tex = pptr.read()
+        t = tex.object_reader.read_typetree()
+        channels = {3: 3, 4: 4, 5: 4}.get(t['m_TextureFormat'])
+        if channels is None:
+            self.unknown[f"cubemap format {t['m_TextureFormat']}"] += 1
+            return None
+        stream = t.get('m_StreamData') or {}
+        data = get_resource_data(stream['path'], tex.object_reader.assets_file, stream['offset'], stream['size']) \
+            if stream.get('size') else bytes(t['image data'])
+        w = t['m_Width']
+        per = t['m_CompleteImageSize']
+        assets = []
+        for face in range(6):
+            raw = bytes(data[face * per:face * per + w * w * channels])
+            mode = 'RGB' if channels == 3 else 'RGBA'
+            image = Image.frombytes(mode, (w, w), raw).transpose(Image.FLIP_TOP_BOTTOM).convert('RGB')
+            if mode == 'RGBA' and t['m_TextureFormat'] == 5:  # (ARGB32: the channels one along)
+                a, r, g, b = Image.frombytes('RGBA', (w, w), raw).transpose(Image.FLIP_TOP_BOTTOM).split()
+                image = Image.merge('RGB', (r, g, b))
+            digest = hashlib.sha1(image.tobytes()).hexdigest()[:16]
+            asset = f'textures/game-{digest}.png'
+            self.textures[asset] = image
+            assets.append(asset)
+        return assets
+
+    def c_LightmapLightWithIds(self, go_id, obj):
+        # (a "bake id" of the reflection probe: its lights, each read as the engine reads a light)
+        t = obj.read_typetree()
+        inputs = []
+        for entry in t['_lightIntensityData']:
+            address = self.address(entry['_lightId'])
+            data = {**address, 'Intensity': num(entry['_intensity']), 'enabled': True}
+            ref = self.add(go_id, 'LightIntensityController', data)
+            self.register(ref, data)
+            inputs.append({
+                'lightId': address['Type'] if address['Kind'] == 0 else -1, 'reference': ref,
+                'intensity': num(entry['_intensity']), 'probeHighlightsIntensityMultiplier': num(entry['_probeHighlightsIntensityMultiplier']),
+            })
+        self.probe_lights.append({
+            'bakeId': int(t['_bakeId']), 'intensity': num(t['_intensity']), 'probeIntensity': num(t['_probeIntensity']),
+            'mixType': int(t.get('_mixType', 0)), 'inputs': inputs,
+        })
 
     def c_SDFArrayManager(self, go_id, obj):
         t = obj.read_typetree()
@@ -1189,6 +1356,9 @@ class Converter:
                 'startAlpha': num(float(initial['startColor']['maxColor']['a'])),
                 'duration': num(float(t['lengthInSec'])),
             }
+            if any(c == 'MoveAndRotateWithMainCamera' for c, _ in self.go_components.get(go_id, [])):
+                # (the game keeps it about the camera, wherever that looks from)
+                data['followCamera'] = True
             if mesh is not None:
                 data['renderMode'] = 'mesh'
                 data['mesh'] = 'cube'
@@ -1271,6 +1441,7 @@ class Converter:
             'materials': self.materials,
             'objects': self.objects,
             'particleSystems': self.particle_systems(),
+            **({'bakedReflectionProbe': {**self.probe, 'lights': self.probe_lights}} if self.probe is not None else {}),
             'warnings': [],
         }
         report = {

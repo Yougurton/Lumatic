@@ -1,3 +1,4 @@
+import { referenceKey } from '../environment/environment-component-utils';
 import { Color, MathUtils, ShaderMaterial, Vector3, type Object3D } from 'three';
 
 import type { PointSampleContext } from '../../core/animation/point-definition';
@@ -205,7 +206,6 @@ export class EnvironmentLightRuntime {
     const full = menuLightshow || isFullLightshowMode(this.lightshowMode);
     const boosted = menuLightshow ? false : full ? boostAt(this.lightEventsByType.get(5) ?? [], beat) : false;
     this.prepareBasicLightSamples(beat, boosted, songBpm);
-    this.updateBakedReflectionProbe(beat, boosted, songBpm);
     for (const target of environment.boostSwitches) target.apply(boosted);
     for (const target of environment.eventSwitches) {
       const value = full ? basicEventValueAt(this.lightEventsByType.get(target.eventType) ?? [], beat) : undefined;
@@ -214,6 +214,8 @@ export class EnvironmentLightRuntime {
 
     const chromaFog = this.chromaTracks.update(beat, this.data?.noodle, context);
     this.updateGlsColors(beat, boosted, full);
+    // (after the GLS colours: a probe's bake id may be lit by lights of the groups)
+    this.updateBakedReflectionProbe(beat, boosted, songBpm);
     this.updateLightSegments(beat, boosted, songBpm);
     this.updateMaterialLights(beat, boosted, songBpm);
     this.transforms.update(beat, full);
@@ -698,9 +700,12 @@ export class EnvironmentLightRuntime {
       let blue = 0;
       let alpha = 0;
       for (const input of light.inputs) {
-        const sample = this.sampleEventType(input.lightId, beat, boosted, songBpm);
+        const sample =
+          input.reference !== undefined
+            ? (this.glsControllerSamples.get(referenceKey(input.reference)) ?? null)
+            : this.sampleEventType(input.lightId, beat, boosted, songBpm);
         if (sample === null) continue;
-        const inputAlpha = sample.rawAlpha ?? sample.alpha;
+        const inputAlpha = ('rawAlpha' in sample ? sample.rawAlpha : undefined) ?? sample.alpha;
         const colorWeight = linearToGammaSpace(inputAlpha) * input.intensity;
         const inputRed = sample.color[0] * colorWeight;
         const inputGreen = sample.color[1] * colorWeight;

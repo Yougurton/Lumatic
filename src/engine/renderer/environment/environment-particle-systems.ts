@@ -9,6 +9,7 @@ import {
   Group,
   InstancedBufferAttribute,
   InstancedBufferGeometry,
+  Matrix4,
   Mesh,
   OneFactor,
   Points,
@@ -389,6 +390,19 @@ export function buildEnvironmentParticleSystems(
     const points = new Points(geometry, material);
     points.name = `${system.name}:particles`;
     points.frustumCulled = false;
+    if (system.followCamera === true) {
+      // (the game moves it with the camera: its place and turn are the camera's, then its own)
+      const local = new Matrix4().compose(
+        new Vector3(...system.position),
+        new Quaternion(...system.rotation),
+        new Vector3(...system.scale),
+      );
+      points.matrixAutoUpdate = false;
+      points.matrixWorldAutoUpdate = false;
+      points.onBeforeRender = (_renderer, _scene, camera) => {
+        points.matrixWorld.multiplyMatrices(camera.matrixWorld, local);
+      };
+    }
     points.renderOrder = system.sortingOrder;
     node.add(points);
     root.add(node);

@@ -92,6 +92,8 @@ export interface EnvironmentParticleSystemData {
   rotationSpeed?: number;
   /** Coloured by the fog behind them (the game's _FOGTYPE_COLOR) instead of their tint. */
   fogColor?: boolean;
+  /** Kept about the camera, wherever it looks from (the game's MoveAndRotateWithMainCamera). */
+  followCamera?: boolean;
   /** The particles' start alpha. */
   startAlpha?: number;
   /** The length of the system's loop in seconds: its emission starts over with each. */
@@ -215,6 +217,12 @@ export interface ColliderFxData {
 export interface BoxColliderData {
   Center: [number, number, number];
   Size: [number, number, number];
+  enabled: boolean;
+}
+
+export interface SphereColliderData {
+  Center: [number, number, number];
+  Radius: number;
   enabled: boolean;
 }
 
@@ -656,6 +664,7 @@ export interface EnvironmentObjectData {
     ColliderFx?: ColliderFxData[];
     BoxCollider?: BoxColliderData[];
     MeshCollider?: MeshColliderData[];
+    SphereCollider?: SphereColliderData[];
     LightReflection?: LightReflectionData[];
     PlanarReflection?: object[];
     TransformSpectrogram?: TransformSpectrogramData[];
@@ -691,6 +700,8 @@ export interface EnvironmentData {
       mixType: number;
       inputs: {
         lightId: number;
+        /** A light of a GLS group, read from the group's own sampling (lightId is then -1). */
+        reference?: ObjectReference;
         intensity: number;
         probeHighlightsIntensityMultiplier: number;
       }[];
