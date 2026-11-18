@@ -17,6 +17,10 @@ import { ringSpeedFor } from '../engine/core/lighting/ring-motion';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
 import { AnimLanes } from './anim-lanes';
+import { BoxGroupLanes } from './box-group-lanes';
+import { colorBlockClips } from './box-group-clips';
+import { stackBlocks, type BoxGroupBlock } from './box-groups';
+import { PreviewBoxGroups } from './box-group-view';
 import { NotesLanes, type LaneHost } from './notes-timeline';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
 
@@ -58,9 +62,11 @@ const GRIP = 7;
 const GROUP_H = 28;
 const LIGHT_H = 20;
 const RAW_H = 22;
+/** A group of the game's own lighting (GLS): its blocks drawn as effects are, with room for the lanes of its elements. */
+const BOX_H = 34;
 const EDGE_PX = 6;
 
-const baseRowHeight = (row: Row) => (row.kind === 'group' || row.kind === 'custom' || row.kind === 'poses' || (row.kind === 'raw' && (row.type === 8 || row.type === 9 || row.type === 12 || row.type === 13)) ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
+const baseRowHeight = (row: Row) => (row.kind === 'box' ? (row.element === null ? BOX_H : LIGHT_H) : row.kind === 'group' || row.kind === 'custom' || row.kind === 'poses' || (row.kind === 'raw' && (row.type === 8 || row.type === 9 || row.type === 12 || row.type === 13)) ? GROUP_H : row.kind === 'light' ? LIGHT_H : RAW_H);
 
 /** A colour per user group (from its name). */
 export function customHue(name: string) {
@@ -176,9 +182,204 @@ export class Timeline {
     return this.editor.envMode && !this.notesMode;
   }
 
+  /** The map's own light groups (GLS) shown in place of the rows, on the lights' tab (colour) or the
+   *  scene's (turning, moving, FX): switched on by a button in the row names' heading. */
+  boxView = false;
+
+  private boxSource: PreviewBoxGroups | null = null;
+  private boxLanes: { light: BoxGroupLanes; scene: BoxGroupLanes } | null = null;
+
+  private get boxMode() {
+    return this.boxView && this.animMode;
+  }
+
+  /** The groups' lanes for the tab that is open (made when first asked for: the 3D view is there by then). */
+  private get boxes(): BoxGroupLanes {
+    if (this.boxLanes === null) {
+      this.boxLanes = { light: new BoxGroupLanes(this.laneHost, this.boxData, 'light'), scene: new BoxGroupLanes(this.laneHost, this.boxData, 'scene') };
+    }
+    return this.animMode ? this.boxLanes.scene : this.boxLanes.light;
+  }
+
   /** What's drawn in place of the rows (null: the lights' rows are). */
-  private get alt(): NotesLanes | AnimLanes | null {
-    return this.notesMode ? this.lanes : this.animMode ? this.anim : null;
+  private get alt(): NotesLanes | AnimLanes | BoxGroupLanes | null {
+    return this.notesMode ? this.lanes : this.boxMode ? this.boxes : this.animMode ? this.anim : null;
+  }
+
+  /** The switch between the rows (or the scene's animation) and the map's own light groups. */
+  private boxToggle() {
+    const button = document.createElement('button');
+    button.className = 'th-tool';
+    button.textContent = this.boxView ? '◂ Строки' : 'Группы GLS';
+    button.title = this.boxView ? 'Вернуться к строкам' : 'Группы света игры (GLS): блоки карты по группам окружения. Только просмотр';
+    button.addEventListener('click', () => {
+      this.boxView = !this.boxView;
+      this.scrollY = 0;
+      this.renderHeaders(true);
+    });
+    return button;
+  }
+
+  private laneHost!: LaneHost;
+
+  // ----- the game's own light groups (GLS) as rows of the lights' tab -------------------------------------
+
+  /** The groups opened up into their elements. */
+  private boxOpen = new Set<number>();
+  private boxCache: { key: string; rows: Row[] } | null = null;
+  private boxMerged: { base: Row[]; box: Row[]; length: number; rows: Row[] } | null = null;
+  /** Each group row's blocks in strips (overlapping ones don't hide each other). */
+  private boxStacks = new Map<string, Map<string, { index: number; of: number }>>();
+  /** A block's clips (and, for an element's row, that element's), and where it ends: for this version of the map's groups. */
+  private boxClipCache = new Map<string, LightClip[]>();
+  private boxEnds = new Map<string, number>();
+  private boxClipVersion = -1;
+  private seenBoxVersion = -1;
+
+  private get boxData(): PreviewBoxGroups {
+    if (this.boxSource === null) this.boxSource = new PreviewBoxGroups(this.editor.preview, (beat) => this.editor.seek(beat));
+    return this.boxSource;
+  }
+
+  /** Every row the timeline shows: the editor's, with the GLS groups that have colour blocks in the map before the closing run of event rows. */
+  private allRows(): Row[] {
+    const editor = this.editor;
+    if (this.notesMode || this.animMode || editor.project === null) return editor.rows;
+    const key = `${String(editor.preview.boxGroupsVersion)}|${[...this.boxOpen].join(',')}`;
+    if (this.boxCache?.key !== key) {
+      this.boxStacks.clear();
+      const rows: Row[] = [];
+      for (const row of this.boxData.rows()) {
+        const blocks: BoxGroupBlock[] = [];
+        for (const lane of row.lanes) if (lane.kind === 'color') blocks.push(...lane.blocks);
+        if (blocks.length === 0) continue;
+        const id = `box:${String(row.group)}`;
+        const label = `${row.name !== '' ? row.name : `Группа ${String(row.group)}`}${row.missing ? ' (нет в окружении)' : ''}`;
+        const expanded = this.boxOpen.has(row.group) && row.count > 0;
+        const shared = { group: row.group, count: row.count, missing: row.missing, blocks };
+        rows.push({ kind: 'box', key: id, label, expanded, element: null, depth: 0, ...shared });
+        this.boxStacks.set(id, stackBlocks(blocks));
+        if (expanded) for (let element = 0; element < row.count; element++) rows.push({ kind: 'box', key: `${id}:${String(element)}`, label: `Элемент ${String(element + 1)}`, expanded: false, element, depth: 1, ...shared });
+      }
+      this.boxCache = { key, rows };
+    }
+    const merged = this.boxMerged;
+    if (merged === null || merged.base !== editor.rows || merged.length !== editor.rows.length || merged.box !== this.boxCache.rows) {
+      // (the rows the editor ends with — Color boost, the rings' and lasers' events, BPM change — stay the last)
+      let tail = editor.rows.length;
+      while (tail > 0 && (editor.rows[tail - 1]!.kind === 'raw' || editor.rows[tail - 1]!.kind === 'poses')) tail--;
+      this.boxMerged = { base: editor.rows, length: editor.rows.length, box: this.boxCache.rows, rows: [...editor.rows.slice(0, tail), ...this.boxCache.rows, ...editor.rows.slice(tail)] };
+    }
+    return this.boxMerged!.rows;
+  }
+
+  /** A GLS colour block's clips — or those of one of its elements. */
+  private boxClips(block: BoxGroupBlock, count: number, element: number | null): LightClip[] {
+    const version = this.editor.preview.boxGroupsVersion;
+    if (version !== this.boxClipVersion) {
+      this.boxClipCache.clear();
+      this.boxEnds.clear();
+      this.boxClipVersion = version;
+    }
+    let all = this.boxClipCache.get(block.id);
+    if (all === undefined) {
+      all = colorBlockClips(block, count);
+      this.boxClipCache.set(block.id, all);
+    }
+    if (element === null) return all;
+    const key = `${block.id}|${String(element)}`;
+    let own = this.boxClipCache.get(key);
+    if (own === undefined) {
+      own = all.filter((clip) => clip.slot === element).map((clip) => ({ ...clip, slot: 0 }));
+      this.boxClipCache.set(key, own);
+    }
+    return own;
+  }
+
+  /** Where a block ends on the song: its last event on any element, and what lasts after it. */
+  private boxEnd(block: BoxGroupBlock, count: number): number {
+    this.boxClips(block, count, null);
+    let end = this.boxEnds.get(block.id);
+    if (end === undefined) {
+      end = block.beat + block.length;
+      for (const clip of this.boxClips(block, count, null)) end = Math.max(end, clip.end);
+      this.boxEnds.set(block.id, end);
+    }
+    return end;
+  }
+
+  /** A GLS group's row: its blocks as effects are drawn — inside each, what every element of the group gets. */
+  private drawBoxRow(row: Extract<Row, { kind: 'box' }>, top: number, height: number) {
+    const stacks = this.boxStacks.get(`box:${String(row.group)}`);
+    const from = this.xToBeat(GUTTER);
+    const to = this.xToBeat(this.width);
+    for (const block of row.blocks) {
+      if (block.beat > to) continue;
+      const end = this.boxEnd(block, row.count);
+      if (end < from) continue;
+      const lane = row.element === null ? (stacks?.get(block.id) ?? { index: 0, of: 1 }) : { index: 0, of: 1 };
+      this.drawBoxBlock(row, block, this.beatToX(block.beat), top + (height * lane.index) / lane.of + 2, Math.max(2, (end - block.beat) * this.pxPerBeat), height / lane.of - 4);
+    }
+  }
+
+  private drawBoxBlock(row: Extract<Row, { kind: 'box' }>, block: BoxGroupBlock, x: number, y: number, w: number, h: number) {
+    const ctx = this.context;
+    const clips = this.boxClips(block, row.count, row.element);
+    const first = clips[0];
+    const picked = this.boxData.picked() === block.id;
+    if (w < 16) {
+      // (too narrow to make out its events: a plain block in its colour)
+      this.boosted = this.editor.boostAt(block.beat);
+      ctx.fillStyle = first === undefined ? '#6a7080' : this.colorCss(first.color, 0.85);
+      this.boosted = false;
+      ctx.fillRect(x, y, Math.max(1.5, w), h);
+      return;
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.fillStyle = '#14151b';
+    ctx.fillRect(x, y, w, h);
+    if (first !== undefined) {
+      ctx.fillStyle = this.colorCss(first.color, 0.1);
+      ctx.fillRect(x, y, w, h);
+      this.effectLeft = x;
+      this.drawEffectChildren(ctx, clips, x, y, w, h, true);
+    } else {
+      // (the group's number of elements is not known, or the block lights nothing: no sketch of it)
+      ctx.fillStyle = 'rgba(160,170,190,0.25)';
+      ctx.fillRect(x, y, w, h);
+    }
+    ctx.restore();
+    ctx.strokeStyle = picked ? '#ffffff' : first === undefined ? '#6a7080' : this.colorCss(first.color, 0.9);
+    ctx.lineWidth = picked ? 2 : 1.2;
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), h - 1);
+    if (row.element === null && w > 40 && h >= 12) {
+      const type = block.boxes[0]?.beatDistributionType;
+      const label = `≋ ${type === 1 ? 'Волна' : type === 2 ? 'Ступени' : 'Блок'}${block.boxes.length > 1 ? ` ×${String(block.boxes.length)}` : ''}`;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w - 4, h);
+      ctx.clip();
+      ctx.font = '600 10px system-ui, sans-serif';
+      const tw = ctx.measureText(label).width;
+      // (the name sits at the bottom right, as an effect's does)
+      const lx = Math.max(x + 3, x + w - tw - 9);
+      ctx.fillStyle = 'rgba(10,11,15,0.8)';
+      ctx.fillRect(lx, y + h - 14, tw + 6, 12);
+      ctx.fillStyle = '#e8ebf2';
+      ctx.fillText(label, lx + 3, y + h - 4);
+      ctx.restore();
+    }
+  }
+
+  /** A click on a GLS group's row: the block under it picked (the song goes to its start), or none. */
+  private pickBox(row: Extract<Row, { kind: 'box' }>, x: number) {
+    const beat = this.xToBeat(x);
+    const slack = 3 / this.pxPerBeat;
+    const hit = [...row.blocks].reverse().find((block) => beat >= block.beat - slack && beat <= this.boxEnd(block, row.count) + slack) ?? null;
+    this.boxData.pick(hit?.id ?? null, hit?.beat ?? null);
   }
 
   constructor(private readonly editor: Editor, root: HTMLElement) {
@@ -202,6 +403,7 @@ export class Timeline {
       },
       redraw: () => this.redraw(),
     };
+    this.laneHost = laneHost;
     this.lanes = new NotesLanes(laneHost);
     this.anim = new AnimLanes(laneHost);
     this.headers = root.querySelector<HTMLElement>('#track-headers')!;
@@ -245,6 +447,11 @@ export class Timeline {
           const width = this.trackWidth / this.pxPerBeat;
           if (beat > this.viewStart + width * 0.85 || beat < this.viewStart) this.viewStart = beat - width * 0.15;
         }
+      }
+      // (the map's light groups or the environment's changed: their rows are made again)
+      if (this.seenBoxVersion !== this.editor.preview.boxGroupsVersion) {
+        this.seenBoxVersion = this.editor.preview.boxGroupsVersion;
+        this.renderHeaders(true);
       }
       this.autoScroll();
       if (this.needsDraw) {
@@ -426,7 +633,7 @@ export class Timeline {
   /** Each row's top (in canvas pixels, scrolled). */
   private layout(): { row: Row; top: number; height: number }[] {
     let y = this.rowsTop - this.scrollY;
-    return this.editor.rows.map((row) => {
+    return this.allRows().map((row) => {
       const height = this.rowHeight(row);
       const item = { row, top: y, height };
       y += height;
@@ -435,7 +642,7 @@ export class Timeline {
   }
 
   private rowsHeight() {
-    return this.editor.rows.reduce((sum, row) => sum + this.rowHeight(row), 0);
+    return this.allRows().reduce((sum, row) => sum + this.rowHeight(row), 0);
   }
 
   private rowAt(y: number) {
@@ -487,6 +694,8 @@ export class Timeline {
 
   /** Clips shown on a row (lowest first). */
   private clipsOf(row: Row): ShownClip[] {
+    // (a GLS group's blocks are drawn by drawBoxRow, not as the editor's clips)
+    if (row.kind === 'box') return [];
     return this.editor.rowClips(row);
   }
 
@@ -503,6 +712,7 @@ export class Timeline {
     const item = this.rowAt(y);
     if (item === null) return null;
     const { row, top, height } = item;
+    if (row.kind === 'box') return null;
     if (row.kind === 'poses') {
       const lanes = this.blockLanes(row);
       for (const block of [...this.blocksOf(row)].reverse()) {
@@ -665,7 +875,7 @@ export class Timeline {
       ctx.clip();
       for (const { row, top, height: h } of this.layout()) {
         if (top + h < this.rowsTop || top > this.rowsBottom) continue;
-        ctx.fillStyle = row.kind === 'group' ? '#1b1d24' : row.kind === 'custom' ? '#1a1c26' : row.kind === 'light' ? '#17181e' : '#191a1f';
+        ctx.fillStyle = row.kind === 'group' || (row.kind === 'box' && row.element === null) ? '#1b1d24' : row.kind === 'custom' ? '#1a1c26' : row.kind === 'light' || row.kind === 'box' ? '#17181e' : '#191a1f';
         ctx.fillRect(0, top, width, h);
         if (row.kind === 'light' && editor.lightSelection.has(lightKey(row.type, row.id))) {
           ctx.fillStyle = 'rgba(90,170,255,0.07)';
@@ -684,6 +894,10 @@ export class Timeline {
       // clips and events
       for (const { row, top, height: h } of this.layout()) {
         if (top + h < this.rowsTop || top > this.rowsBottom) continue;
+        if (row.kind === 'box') {
+          this.drawBoxRow(row, top, h);
+          continue;
+        }
         if (row.kind === 'raw') this.drawRaw(row, top, h);
         else if (row.kind === 'poses') {
           const lanes = this.blockLanes(row);
@@ -2175,8 +2389,8 @@ export class Timeline {
 
   renderHeaders(force = false) {
     const editor = this.editor;
-    const rows = editor.rows;
-    const key = `${editor.tab}|${rows.map((row) => row.key + (row.kind === 'group' || row.kind === 'custom' ? (row.expanded ? '+' : '-') + row.label : '')).join(',')}|${String(editor.pickedLight?.type)}:${String(editor.pickedLight?.id)}|${[...editor.lightSelection].join(',')}|${String(editor.focus)}|${String(editor.project !== null)}`;
+    const rows = this.allRows();
+    const key = `${editor.tab}|${[...this.boxOpen].join(',')}|${rows.map((row) => row.key + (row.kind === 'group' || row.kind === 'custom' ? (row.expanded ? '+' : '-') + row.label : '')).join(',')}|${String(editor.pickedLight?.type)}:${String(editor.pickedLight?.id)}|${[...editor.lightSelection].join(',')}|${String(editor.focus)}|${String(editor.project !== null)}|${String(this.boxView)}`;
     if (!force && key === this.headerKey) return;
     this.headerKey = key;
     const box = this.headers;
@@ -2199,6 +2413,19 @@ export class Timeline {
         item.title = 'Точки справа от ноты — её ряд: нижняя — низ, средняя — середина, верхняя — верх';
         list.append(item);
       }
+    } else if (this.boxMode) {
+      // (the map's own light groups: named on the timeline itself)
+      const tools = document.createElement('div');
+      tools.className = 'th-ruler';
+      tools.style.height = `${String(RULER_H)}px`;
+      tools.style.lineHeight = `${String(RULER_H)}px`;
+      tools.append(this.boxToggle());
+      box.append(tools);
+      const hint = document.createElement('div');
+      hint.className = 'nm-dim';
+      hint.style.cssText = 'padding:8px 10px;font-size:11px;line-height:1.5;white-space:normal';
+      hint.textContent = this.animMode ? 'Блоки вращения, перемещения и эффектов групп света игры. Только просмотр: клик по блоку — перейти к нему. Shift + колесо — листать группы.' : 'Блоки цвета групп света игры. Только просмотр: клик по блоку — перейти к нему. Shift + колесо — листать группы.';
+      list.append(hint);
     } else if (this.animMode) {
       // (the scene side: the animation's lines are named on the timeline itself)
       const tools = document.createElement('div');
@@ -2206,6 +2433,7 @@ export class Timeline {
       tools.style.height = `${String(RULER_H)}px`;
       tools.style.lineHeight = `${String(RULER_H)}px`;
       tools.textContent = 'Анимация сцены';
+      tools.append(this.boxToggle());
       box.append(tools);
       const hint = document.createElement('div');
       hint.className = 'nm-dim';
@@ -2495,6 +2723,23 @@ export class Timeline {
           ...(addTo.length > 0 ? [null, { label: 'Добавить в группу', heading: true }, ...addTo] : []),
         ]);
       });
+    } else if (row.kind === 'box') {
+      // (a group of the game's own lighting: opened up into its elements, as a group of lights is)
+      item.className = `th-row th-${row.element === null ? 'group' : 'light'}`;
+      if (this.rowScale < 0.85) item.classList.add('compact');
+      if (row.element === null) {
+        item.append(
+          toggle(row.expanded, row.count > 0, row.expanded ? 'Свернуть' : `Раскрыть (элементов: ${String(row.count)})`, () => {
+            if (this.boxOpen.has(row.group)) this.boxOpen.delete(row.group);
+            else this.boxOpen.add(row.group);
+            this.renderHeaders(true);
+          }),
+          swatch(customHue(`gls${String(row.group)}`)),
+          text(row.label, 'th-name'),
+          text(row.count > 0 ? String(row.count) : '', 'th-count'),
+        );
+        item.title = row.missing ? 'В окружении нет такой группы света: блоки карты на ней ничего не зажигают' : 'Группа света игры (GLS). Блоки цвета карты; внутри — что получает каждый элемент. ▸ раскрывает группу по элементам. Только просмотр';
+      } else item.textContent = row.label;
     } else if (row.kind === 'poses') {
       item.textContent = `${row.ring === 'zoom' ? '⇹' : row.ring === 'lasers' ? '✳' : '◎'} ${row.label}`;
       item.title = row.ring === 'lasers' ? 'Вращающиеся лазеры: протяните по строке, чтобы сделать блок; двойной клик по блоку — его настройки (крутятся рядом, повороты по шагам). Длина блока — сколько крутятся / сколько шагов' : row.ring === 'zoom' ? 'Зум колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор расстояний между кольцами' : 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
@@ -2629,6 +2874,7 @@ export class Timeline {
       if (this.editor.project === null) return;
       const { x, y } = local(event);
       if (!(y < RULER_H || (y >= this.rowsBottom && y < this.navTop))) {
+        if (this.boxMode) return;
         if (this.animMode) {
           event.preventDefault();
           this.anim.contextMenu(x, y, event.clientX, event.clientY);
@@ -2798,6 +3044,13 @@ export class Timeline {
         this.drag = { kind: 'pose', blockId: mark.block.id, poseId: mark.pose.id, origin: mark.beat, to: mark.beat, grab: this.xToBeat(x), moved: false };
         // (picked: its settings on the right)
         this.editor.pickPose({ blockId: mark.block.id, poseId: mark.pose.id });
+        this.needsDraw = true;
+        return;
+      }
+      // (a GLS group's row: its block picked, the song taken to it)
+      const boxRow = this.rowAt(y)?.row;
+      if (boxRow?.kind === 'box' && event.button === 0) {
+        this.pickBox(boxRow, x);
         this.needsDraw = true;
         return;
       }

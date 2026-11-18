@@ -42,6 +42,7 @@ import { defaultGls } from './gls';
 import { adjustClips, type Adjustment } from './adjust';
 import { laserEvents } from './lasers';
 import { writeMapColors, type MapColors } from './map-colors';
+import type { BoxGroupBlock } from './box-groups';
 import { colorSchemeForDifficulty, parseInfo, type InfoColorScheme } from '../engine/core/beatmap/info';
 import { findBandFlux } from './audio-tools';
 import { BANDS } from './onsets';
@@ -81,7 +82,11 @@ export type Row =
   | { kind: 'custom'; key: string; group: LightGroup; label: string; expanded: boolean; depth: number; parent: string | null }
   | { kind: 'raw'; key: string; type: number; label: string; depth: number }
   /** The ring poses (blocks of them). */
-  | { kind: 'poses'; key: string; label: string; depth: number; ring: 'rotation' | 'zoom' | 'lasers' };
+  | { kind: 'poses'; key: string; label: string; depth: number; ring: 'rotation' | 'zoom' | 'lasers' }
+  /** A light group of the game's own Group Lighting System (GLS) with the map's colour blocks on it
+   *  (`element`: one of its elements, on a row opened up from the group's; null: the group's own).
+   *  Made by the timeline, which shows them — not in `rows`. */
+  | { kind: 'box'; key: string; group: number; label: string; count: number; missing: boolean; blocks: BoxGroupBlock[]; expanded: boolean; element: number | null; depth: number };
 
 /** A row of lights (a light group, a light, a group of the user's) — clips and effects go there. */
 export type LightRow = Extract<Row, { kind: 'group' | 'light' | 'custom' }>;
@@ -729,7 +734,20 @@ export class Editor {
     if (converted > 0) this.dirty = true;
     // the tempo changes: events of their own on the timeline (from the file when the project has none)
     if (!this.project.raw.some((event) => event.type === BPM_EVENT_TYPE)) {
-      for (const change of readBpmChanges(fileText)) this.project.raw.push({ id: newId('r'), beat: change.beat, type: BPM_EVENT_TYPE, value: 0, floatValue: change.bpm });
+      // (v4 keeps the tempo not in the difficulty but in the song's audio data — where the engine read it
+      // from: the changes are those, the stretches that don't change the tempo left out)
+      let last = this.songBpm;
+      const changes =
+        this.fileVersion === '4'
+          ? difficulty.bpmEvents
+              .filter((event) => {
+                const same = Math.abs(event.bpm - last) < 1e-6;
+                last = event.bpm;
+                return !same;
+              })
+              .map((event) => ({ beat: event.jsonTime, bpm: event.bpm }))
+          : readBpmChanges(fileText);
+      for (const change of changes) this.project.raw.push({ id: newId('r'), beat: change.beat, type: BPM_EVENT_TYPE, value: 0, floatValue: change.bpm });
     }
     this.timingKey = '';
     this.syncTiming(false);

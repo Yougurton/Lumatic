@@ -362,10 +362,16 @@ class Converter:
             columns = math.ceil(math.sqrt(d))
             rows = math.ceil(d / columns)
             atlas = bytearray(columns * w * rows * h)
+            # Unity's ARGB32 (format 5) stores alpha before red. The SDF shader samples
+            # the red channel of this volume texture, not alpha: taking byte 0 here turns a
+            # mostly-opaque texture into a nearly constant noise field and makes Coldplay's
+            # SDF-driven ribbons/spheres render incorrectly.
+            channel_offset = 1 if t['m_Format'] == 5 else 0
             for z in range(d):
                 cx, cy = z % columns, z // columns
                 for y in range(h):
-                    line = raw[(z * h + y) * w * channels:(z * h + y + 1) * w * channels:channels]
+                    start = (z * h + y) * w * channels
+                    line = raw[start + channel_offset:start + w * channels:channels]
                     row = cy * h + y
                     start = row * columns * w + cx * w
                     atlas[start:start + w] = line

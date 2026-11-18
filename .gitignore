@@ -4,3 +4,6 @@ dist-electron/
 release/
 *.log
 branding/lumatic-logos.zip
+
+tmp/
+/gls-environment.cjs

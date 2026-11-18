@@ -39,6 +39,8 @@ export interface BoxGroupBlock {
   /** The axes its boxes turn or move on (0 x, 1 y, 2 z): rotation and translation blocks only. */
   axes: number[];
   boxes: AnyBox[];
+  /** The engine's own block (the boxes in it, its beat): what the engine spreads over the elements. */
+  eventGroup: EventBoxGroup<AnyBox>;
   /** How many events its boxes have. */
   events: number;
   /** Where it is in the file: the list of its kind (v3) or of all (v4), and its place in the order
@@ -89,6 +91,7 @@ function blocksOf(kind: BoxGroupKind, groups: readonly EventBoxGroup<AnyBox>[], 
       length: lengthOf(kind, group, counts.get(group.id) ?? 0),
       axes,
       boxes: group.boxes,
+      eventGroup: group,
       events: group.boxes.reduce((sum, box) => sum + box.events.length, 0),
       source: { kind, index },
     };
@@ -101,7 +104,7 @@ function blocksOf(kind: BoxGroupKind, groups: readonly EventBoxGroup<AnyBox>[], 
  * A parsed difficulty's blocks, in time (those at one beat: colour, rotation, translation, FX — and
  * in the file's order within a kind). `groups`: the environment's light groups, for the blocks' lengths.
  */
-export function readBoxGroups(difficulty: Difficulty, groups: readonly LightGroupInfo[] = []): BoxGroupBlock[] {
+export function readBoxGroups(difficulty: Pick<Difficulty, 'lightColorEventBoxGroups' | 'lightRotationEventBoxGroups' | 'lightTranslationEventBoxGroups' | 'fxEventBoxGroups'>, groups: readonly LightGroupInfo[] = []): BoxGroupBlock[] {
   const counts = new Map(groups.map((group) => [group.id, group.count]));
   const blocks = [
     ...blocksOf('color', difficulty.lightColorEventBoxGroups as EventBoxGroup<AnyBox>[], counts),
@@ -111,6 +114,38 @@ export function readBoxGroups(difficulty: Difficulty, groups: readonly LightGrou
   ];
   const order = new Map(BOX_GROUP_KINDS.map((kind, index) => [kind, index]));
   return blocks.sort((a, b) => a.beat - b.beat || order.get(a.kind)! - order.get(b.kind)! || a.source.index - b.source.index);
+}
+
+/**
+ * Blocks that overlap in time each in a strip of their own, so none hides another: where each is
+ * (strip number, and how many strips its cluster of overlapping blocks has).
+ */
+export function stackBlocks(blocks: readonly BoxGroupBlock[]): Map<string, { index: number; of: number }> {
+  const out = new Map<string, { index: number; of: number }>();
+  let cluster: { id: string; index: number }[] = [];
+  /** Where each strip's last block ends. */
+  let busy: number[] = [];
+  let clusterEnd = -Infinity;
+  const close = () => {
+    const of = Math.max(1, ...cluster.map((item) => item.index + 1));
+    for (const item of cluster) out.set(item.id, { index: item.index, of });
+    cluster = [];
+    busy = [];
+  };
+  for (const block of [...blocks].sort((a, b) => a.beat - b.beat)) {
+    const end = block.beat + Math.max(block.length, 1 / 16);
+    if (block.beat >= clusterEnd - 1e-6) {
+      close();
+      clusterEnd = -Infinity;
+    }
+    let index = 0;
+    while (busy[index] !== undefined && busy[index]! > block.beat + 1e-6) index++;
+    busy[index] = end;
+    cluster.push({ id: block.id, index });
+    clusterEnd = Math.max(clusterEnd, end);
+  }
+  close();
+  return out;
 }
 
 /** A row of the timeline: one group's blocks of one kind — and, for rotation and translation, on one axis. */

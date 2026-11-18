@@ -34,6 +34,13 @@ export const OTHER_ENVIRONMENTS: [string, string][] = environmentCatalog
   .filter((entry) => !isGLSCapableEnvironment(entry.id) && !SHOW_ENVIRONMENTS.some(([id]) => id === entry.id))
   .map((entry) => [entry.id, entry.title]);
 
+/** The environments with the game's own Group Lighting System (GLS) the editor has: a map on one keeps its
+ *  light groups in its difficulty (v3; v4 can't be saved yet), so a new map on one is made as v3. */
+export const GLS_ENVIRONMENTS: [string, string][] = environmentCatalog.filter((entry) => isGLSCapableEnvironment(entry.id)).map((entry) => [entry.id, entry.title]);
+
+/** The format a new map's difficulties are made in: the setting's, but v3 for an environment with GLS (v2 has no light groups). */
+export const newMapFormat = (environment: string, format: '2' | '3'): '2' | '3' => (isGLSCapableEnvironment(environment) ? '3' : format);
+
 /** The game's environments in the order they came out (oldest first; the ones not listed after them). */
 const RELEASE_ORDER = [
   'DefaultEnvironment',
@@ -81,8 +88,8 @@ const RELEASE_ORDER = [
   'MetallicaEnvironment',
 ];
 
-/** Every environment with classic lights the editor offers, in the order they came out in the game. */
-export const STANDARD_ENVIRONMENTS: [string, string][] = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS].sort(([a], [b]) => {
+/** Every environment the editor offers (classic lights and GLS), in the order they came out in the game. */
+export const STANDARD_ENVIRONMENTS: [string, string][] = [...SHOW_ENVIRONMENTS, ...OTHER_ENVIRONMENTS, ...GLS_ENVIRONMENTS].sort(([a], [b]) => {
   const rank = (id: string) => {
     const index = RELEASE_ORDER.indexOf(id);
     return index < 0 ? RELEASE_ORDER.length : index;
@@ -612,7 +619,7 @@ export function newMapDialog(defaultMapper: string): Promise<{ folder: MapFolder
           await folder.writeBinary('song.ogg', ogg.buffer.slice(ogg.byteOffset, ogg.byteOffset + ogg.byteLength) as ArrayBuffer);
           if (original !== null) await writeSongSource(folder, original.data, original.name, settings.silence, gain);
           await folder.writeBinary('cover.jpg', await coverJpeg(cover, settings.title, settings.artist));
-          for (const entry of settings.difficulties) await folder.writeText(newDifficultyFile(entry), emptyDifficulty(editorSettings().newFormat));
+          for (const entry of settings.difficulties) await folder.writeText(newDifficultyFile(entry), emptyDifficulty(newMapFormat(settings.environment, editorSettings().newFormat)));
           await folder.writeText('Info.dat', infoText(settings, 'song.ogg', 'cover.jpg'));
           await folder.refresh();
           try {

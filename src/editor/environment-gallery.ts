@@ -1,3 +1,4 @@
+import { isGLSCapableEnvironment } from '../engine/renderer/environment/environment-catalog';
 import { findPreset, PRESET_COLLECTIONS, PRESETS, type Preset } from './environment-mods';
 
 /**
@@ -25,6 +26,9 @@ export interface GalleryOptions {
   choose: (choice: EnvironmentChoice) => void;
 }
 
+/** What a game environment's card says of it: with GLS, its light groups are the game's own (and its maps v3). */
+export const standardDetail = (id: string) => (isGLSCapableEnvironment(id) ? 'окружение игры · группы света GLS (карты v3)' : 'окружение игры');
+
 const environmentName = (id: string) => id.replace(/Environment$/u, '').replace(/([a-z])([A-Z])/gu, '$1 $2');
 
 /** Why a ready-made environment can't go into the difficulty (null: it can). */
@@ -47,7 +51,7 @@ export function choiceLabel(choice: EnvironmentChoice, standard: GalleryOptions[
   const preset = findPreset(choice.preset);
   if (preset !== undefined) return { image: presetImage(preset), name: preset.name, detail: `автор: ${preset.author} · на ${environmentName(preset.environment)}${preset.noodle ? ' · Noodle' : ''}` };
   const name = standard.find(([id]) => id === choice.environment)?.[1] ?? environmentName(choice.environment);
-  return { image: standardImage(choice.environment), name, detail: 'окружение игры' };
+  return { image: standardImage(choice.environment), name, detail: standardDetail(choice.environment) };
 }
 
 export function environmentGallery(options: GalleryOptions): HTMLElement {
@@ -122,7 +126,7 @@ export function environmentGallery(options: GalleryOptions): HTMLElement {
           options.mode === 'pick'
             ? { label: active ? 'Выбрано' : 'Выбрать', run: () => options.choose({ environment: id }) }
             : { label: active ? 'Стоит сейчас' : 'Поставить', disabled: active ? 'Это окружение уже стоит' : options.version === '4' ? 'Карты v4 редактор пока не сохраняет.' : null, run: () => options.choose({ environment: id }) };
-        grid.append(card(standardImage(id), name, ['окружение игры'], active, '', action));
+        grid.append(card(standardImage(id), name, [standardDetail(id)], active, '', action));
       }
       credits.textContent = 'Картинки окружений игры — кадры из 3D-вида редактора.';
       return;

@@ -71,6 +71,8 @@ export class Preview {
   async setEnvironment(id: string, chromaEnvironment?: ChromaEnvironmentData) {
     const result = await this.view.setEnvironment(id, chromaEnvironment);
     this.outlines.clear();
+    // (the light groups' sizes and axes come from the environment: whoever shows them asks again)
+    this.boxGroupsVersion++;
     return result.isOk();
   }
 
@@ -141,7 +143,16 @@ export class Preview {
    *  parsed them: played as they are, with the editor's events (null: none). */
   private boxGroups: Pick<Difficulty, 'lightColorEventBoxGroups' | 'lightRotationEventBoxGroups' | 'lightTranslationEventBoxGroups' | 'fxEventBoxGroups'> | null = null;
 
+  /** Changes whenever the map's groups or the environment do (for what is made from them and cached). */
+  boxGroupsVersion = 0;
+
+  /** The groups as set (null: none). */
+  boxGroupsSet() {
+    return this.boxGroups;
+  }
+
   setBoxGroups(groups: Pick<Difficulty, 'lightColorEventBoxGroups' | 'lightRotationEventBoxGroups' | 'lightTranslationEventBoxGroups' | 'fxEventBoxGroups'> | null) {
+    this.boxGroupsVersion++;
     this.boxGroups =
       groups === null
         ? null
