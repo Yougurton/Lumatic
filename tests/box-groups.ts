@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseDifficulty } from '../src/engine/core/beatmap/parse';
-import { boxGroupRows, boxGroupStats, lightGroupsOf, readBoxGroups, type BoxGroupBlock } from '../src/editor/box-groups';
+import { boxGroupRows, boxGroupStats, lightGroupsOf, readBoxGroups, splitGroupName, type BoxGroupBlock } from '../src/editor/box-groups';
 import { convertMap, mapVersion } from '../src/editor/convert';
 import { difficultyVersion, writeDifficulty } from '../src/editor/map-io';
 
@@ -72,6 +72,24 @@ const plain = (blocks: BoxGroupBlock[]) =>
       .map((block) => canonical({ kind: block.kind, group: block.group, beat: block.beat, boxes: block.boxes }))
       .sort(),
   );
+
+// the groups' names taken apart: the category is the words before the Local/Global/Left/Right tail
+const nameParts: [string, string | null, string | null][] = [
+  ['TopConesLocalLeft', 'Top Cones', 'Local Left'],
+  ['TopConesGlobalRight', 'Top Cones', 'Global Right'],
+  ['CenterConesLocalLeft', 'Center Cones', 'Local Left'],
+  ['DiamondRingsGlobal', 'Diamond Rings', 'Global'],
+  ['SpectogramLeft', 'Spectogram', 'Left'],
+  ['CenterLasersBottomLeft', 'Center Lasers Bottom', 'Left'],
+  ['RunwayInnerLaser', null, null],
+  ['WindowLeftPieces', null, null],
+  ['RunwayLasersLeftTransformZ', null, null],
+  ['0', null, null],
+];
+for (const [name, base, sub] of nameParts) {
+  const made = splitGroupName(name);
+  check((made?.base ?? null) === base && (made?.sub ?? null) === sub, `splitGroupName("${name}") → ${base === null ? 'no category' : `"${base}" / "${sub}"`}`);
+}
 
 for (const dir of process.argv.slice(2)) {
   const files = readdirSync(dir);

@@ -23,7 +23,7 @@ export type BoxGroupKind = 'color' | 'rotation' | 'translation' | 'fx';
 
 export const BOX_GROUP_KINDS: readonly BoxGroupKind[] = ['color', 'rotation', 'translation', 'fx'];
 
-type AnyEvent = LightColorEvent | LightRotationEvent | LightTranslationEvent | FloatFxEvent;
+export type AnyEvent = LightColorEvent | LightRotationEvent | LightTranslationEvent | FloatFxEvent;
 type AnyBox = EventBox<AnyEvent> & { axis?: number; flip?: number };
 
 export interface BoxGroupBlock {
@@ -62,6 +62,28 @@ const NAMES = groupNames as Record<string, LightGroupInfo[]>;
 /** The light groups of a built-in GLS environment, by number ([]: not one the editor knows). */
 export function lightGroupsOf(environment: string): LightGroupInfo[] {
   return NAMES[environment] ?? [];
+}
+
+/** The words the game's group names end with that say which slice of the environment they are. */
+const GROUP_TAIL_WORDS = new Set(['local', 'global', 'left', 'right']);
+
+/** A group's name taken apart: "TopConesLocalLeft" → the category "Top Cones", the group "Local Left". */
+export interface GroupNameParts {
+  /** The words before the tail: what several neighbour groups share (the category's name). */
+  base: string;
+  /** The tail words: what sets this group from its category's others ("Local Left"). */
+  sub: string;
+}
+
+/** Splits the game's group name into its category and its part in it (null: it doesn't split —
+ *  "WindowLeftPieces" or a bare number names one group on its own). */
+export function splitGroupName(name: string): GroupNameParts | null {
+  const tokens = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_]+/).filter((word) => word !== '');
+  if (tokens.length < 2) return null;
+  let cut = tokens.length;
+  while (cut > 1 && GROUP_TAIL_WORDS.has(tokens[cut - 1]!.toLowerCase())) cut--;
+  if (cut === tokens.length || cut === 0) return null;
+  return { base: tokens.slice(0, cut).join(' '), sub: tokens.slice(cut).join(' ') };
 }
 
 function lengthOf(kind: BoxGroupKind, group: EventBoxGroup<AnyBox>, count: number): number {

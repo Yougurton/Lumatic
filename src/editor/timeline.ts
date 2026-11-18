@@ -19,7 +19,8 @@ import { GRIDS, nextGrid } from './grids';
 import { AnimLanes } from './anim-lanes';
 import { BoxGroupLanes } from './box-group-lanes';
 import { colorBlockClips } from './box-group-clips';
-import { stackBlocks, type BoxGroupBlock } from './box-groups';
+import { splitGroupName, stackBlocks, type BoxGroupBlock, type BoxGroupRow, type GroupNameParts } from './box-groups';
+import { renderBoxBlockPanel } from './box-group-inspector';
 import { PreviewBoxGroups } from './box-group-view';
 import { NotesLanes, type LaneHost } from './notes-timeline';
 import { bandOfHz, DEFAULT_LOOK, paintSpectrogram, type Spectrogram, type SpectrogramLook } from './spectrogram';
@@ -226,6 +227,8 @@ export class Timeline {
 
   /** The groups opened up into their elements. */
   private boxOpen = new Set<number>();
+  /** The categories of groups opened up into their groups ("Top Cones" → Local Left, …). */
+  private boxCats = new Set<string>();
   private boxCache: { key: string; rows: Row[] } | null = null;
   private boxMerged: { base: Row[]; box: Row[]; length: number; rows: Row[] } | null = null;
   /** Each group row's blocks in strips (overlapping ones don't hide each other). */
@@ -237,29 +240,94 @@ export class Timeline {
   private seenBoxVersion = -1;
 
   private get boxData(): PreviewBoxGroups {
-    if (this.boxSource === null) this.boxSource = new PreviewBoxGroups(this.editor.preview, (beat) => this.editor.seek(beat));
+    if (this.boxSource === null) {
+      this.boxSource = new PreviewBoxGroups(this.editor.preview, (beat) => this.editor.seek(beat));
+      this.boxSource.onPick = (id) => this.inspectBox(id);
+    }
     return this.boxSource;
   }
 
-  /** Every row the timeline shows: the editor's, with the GLS groups that have colour blocks in the map before the closing run of event rows. */
+  /** The game's name of a group, with its words spaced ("TopConesLocalLeft" → "Top Cones Local Left"). */
+  private static prettyGroupName(name: string) {
+    return name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+  }
+
+  /** A GLS group's row (and, opened up, one per element): its label from the game's name, its blocks in strips. */
+  private boxGroupRow(row: BoxGroupRow, blocks: BoxGroupBlock[], label: string, depth: number): Row[] {
+    const id = `box:${String(row.group)}`;
+    const expanded = this.boxOpen.has(row.group) && row.count > 0;
+    const shared = { group: row.group, count: row.count, missing: row.missing, blocks };
+    const out: Row[] = [{ kind: 'box', key: id, label, expanded, element: null, depth, ...shared }];
+    this.boxStacks.set(id, stackBlocks(blocks));
+    if (expanded) for (let element = 0; element < row.count; element++) out.push({ kind: 'box', key: `${id}:${String(element)}`, label: `Элемент ${String(element + 1)}`, expanded: false, element, depth: depth + 1, ...shared });
+    return out;
+  }
+
+  /** A map block picked on a GLS row (or let go): its properties in the panel on the right, in
+   *  place of the brush. The reading stage shows them read-over — the map's blocks aren't edited yet. */
+  private inspectBox(id: string | null) {
+    const editor = this.editor;
+    if (id === null || editor.glsInspect?.box === true) {
+      if (editor.glsInspect?.box === true) {
+        editor.glsInspect = null;
+        editor.emit('selection');
+      }
+      if (id === null) return;
+    }
+    const block = this.boxData.blocks().find((item) => item.id === id);
+    if (block === undefined) return;
+    const row = this.boxData.rows().find((item) => item.group === block.group);
+    const label = row === undefined ? `Группа ${String(block.group)}` : Timeline.prettyGroupName(row.name !== '' ? row.name : `Группа ${String(block.group)}`);
+    editor.glsInspect = { box: true, render: (root) => renderBoxBlockPanel(root, block, label, row?.count ?? 0) };
+    editor.emit('selection');
+  }
+
+  /** Every row the timeline shows: the editor's, with the GLS groups that have colour blocks in the map before the closing run of event rows. The groups whose names share a beginning ("TopCones…" → "Top Cones") stand under a category row, as the lights' groups do. */
   private allRows(): Row[] {
     const editor = this.editor;
     if (this.notesMode || this.animMode || editor.project === null) return editor.rows;
-    const key = `${String(editor.preview.boxGroupsVersion)}|${[...this.boxOpen].join(',')}`;
+    const key = `${String(editor.preview.boxGroupsVersion)}|${[...this.boxOpen].join(',')}|${[...this.boxCats].join(',')}`;
     if (this.boxCache?.key !== key) {
       this.boxStacks.clear();
-      const rows: Row[] = [];
+      interface flatRow {
+        row: BoxGroupRow;
+        blocks: BoxGroupBlock[];
+        parts: GroupNameParts | null;
+      }
+      const flat: flatRow[] = [];
       for (const row of this.boxData.rows()) {
         const blocks: BoxGroupBlock[] = [];
         for (const lane of row.lanes) if (lane.kind === 'color') blocks.push(...lane.blocks);
         if (blocks.length === 0) continue;
-        const id = `box:${String(row.group)}`;
-        const label = `${row.name !== '' ? row.name : `Группа ${String(row.group)}`}${row.missing ? ' (нет в окружении)' : ''}`;
-        const expanded = this.boxOpen.has(row.group) && row.count > 0;
-        const shared = { group: row.group, count: row.count, missing: row.missing, blocks };
-        rows.push({ kind: 'box', key: id, label, expanded, element: null, depth: 0, ...shared });
-        this.boxStacks.set(id, stackBlocks(blocks));
-        if (expanded) for (let element = 0; element < row.count; element++) rows.push({ kind: 'box', key: `${id}:${String(element)}`, label: `Элемент ${String(element + 1)}`, expanded: false, element, depth: 1, ...shared });
+        flat.push({ row, blocks, parts: row.name === '' ? null : splitGroupName(row.name) });
+      }
+      // (a category only where several groups share its beginning — "Top Cones" of Left/Right, Local/Global)
+      const categories = new Map<string, flatRow[]>();
+      for (const item of flat) {
+        if (item.parts === null) continue;
+        const siblings = categories.get(item.parts.base) ?? [];
+        siblings.push(item);
+        categories.set(item.parts.base, siblings);
+      }
+      const rows: Row[] = [];
+      const placed = new Set<flatRow>();
+      for (const item of flat) {
+        if (placed.has(item)) continue;
+        const siblings = item.parts === null ? undefined : categories.get(item.parts.base);
+        if (item.parts === null || siblings === undefined || siblings.length < 2) {
+          const name = item.row.name !== '' ? Timeline.prettyGroupName(item.row.name) : `Группа ${String(item.row.group)}`;
+          rows.push(...this.boxGroupRow(item.row, item.blocks, `${name}${item.row.missing ? ' (нет в окружении)' : ''}`, 0));
+          placed.add(item);
+          continue;
+        }
+        const open = this.boxCats.has(item.parts.base);
+        rows.push({ kind: 'box', key: `boxcat:${item.parts.base}`, group: -1, label: item.parts.base, count: 0, missing: false, blocks: [], expanded: open, element: null, depth: 0, category: true });
+        if (open) {
+          for (const sibling of siblings) {
+            rows.push(...this.boxGroupRow(sibling.row, sibling.blocks, `${sibling.parts!.sub}${sibling.row.missing ? ' (нет в окружении)' : ''}`, 1));
+            placed.add(sibling);
+          }
+        }
       }
       this.boxCache = { key, rows };
     }
@@ -2390,7 +2458,7 @@ export class Timeline {
   renderHeaders(force = false) {
     const editor = this.editor;
     const rows = this.allRows();
-    const key = `${editor.tab}|${[...this.boxOpen].join(',')}|${rows.map((row) => row.key + (row.kind === 'group' || row.kind === 'custom' ? (row.expanded ? '+' : '-') + row.label : '')).join(',')}|${String(editor.pickedLight?.type)}:${String(editor.pickedLight?.id)}|${[...editor.lightSelection].join(',')}|${String(editor.focus)}|${String(editor.project !== null)}|${String(this.boxView)}`;
+    const key = `${editor.tab}|${[...this.boxOpen].join(',')}|${[...this.boxCats].join(',')}|${rows.map((row) => row.key + (row.kind === 'group' || row.kind === 'custom' ? (row.expanded ? '+' : '-') + row.label : '')).join(',')}|${String(editor.pickedLight?.type)}:${String(editor.pickedLight?.id)}|${[...editor.lightSelection].join(',')}|${String(editor.focus)}|${String(editor.project !== null)}|${String(this.boxView)}`;
     if (!force && key === this.headerKey) return;
     this.headerKey = key;
     const box = this.headers;
@@ -2724,10 +2792,24 @@ export class Timeline {
         ]);
       });
     } else if (row.kind === 'box') {
-      // (a group of the game's own lighting: opened up into its elements, as a group of lights is)
+      // (a group of the game's own lighting: opened up into its elements, as a group of lights is;
+      // a category row holds several groups of one part of the environment)
       item.className = `th-row th-${row.element === null ? 'group' : 'light'}`;
       if (this.rowScale < 0.85) item.classList.add('compact');
-      if (row.element === null) {
+      if (row.category === true) {
+        const base = row.key.slice('boxcat:'.length);
+        item.append(
+          toggle(row.expanded, true, row.expanded ? 'Свернуть' : 'Раскрыть', () => {
+            if (this.boxCats.has(base)) this.boxCats.delete(base);
+            else this.boxCats.add(base);
+            this.renderHeaders(true);
+          }),
+          swatch(customHue(row.key)),
+          text(row.label, 'th-name'),
+          text('', 'th-count'),
+        );
+        item.title = 'Группы света одной части окружения (Left/Right, Local/Global). ▸ раскрывает их строки';
+      } else if (row.element === null) {
         item.append(
           toggle(row.expanded, row.count > 0, row.expanded ? 'Свернуть' : `Раскрыть (элементов: ${String(row.count)})`, () => {
             if (this.boxOpen.has(row.group)) this.boxOpen.delete(row.group);

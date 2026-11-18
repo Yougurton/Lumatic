@@ -84,9 +84,10 @@ export type Row =
   /** The ring poses (blocks of them). */
   | { kind: 'poses'; key: string; label: string; depth: number; ring: 'rotation' | 'zoom' | 'lasers' }
   /** A light group of the game's own Group Lighting System (GLS) with the map's colour blocks on it
-   *  (`element`: one of its elements, on a row opened up from the group's; null: the group's own).
-   *  Made by the timeline, which shows them — not in `rows`. */
-  | { kind: 'box'; key: string; group: number; label: string; count: number; missing: boolean; blocks: BoxGroupBlock[]; expanded: boolean; element: number | null; depth: number };
+   *  (`element`: one of its elements, on a row opened up from the group's; null: the group's own;
+   *  `category`: a header holding several groups of one part of the environment, no blocks of its
+   *  own). Made by the timeline, which shows them — not in `rows`. */
+  | { kind: 'box'; key: string; group: number; label: string; count: number; missing: boolean; blocks: BoxGroupBlock[]; expanded: boolean; element: number | null; depth: number; category?: boolean };
 
 /** A row of lights (a light group, a light, a group of the user's) — clips and effects go there. */
 export type LightRow = Extract<Row, { kind: 'group' | 'light' | 'custom' }>;
@@ -135,6 +136,9 @@ export interface GlsInspect {
     apply: (change: (target: { startMode: StartMode; fadeIn: number; endMode: EndMode; fadeOut?: number; color: ClipColor; endColor: ClipColor | null; hsv?: boolean; start: number; end: number; strobe: number; strobeDuty?: number; strobeWith?: 'dark' | 'color' | 'dim'; strobeColor?: ClipColor; strobeDim?: number; layer?: number }) => void) => void;
     remove: () => void;
   };
+  /** Set while the picked block is the map's own (a GLS block picked on the timeline): the panel is
+   *  the timeline's to take back, not the GLS editor's. */
+  box?: boolean;
   render?: (root: HTMLElement) => void;
 }
 
