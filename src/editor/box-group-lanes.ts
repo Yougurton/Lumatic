@@ -194,10 +194,32 @@ export class BoxGroupLanes {
 
   contextMenu(_x: number, _y: number, _clientX: number, _clientY: number) {}
 
+  /** The wheel turned so far towards the next line (the lines scroll a line a wheel step). */
+  private wheelLeft = 0;
+
   wheel(event: WheelEvent, _x: number, _y: number): boolean {
-    // (Shift + wheel: the lines up and down, when there are more than fit)
+    // (Shift + wheel: the lines up and down, when there are more than fit — a line a step: the next
+    //  line's edge brought to the top, not the raw pixels of the wheel)
     if (!event.shiftKey) return false;
-    this.scrollY = Math.max(0, this.scrollY + (event.deltaY !== 0 ? event.deltaY : event.deltaX));
+    this.wheelLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
+    while (Math.abs(this.wheelLeft) >= 40) {
+      const down = this.wheelLeft > 0;
+      this.wheelLeft += down ? -40 : 40;
+      const lines = this.lines();
+      if (down) {
+        const next = lines.find((line) => line.top > this.host.lanesTop + 0.5);
+        if (next === undefined) continue;
+        this.scrollY = next.top + this.scrollY - this.host.lanesTop;
+      } else {
+        let previous: number | null = null;
+        for (const line of lines) {
+          if (line.top >= this.host.lanesTop - 0.5) break;
+          previous = line.top;
+        }
+        if (previous === null) continue;
+        this.scrollY = previous + this.scrollY - this.host.lanesTop;
+      }
+    }
     this.host.redraw();
     return true;
   }

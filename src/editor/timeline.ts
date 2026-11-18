@@ -321,13 +321,10 @@ export class Timeline {
           continue;
         }
         const open = this.boxCats.has(item.parts.base);
-        rows.push({ kind: 'box', key: `boxcat:${item.parts.base}`, group: -1, label: item.parts.base, count: 0, missing: false, blocks: [], expanded: open, element: null, depth: 0, category: true });
-        if (open) {
-          for (const sibling of siblings) {
-            rows.push(...this.boxGroupRow(sibling.row, sibling.blocks, `${sibling.parts!.sub}${sibling.row.missing ? ' (нет в окружении)' : ''}`, 1));
-            placed.add(sibling);
-          }
-        }
+        rows.push({ kind: 'box', key: `boxcat:${item.parts.base}`, group: -1, label: item.parts.base, count: siblings.length, missing: false, blocks: [], expanded: open, element: null, depth: 0, category: true });
+        // (every group of the category stands under it, open or folded — not a category of its own)
+        for (const sibling of siblings) placed.add(sibling);
+        if (open) for (const sibling of siblings) rows.push(...this.boxGroupRow(sibling.row, sibling.blocks, `${sibling.parts!.sub}${sibling.row.missing ? ' (нет в окружении)' : ''}`, 1));
       }
       this.boxCache = { key, rows };
     }
@@ -725,6 +722,36 @@ export class Timeline {
   scrollRows(delta: number) {
     this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.scrollY + delta));
     this.needsDraw = true;
+  }
+
+  /** The wheel turned so far towards the next row (the rows scroll a row a wheel step, however tall). */
+  private rowsWheel = 0;
+
+  /** The wheel through the rows: a row a step — the next row's edge brought to the top, not the raw
+   *  pixels of the wheel (a group a step, as the song cursor a grid step). */
+  wheelRows(delta: number) {
+    this.rowsWheel += delta;
+    while (Math.abs(this.rowsWheel) >= 40) {
+      const down = this.rowsWheel > 0;
+      this.rowsWheel += down ? -40 : 40;
+      this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.rowStepScroll(down)));
+    }
+    this.needsDraw = true;
+  }
+
+  /** The scroll that puts the next row's edge at the top of the rows (a wheel step's target). */
+  private rowStepScroll(down: boolean) {
+    const rows = this.layout();
+    if (down) {
+      const next = rows.find((item) => item.top > this.rowsTop + 0.5);
+      return next === undefined ? this.scrollY : next.top - this.rowsTop;
+    }
+    let previous: number | null = null;
+    for (const item of rows) {
+      if (item.top >= this.rowsTop - 0.5) break;
+      previous = item.top;
+    }
+    return previous === null ? this.scrollY : previous - this.rowsTop;
   }
 
   /** Rows taller or shorter (the rows at `anchorY` stay where they are). */
@@ -2513,7 +2540,7 @@ export class Timeline {
       list.addEventListener('wheel', (event) => {
         event.preventDefault();
         if (event.ctrlKey || event.metaKey) return;
-        this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
+        this.wheelRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
       }, { passive: false });
       for (const row of rows) list.append(this.headerRow(row));
       const tail = document.createElement('div');
@@ -2799,14 +2826,14 @@ export class Timeline {
       if (row.category === true) {
         const base = row.key.slice('boxcat:'.length);
         item.append(
-          toggle(row.expanded, true, row.expanded ? 'Свернуть' : 'Раскрыть', () => {
+          toggle(row.expanded, true, row.expanded ? 'Свернуть' : `Раскрыть (групп: ${String(row.count)})`, () => {
             if (this.boxCats.has(base)) this.boxCats.delete(base);
             else this.boxCats.add(base);
             this.renderHeaders(true);
           }),
           swatch(customHue(row.key)),
           text(row.label, 'th-name'),
-          text('', 'th-count'),
+          text(String(row.count), 'th-count'),
         );
         item.title = 'Группы света одной части окружения (Left/Right, Local/Global). ▸ раскрывает их строки';
       } else if (row.element === null) {
@@ -2999,7 +3026,7 @@ export class Timeline {
         }
       } else if (event.shiftKey || x < GUTTER) {
         // (Shift+wheel comes as a sideways wheel on some systems)
-        this.scrollRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
+        this.wheelRows(event.deltaY !== 0 ? event.deltaY : event.deltaX);
       } else if (this.notesMode) {
         // (the notes side: the wheel takes the song on or back — the cursor stays where it is)
         // (as the 3D track: up — on through the song; a grid step a notch, landing on the grid)

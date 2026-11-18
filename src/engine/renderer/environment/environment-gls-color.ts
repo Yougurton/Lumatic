@@ -103,6 +103,10 @@ export function buildEnvironmentGlsColors(
           : data.objects[setterReference.obj]?.components?.MaterialPropertyBlockColorSetter?.[
               setterReference.componentIndex ?? 0
             ];
+      // (the setter not multiplying with the alpha and not sending it to a property either: the game
+      // still darkens with it — Panic 2's spectrogram strips, or they could never go dark)
+      const alphaOnItsOwn =
+        setter?.MultiplyWithAlpha !== 0 || (setter?.SendAlphaToProperty === 1 && (setter.AlphaProperty ?? '') !== '');
       if (controller !== undefined) {
         return (color, alpha) => {
           let adjustedAlpha =
@@ -111,7 +115,11 @@ export function buildEnvironmentGlsColors(
           const colorMultiplier =
             controller.MultiplyColorByAlpha === 1 ? alpha : controller.MultiplyColorByAlpha === 2 ? adjustedAlpha : 1;
           const intensity = controller.HDR !== 0 ? controller.Intensity : 1;
-          const setterMultiplier = setter?.MultiplyWithAlpha === 0 ? 1 : adjustedAlpha * intensity;
+          const setterMultiplier = alphaOnItsOwn
+            ? setter?.MultiplyWithAlpha === 0
+              ? 1
+              : adjustedAlpha * intensity
+            : adjustedAlpha * intensity;
           return {
             color: [
               color[0] * colorMultiplier * intensity * setterMultiplier,
