@@ -198,27 +198,24 @@ export class BoxGroupLanes {
   private wheelLeft = 0;
 
   wheel(event: WheelEvent, _x: number, _y: number): boolean {
-    // (Shift + wheel: the lines up and down, when there are more than fit — a line a step: the next
-    //  line's edge brought to the top, not the raw pixels of the wheel)
+    // (Shift + wheel: the lines up and down, when there are more than fit — a line a notch: the next
+    //  line's edge brought to the top, not the raw pixels of the wheel; a notch is one wheel event)
     if (!event.shiftKey) return false;
     this.wheelLeft += event.deltaY !== 0 ? event.deltaY : event.deltaX;
-    while (Math.abs(this.wheelLeft) >= 40) {
-      const down = this.wheelLeft > 0;
-      this.wheelLeft += down ? -40 : 40;
-      const lines = this.lines();
-      if (down) {
-        const next = lines.find((line) => line.top > this.host.lanesTop + 0.5);
-        if (next === undefined) continue;
-        this.scrollY = next.top + this.scrollY - this.host.lanesTop;
-      } else {
-        let previous: number | null = null;
-        for (const line of lines) {
-          if (line.top >= this.host.lanesTop - 0.5) break;
-          previous = line.top;
-        }
-        if (previous === null) continue;
-        this.scrollY = previous + this.scrollY - this.host.lanesTop;
+    if (Math.abs(this.wheelLeft) < 12) return true;
+    this.wheelLeft = 0;
+    const down = event.deltaY !== 0 ? event.deltaY > 0 : event.deltaX > 0;
+    const lines = this.lines();
+    if (down) {
+      const next = lines.find((line) => line.top > this.host.lanesTop + 0.5);
+      if (next !== undefined) this.scrollY = next.top + this.scrollY - this.host.lanesTop;
+    } else {
+      let previous: number | null = null;
+      for (const line of lines) {
+        if (line.top >= this.host.lanesTop - 0.5) break;
+        previous = line.top;
       }
+      if (previous !== null) this.scrollY = previous + this.scrollY - this.host.lanesTop;
     }
     this.host.redraw();
     return true;

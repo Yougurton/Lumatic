@@ -724,18 +724,20 @@ export class Timeline {
     this.needsDraw = true;
   }
 
-  /** The wheel turned so far towards the next row (the rows scroll a row a wheel step, however tall). */
+  /** The wheel turned so far towards the next row (the rows scroll a row a wheel notch). */
   private rowsWheel = 0;
 
-  /** The wheel through the rows: a row a step — the next row's edge brought to the top, not the raw
-   *  pixels of the wheel (a group a step, as the song cursor a grid step). */
+  /** The wheel through the rows: a row a notch — the next row's edge brought to the top, not the raw
+   *  pixels of the wheel (a group a step, as the song cursor a grid step). A notch is one wheel
+   *  event, however many units it reports: two or three steps a notch felt like a jump. */
   wheelRows(delta: number) {
     this.rowsWheel += delta;
-    while (Math.abs(this.rowsWheel) >= 40) {
-      const down = this.rowsWheel > 0;
-      this.rowsWheel += down ? -40 : 40;
-      this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.rowStepScroll(down)));
+    if (Math.abs(this.rowsWheel) < 12) {
+      this.needsDraw = true;
+      return;
     }
+    this.rowsWheel = 0;
+    this.scrollY = Math.min(this.maxScroll(), Math.max(0, this.rowStepScroll(delta > 0)));
     this.needsDraw = true;
   }
 
