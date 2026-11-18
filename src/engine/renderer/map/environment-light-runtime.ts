@@ -432,9 +432,14 @@ export class EnvironmentLightRuntime {
           visible: true,
         };
       } else {
+        // (a light of the game's whose strength is fixed at its fullest — Panic 2's spectrogram
+        //  lasers — can never dim by it: there the brightness goes into the colour, or the light
+        //  would glow with the scheme's colour whatever the group's light did)
+        const strength = gls.alpha * light.intensityMultiplier;
+        const pinned = (light.minimumAlpha ?? 0) >= 1;
         controlled = {
-          ...gls,
-          alpha: Math.max(gls.alpha * light.intensityMultiplier, light.minimumAlpha ?? 0),
+          color: pinned ? [gls.color[0]! * strength, gls.color[1]! * strength, gls.color[2]! * strength] : gls.color,
+          alpha: Math.max(strength, light.minimumAlpha ?? 0),
         };
       }
       if (light.node !== undefined) {

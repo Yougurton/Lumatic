@@ -742,16 +742,18 @@ export class Timeline {
   /** The scroll that puts the next row's edge at the top of the rows (a wheel step's target). */
   private rowStepScroll(down: boolean) {
     const rows = this.layout();
+    // (a row's top on the canvas already has the scroll taken out: its place in the rows is
+    //  top + scrollY − rowsTop, which is what the scroll must be set to)
     if (down) {
       const next = rows.find((item) => item.top > this.rowsTop + 0.5);
-      return next === undefined ? this.scrollY : next.top - this.rowsTop;
+      return next === undefined ? this.scrollY : next.top + this.scrollY - this.rowsTop;
     }
     let previous: number | null = null;
     for (const item of rows) {
       if (item.top >= this.rowsTop - 0.5) break;
       previous = item.top;
     }
-    return previous === null ? this.scrollY : previous - this.rowsTop;
+    return previous === null ? this.scrollY : previous + this.scrollY - this.rowsTop;
   }
 
   /** Rows taller or shorter (the rows at `anchorY` stay where they are). */
