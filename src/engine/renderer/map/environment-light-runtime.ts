@@ -432,9 +432,14 @@ export class EnvironmentLightRuntime {
           visible: true,
         };
       } else {
+        // (the game's own group light: its strength is the group's brightness alone. The controller's
+        //  minimum strength holds the light's shape open — Panic 2's spectrogram lasers are BoxLights
+        //  with a baked glow — it cannot keep the light itself shining: applied here, a lamp whose
+        //  group has no events would glow forever (a white column through the fog). It goes to the
+        //  shape (applyAlpha below), never to the strength the material multiplies its colour by.)
         controlled = {
           ...gls,
-          alpha: Math.max(gls.alpha * light.intensityMultiplier, light.minimumAlpha ?? 0),
+          alpha: gls.alpha * light.intensityMultiplier,
         };
       }
       if (light.node !== undefined) {
