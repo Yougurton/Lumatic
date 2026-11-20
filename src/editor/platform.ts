@@ -1,3 +1,5 @@
+import type { PreviewSnapshot, PreviewTick, RemoteEditorPatch } from './preview-state';
+
 /**
  * Files: in the desktop app through Electron (electron/preload.ts → window.chroeditorNative), in a
  * browser (development, tests) through the folder picker / File System Access API, or a folder
@@ -19,6 +21,7 @@ export interface MapFolder {
   backup?(name: string, keep: number): Promise<void>;
   /** Deletes a file (the desktop app: a copy of it kept in "Lumatic backups" first). */
   remove?(name: string): Promise<void>;
+  readOnly?: boolean;
 }
 
 /** The newest release against this app (electron/updater.ts). */
@@ -57,6 +60,24 @@ interface NativeApi {
   pickScreenColor?(): Promise<[number, number, number] | null>;
   /** The colours saved in another map's projects (its folder picked; null: cancelled). */
   paletteFromMap?(): Promise<{ name: string; colors: number[][]; presets?: unknown[] } | null>;
+  preview?: {
+    detach(state: PreviewSnapshot): Promise<boolean>;
+    close(): void;
+    sync(state: PreviewSnapshot): void;
+    tick(state: PreviewTick): void;
+    patch(state: RemoteEditorPatch): void;
+    hotkey(action: string): void;
+    keyState(code: string, down: boolean): void;
+    ready(): void;
+    setAlwaysOnTop(alwaysOnTop: boolean): Promise<boolean>;
+    onSnapshot(callback: (state: PreviewSnapshot) => void): () => void;
+    onTick(callback: (state: PreviewTick) => void): () => void;
+    onPatch(callback: (state: RemoteEditorPatch) => void): () => void;
+    onHotkey(callback: (action: string) => void): () => void;
+    onKeyState(callback: (code: string, down: boolean) => void): () => void;
+    onClosed(callback: () => void): () => void;
+    onAlwaysOnTop(callback: (alwaysOnTop: boolean) => void): () => void;
+  };
   /** Updates from the project's releases (electron/updater.ts). */
   updates?: {
     check(): Promise<UpdateInfo>;
@@ -72,6 +93,13 @@ interface NativeApi {
     importEnvironment(folder: string, name: string): Promise<{ ok: true; environment: ImportedEnvironment } | { ok: false; reason: 'no-python' | 'no-modules' | 'failed'; detail: string }>;
     remove(id: string): Promise<void>;
   };
+  maps?: {
+    installations(folder: string): Promise<GameInstallation[]>;
+    scan(folder: string): Promise<{ wip: MapLibraryEntry[]; levels: MapLibraryEntry[] }>;
+    kind(folder: string, gameFolder: string): Promise<MapLibraryKind | null>;
+    cover(file: string, gameFolder: string): Promise<string | null>;
+    copy(folder: string, gameFolder: string): Promise<{ path: string; files: string[] }>;
+  };
   /** The folders opened before (newest first). */
   recentFolders(): Promise<string[]>;
   openRecent(path: string): Promise<{ path: string; files: string[] } | null>;
@@ -84,6 +112,25 @@ export interface GameFolder {
   version: string;
   /** The names the game's files use: "panic2", "rockmixtape". */
   environments: { name: string; size: number }[];
+}
+
+export type MapLibraryKind = 'wip' | 'levels';
+
+export interface GameInstallation {
+  folder: string;
+  version: string;
+}
+
+export interface MapLibraryEntry {
+  path: string;
+  songName: string;
+  songAuthor: string;
+  mapAuthor: string;
+  environment: string;
+  infoVersion: string;
+  versions: string[];
+  modified: number;
+  cover: string | null;
 }
 
 export interface ImportedEnvironment {
@@ -129,16 +176,30 @@ function joinPath(folder: string, name: string) {
   return `${folder.replace(/[\\/]+$/u, '')}/${name}`;
 }
 
-function nativeFolder(native: NativeApi, opened: { path: string; files: string[] }): MapFolder {
+function nativeFolder(native: NativeApi, opened: { path: string; files: string[] }, readOnly = false): MapFolder {
+  const writable = () => {
+    if (readOnly) throw new Error('Карта из CustomLevels открыта только для чтения. Создайте копию в CustomWIPLevels.');
+  };
   const folder: MapFolder = {
     name: opened.path,
     files: opened.files,
+    readOnly,
     readText: async (name) => new TextDecoder().decode(await native.readFile(joinPath(opened.path, name))),
     readBinary: (name) => native.readFile(joinPath(opened.path, name)),
-    writeText: (name, text) => native.writeFile(joinPath(opened.path, name), text),
-    writeBinary: (name, data) => native.writeFile(joinPath(opened.path, name), data),
-    backup: (name, keep) => native.backupFile?.(joinPath(opened.path, name), keep) ?? Promise.resolve(),
+    writeText: (name, text) => {
+      writable();
+      return native.writeFile(joinPath(opened.path, name), text);
+    },
+    writeBinary: (name, data) => {
+      writable();
+      return native.writeFile(joinPath(opened.path, name), data);
+    },
+    backup: (name, keep) => {
+      writable();
+      return native.backupFile?.(joinPath(opened.path, name), keep) ?? Promise.resolve();
+    },
     remove: async (name) => {
+      writable();
       await native.deleteFile?.(joinPath(opened.path, name));
       folder.files = await native.listFolder(opened.path);
     },
@@ -239,11 +300,25 @@ export async function recentFolders(): Promise<string[]> {
   return (await window.chroeditorNative?.recentFolders()) ?? [];
 }
 
-export async function openRecentFolder(path: string): Promise<MapFolder | null> {
+export async function openRecentFolder(path: string, gameFolder = ''): Promise<MapFolder | null> {
   const native = window.chroeditorNative;
   if (native === undefined) return null;
+  const kind = gameFolder === '' ? null : await native.maps?.kind(path, gameFolder).catch(() => null);
   const opened = await native.openRecent(path);
-  return opened === null ? null : nativeFolder(native, opened);
+  return opened === null ? null : nativeFolder(native, opened, kind === 'levels');
+}
+
+export async function openLibraryMap(folder: string, kind: MapLibraryKind): Promise<MapFolder | null> {
+  const native = window.chroeditorNative;
+  if (native === undefined) return null;
+  const opened = await native.openRecent(folder);
+  return opened === null ? null : nativeFolder(native, opened, kind === 'levels');
+}
+
+export async function copyMapToWip(folder: string, gameFolder: string): Promise<MapFolder | null> {
+  const native = window.chroeditorNative;
+  if (native?.maps === undefined) return null;
+  return nativeFolder(native, await native.maps.copy(folder, gameFolder));
 }
 
 /** "New map": an empty folder for it (null: cancelled). */

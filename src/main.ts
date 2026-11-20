@@ -9,13 +9,14 @@ import { mapSettingsDialog } from './editor/map-settings';
 import { colorsDialog } from './editor/colors-dialog';
 import { environmentDialog } from './editor/environment-dialog';
 import { newMapDialog } from './editor/new-map';
+import { mapLibraryDialog } from './editor/map-library';
 import { canSendToQuest, questDialog } from './editor/quest-dialog';
-import { isDesktop, openMapFolder, openRecentFolder, recentFolders, saveFileAs, type MapFolder } from './editor/platform';
+import { copyMapToWip, isDesktop, openMapFolder, openRecentFolder, recentFolders, saveFileAs, type MapFolder } from './editor/platform';
 import { Preview } from './editor/preview';
 import { MAX_RATE, MIN_RATE, Timeline } from './editor/timeline';
 import { adjustDialog } from './editor/adjust-dialog';
 import { actionFor, comboOf } from './editor/hotkeys';
-import { ask } from './editor/menu';
+import { ask, choose } from './editor/menu';
 import type { StartMode } from './editor/model';
 import { installTranslation, language, tr } from './editor/i18n';
 import { Clicks } from './editor/clicks';
@@ -26,6 +27,7 @@ import { setRingTickRate } from './engine/core/lighting/ring-motion';
 import { NotePanel } from './editor/note-panel';
 import { NoteInspector } from './editor/note-inspector';
 import { FlyCamera } from './editor/fly-camera';
+import { DetachedPreview } from './editor/detached-preview';
 import { packForBeatSaver, packName } from './editor/beatsaver';
 import { startUpdates } from './editor/updates';
 import { EnvPanel, SHAPE_NAMES } from './editor/env-panel';
@@ -82,6 +84,75 @@ byId('tab-env').addEventListener('click', () => setTab('lights', true));
 // ----- over the 3D view: the lights and the notes at a click, the camera flown back ------------------
 
 const fly = new FlyCamera(preview, byId<HTMLCanvasElement>('preview'), (text) => editor.setStatus(text));
+const remotePreviewState = () => ({
+  revision: [preview.revision, editor.noteVersion, editor.version, editor.tab, editor.noteView, editor.envMode, editor.snap, editor.viewSnap ?? '', [...editor.noteSelection].join(','), editor.envSelection.join(','), [...editor.animSelection].join(','), editor.precision, editor.animAuto].join('|'),
+  state: {
+    project: editor.project === null ? null : { environmentMods: editor.project.environmentMods },
+    objects: editor.objects,
+    fakeWalls: editor.fakeWalls,
+    infoDifficulty: editor.row?.infoDifficulty ?? null,
+    songBpm: editor.songBpm,
+    bpmEvents: editor.bpmEvents,
+    tab: editor.tab,
+    noteView: editor.noteView,
+    noteVersion: editor.noteVersion,
+    noteSelection: [...editor.noteSelection],
+    noteTool: editor.noteTool,
+    noteRow: editor.noteRow,
+    wallKind: editor.wallKind,
+    wallStrobe: editor.wallStrobe,
+    precision: editor.precision,
+    snap: editor.snap,
+    viewSnap: editor.viewSnap,
+    envMode: editor.envMode,
+    envSelection: editor.envSelection,
+    envSceneData: editor.envSceneData,
+    version: editor.version,
+    animAuto: editor.animAuto,
+    animSelection: [...editor.animSelection],
+    linkPicking: editor.linkPicking,
+  },
+});
+const detachedPreview = new DetachedPreview(preview, () => editor.playhead(), () => editor.isPlaying(), () => (editor.bpmAt(editor.playhead()) * editor.rate) / 60, remotePreviewState, (detached) => {
+  document.body.classList.toggle('detached-preview', detached);
+  byId('preview-attach').hidden = !detached;
+  applySplit();
+});
+window.chroeditorNative?.preview?.onPatch((patch) => {
+  if (patch.options !== undefined) setSettings(patch.options);
+  if (patch.values !== undefined) {
+    const { noteView, ...values } = patch.values;
+    Object.assign(editor, values);
+    if (noteView !== undefined) {
+      editor.noteView = noteView;
+      applyNoteView(true);
+    }
+    editor.emit('selection');
+  }
+  if (patch.objects !== undefined) {
+    editor.noteCheckpoint('detached');
+    editor.objects = patch.objects;
+    if (patch.noteSelection !== undefined) editor.noteSelection = new Set(patch.noteSelection);
+    editor.notesChanged(true);
+  } else if (patch.noteSelection !== undefined) editor.selectNotes(patch.noteSelection);
+  if (patch.envSelection !== undefined) editor.selectEnv(patch.envSelection);
+  if (patch.animSelection !== undefined) editor.selectAnimKeys(patch.animSelection);
+  if (patch.environmentMods !== undefined && editor.project !== null) {
+    editor.checkpoint();
+    editor.project.environmentMods = patch.environmentMods;
+    editor.dirty = true;
+    editor.version++;
+    void editor.previewEnvironmentMods(patch.environmentMods).then(() => editor.emit('selection'));
+  }
+  if (patch.seek !== undefined) editor.seek(patch.seek);
+  if (patch.snapStep !== undefined) editor.stepSnap?.(patch.snapStep);
+  if (patch.status !== undefined) editor.setStatus(patch.status);
+});
+byId('view-detach').hidden = !detachedPreview.available;
+byId('view-detach').addEventListener('click', () => {
+  void detachedPreview.detach().catch((error: unknown) => editor.setStatus(`Не удалось открепить 3D-вид: ${error instanceof Error ? error.message : String(error)}`));
+});
+byId('preview-attach').addEventListener('click', () => detachedPreview.close());
 function syncViewTools() {
   byId('view-lights').classList.toggle('active', settings().previewLights);
   byId('view-lights').title = settings().previewLights ? 'Свет карты в 3D включён. Выключить: все лампы будут гореть белым на 30 %' : 'Свет карты в 3D выключен: лампы горят белым на 30 %. Включить';
@@ -195,7 +266,8 @@ function formatTime(seconds: number) {
 
 function refreshToolbar() {
   status.textContent = `${editor.dirty ? '● ' : ''}${editor.status}`;
-  saveButton.disabled = editor.project === null;
+  saveButton.disabled = editor.project === null || editor.map?.folder.readOnly === true;
+  saveButton.title = editor.map?.folder.readOnly === true ? 'CustomLevels открыт только для чтения: при редактировании будет предложена копия в CustomWIPLevels' : '';
   byId<HTMLButtonElement>('settings').disabled = editor.project === null;
   byId<HTMLButtonElement>('beatsaver').disabled = editor.project === null;
   byId<HTMLButtonElement>('quest').disabled = editor.project === null;
@@ -292,6 +364,7 @@ function showRate() {
 
 function tick(now: number) {
   countFrame(now);
+  detachedPreview.tick(now);
   showGrid();
   showRate();
   editor.tickTrial();
@@ -319,6 +392,38 @@ async function openFolder(folder: MapFolder | null) {
   }
 }
 
+let copyingMap = false;
+editor.onDirty = () => {
+  const map = editor.map;
+  if (map?.folder.readOnly !== true || copyingMap) return;
+  copyingMap = true;
+  const original = map.folder;
+  void (async () => {
+    const answer = await choose(
+      'Чужая карта из CustomLevels',
+      'Она открыта только для чтения. Создать копию в CustomWIPLevels и редактировать уже её? Оригинал не будет изменён.',
+      ['Создать копию в CustomWIPLevels', 'Отмена'],
+    );
+    try {
+      if (answer === 0) {
+        const copy = await copyMapToWip(original.name, settings().gameFolder);
+        if (copy === null) throw new Error('не удалось создать копию');
+        map.folder = copy;
+        editor.setStatus(`Создана копия в CustomWIPLevels: ${copy.name}`);
+      } else {
+        timeline.saveView();
+        await editor.open(original);
+        timeline.restoreView();
+      }
+    } catch (error) {
+      console.error(error);
+      editor.setStatus(`Не удалось создать копию: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      copyingMap = false;
+    }
+  })();
+};
+
 async function refreshRecent() {
   if (!isDesktop()) return;
   const list = await recentFolders();
@@ -330,7 +435,10 @@ async function refreshRecent() {
 }
 void refreshRecent();
 
-byId('open').addEventListener('click', () => void openMapFolder().then(openFolder));
+byId('open').addEventListener('click', () => {
+  if (isDesktop()) void mapLibraryDialog(openFolder);
+  else void openMapFolder().then(openFolder);
+});
 byId('new-map').addEventListener('click', () => void newMap());
 
 async function newMap() {
@@ -352,7 +460,7 @@ async function newMap() {
 recentSelect.addEventListener('change', () => {
   const path = recentSelect.value;
   recentSelect.value = '';
-  if (path !== '') void openRecentFolder(path).then(openFolder);
+  if (path !== '') void openRecentFolder(path, settings().gameFolder).then(openFolder);
 });
 difficultySelect.addEventListener('change', () => {
   const row = editor.difficulties().find((item) => item.key === difficultySelect.value);
@@ -506,7 +614,7 @@ const REOPEN = 'lumatic.reopen';
   }
   if (again !== null) {
     const { folder, difficulty } = again;
-    void openRecentFolder(folder)
+    void openRecentFolder(folder, settings().gameFolder)
       .then(openFolder)
       .then(async () => {
         const row = editor.difficulties().find((item) => item.key === difficulty);
@@ -716,19 +824,12 @@ window.addEventListener(
   },
   true,
 );
-window.addEventListener('keydown', (event) => {
-  const target = event.target as HTMLElement;
-  if (document.querySelector('.ce-shade') !== null) return;
-  const typing = target.tagName === 'TEXTAREA' || (target instanceof HTMLInputElement && ['text', 'number', 'search'].includes(target.type));
-  if (typing) return;
-  const ctrl = event.ctrlKey || event.metaKey;
-  if (target.tagName === 'SELECT' && !ctrl) return;
-  if (event.code === 'Escape' && !ctrl) {
+function runEditorAction(action: string) {
+  if (action === 'escape') {
     if (editor.tab === 'notes') {
       if (editor.previewExtra !== null) editor.stopTrial();
       else if (editor.songRange !== null) editor.setSongRange(null);
       else editor.selectNotes([]);
-      event.preventDefault();
       return;
     }
     if (editor.previewExtra !== null) editor.stopTrial();
@@ -741,14 +842,32 @@ window.addEventListener('keydown', (event) => {
     else if (editor.openEffect !== null) editor.enterEffect(null);
     else if (editor.lightSelection.size > 0) editor.selectLights([]);
     else if (editor.focus !== null) editor.enterGroup(editor.focusPath().at(-2)?.id ?? null);
+    return;
+  }
+  if (editor.tab === 'notes' && NOTES_RUN[action] !== undefined) NOTES_RUN[action]();
+  else ACTIONS_RUN[action]?.();
+}
+window.chroeditorNative?.preview?.onHotkey(runEditorAction);
+window.chroeditorNative?.preview?.onKeyState((code, down) => {
+  if (down) held.add(code);
+  else held.delete(code);
+});
+window.addEventListener('keydown', (event) => {
+  const target = event.target as HTMLElement;
+  if (document.querySelector('.ce-shade') !== null) return;
+  const typing = target.tagName === 'TEXTAREA' || (target instanceof HTMLInputElement && ['text', 'number', 'search'].includes(target.type));
+  if (typing) return;
+  const ctrl = event.ctrlKey || event.metaKey;
+  if (target.tagName === 'SELECT' && !ctrl) return;
+  if (event.code === 'Escape' && !ctrl) {
+    runEditorAction('escape');
     event.preventDefault();
     return;
   }
   const combo = comboOf(event);
   const action = combo === null ? null : actionFor(combo, editor.tab);
   if (action === null) return;
-  if (editor.tab === 'notes' && NOTES_RUN[action] !== undefined) NOTES_RUN[action]();
-  else ACTIONS_RUN[action]?.();
+  runEditorAction(action);
   event.preventDefault();
 });
 
@@ -877,7 +996,7 @@ window.addEventListener(
   }
   // started again after a hang or a crash: the map that was open, opened again
   const reopen = new URLSearchParams(window.location.search).get('reopen');
-  if (reopen !== null && reopen !== '') void openRecentFolder(reopen).then(openFolder);
+  if (reopen !== null && reopen !== '') void openRecentFolder(reopen, settings().gameFolder).then(openFolder);
 }
 
 // the splitter between the 3D view and the timeline (where it is: kept for each side — the notes side
@@ -885,6 +1004,10 @@ window.addEventListener(
 const SPLIT_KEY = 'lumatic.split';
 function applySplit() {
   const app = byId('app');
+  if (detachedPreview.active) {
+    app.style.gridTemplateRows = 'auto 0 0 minmax(0, 1fr)';
+    return;
+  }
   let saved: Record<string, number> = {};
   try {
     saved = JSON.parse(localStorage.getItem(SPLIT_KEY) ?? '{}') as Record<string, number>;
@@ -934,4 +1057,4 @@ applySplit();
 refreshToolbar();
 
 // (the notes side's track and camera too, for tests and the console)
-Object.assign((window as unknown as { chroeditor: Record<string, unknown> }).chroeditor, { noteTrack, fly });
+Object.assign((window as unknown as { chroeditor: Record<string, unknown> }).chroeditor, { noteTrack, fly, detachedPreview });

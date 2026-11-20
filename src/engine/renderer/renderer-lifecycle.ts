@@ -22,6 +22,7 @@ export class RendererLifecycle {
   private height = -1;
   private contextLost = false;
   private renderScale = 1;
+  private active = true;
 
   onContextLost?: () => void;
   onContextRestored?: () => void;
@@ -64,6 +65,19 @@ export class RendererLifecycle {
     this.renderScale = scale;
     this.applyPixelRatio();
     this.resize();
+  }
+
+  setActive(active: boolean) {
+    if (this.active === active) return;
+    this.active = active;
+    if (active) {
+      this.renderer?.forceContextRestore();
+      this.resize();
+      this.startLoop();
+    } else {
+      this.stopLoop();
+      this.renderer?.forceContextLoss();
+    }
   }
 
   private applyPixelRatio() {
@@ -116,7 +130,7 @@ export class RendererLifecycle {
 
   private readonly frame = (timestamp: number) => {
     this.frameHandle = null;
-    if (this.contextLost || document.hidden) return;
+    if (!this.active || this.contextLost || document.hidden) return;
     this.scheduleFrame();
     if (!this.renderer) return;
     const nextFrameAt = nextRenderDeadline(timestamp, this.nextFrameAt);
@@ -133,7 +147,7 @@ export class RendererLifecycle {
   }
 
   private scheduleFrame() {
-    if (this.frameHandle !== null || this.contextLost || document.hidden) return;
+    if (!this.active || this.frameHandle !== null || this.contextLost || document.hidden) return;
     this.frameHandle = requestAnimationFrame(this.frame);
   }
 

@@ -1,8 +1,10 @@
-import { onSettings, settings } from './settings';
+import { onSettings, setSettings, settings } from './settings';
 import type { InfoColorScheme } from '../engine/core/beatmap/info';
 import { createDifficulty, type BasicEvent, type BpmEvent, type Difficulty } from '../engine/core/beatmap/types';
 import type { NoodleBeatmapData } from '../engine/core/noodle-data';
-import { createBpmConverter } from '../engine/core/beatmap/bpm';
+import { createBpmConverter, songBpmTimeToSeconds } from '../engine/core/beatmap/bpm';
+import { setRingTickRate } from '../engine/core/lighting/ring-motion';
+import type { PreviewSnapshot, PreviewTick } from './preview-state';
 import type { ChromaEnvironmentData } from '../engine/core/chroma-environment';
 import type { ColorScheme, Rgb } from '../engine/core/colors';
 import { buildMapRenderData } from '../engine/core/placement/map-render-data';
@@ -32,6 +34,18 @@ export class Preview {
   private songBpm = 120;
   private bpmEvents: BpmEvent[] = [];
   private colorScheme: InfoColorScheme | undefined;
+  private environment: { id: string; chromaEnvironment?: ChromaEnvironmentData } | null = null;
+  private environmentVersion = 0;
+  private appliedEnvironmentVersion = -1;
+  private initialized = false;
+  private events: readonly OutEvent[] = [];
+  private spectrumSource: ((seconds: number) => Float32Array | null) | null = null;
+  private remoteSpectrum: Float32Array | null = null;
+  private remoteBeat = 0;
+  private remoteBeatRate = 0;
+  private remoteBeatAt = 0;
+  private highlight: PreviewTick['highlight'] = null;
+  revision = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.lifecycle.attach(canvas);
@@ -60,15 +74,24 @@ export class Preview {
     this.view.setLightshowMode(shown ? 'full' : 'full-lightshow');
     this.view.setShowPlayerPlatform(platform);
     this.view.setScreenDisplacementEffects(distortion);
+    this.revision++;
+  }
+
+  setActive(active: boolean) {
+    this.lifecycle.setActive(active);
   }
 
   setTiming(songBpm: number, bpmEvents: BpmEvent[], colorScheme: InfoColorScheme | undefined) {
     this.songBpm = songBpm;
     this.bpmEvents = bpmEvents;
     this.colorScheme = colorScheme;
+    this.revision++;
   }
 
   async setEnvironment(id: string, chromaEnvironment?: ChromaEnvironmentData) {
+    this.environment = { id, ...(chromaEnvironment === undefined ? {} : { chromaEnvironment }) };
+    this.environmentVersion++;
+    this.revision++;
     const result = await this.view.setEnvironment(id, chromaEnvironment);
     this.outlines.clear();
     // (the light groups' sizes and axes come from the environment: whoever shows them asks again)
@@ -110,6 +133,7 @@ export class Preview {
 
   /** Lights lit over the show (the editor's picked lights flashing); null: none. */
   setHighlight(lights: readonly { type: number; id: number }[] | null, color?: Rgb, strength?: number) {
+    this.highlight = lights === null || lights.length === 0 ? null : { lights: lights.map((light) => ({ ...light })), ...(color === undefined ? {} : { color: [...color] }), ...(strength === undefined ? {} : { strength }) };
     this.view.setHighlight(lights, color, strength);
   }
 
@@ -123,6 +147,7 @@ export class Preview {
 
   setNoodle(noodle: NoodleBeatmapData | null) {
     this.noodle = noodle;
+    this.revision++;
   }
 
   /** The difficulty's notes, walls, arcs and chains (null: none shown). */
@@ -130,6 +155,7 @@ export class Preview {
 
   setObjects(objects: Pick<Difficulty, 'notes' | 'obstacles' | 'arcs' | 'chains'> | null) {
     this.objects = objects;
+    this.revision++;
   }
 
   /** How fast the notes come and how far ahead they appear (the difficulty's NJS and offset). */
@@ -137,6 +163,7 @@ export class Preview {
 
   setJump(speed: number, offset: number) {
     this.jump = { speed: speed > 0 ? speed : 16, offset };
+    this.revision++;
   }
 
   /** The map's own group lighting (the event box groups of a GLS environment's map), as the engine
@@ -153,6 +180,7 @@ export class Preview {
 
   setBoxGroups(groups: Pick<Difficulty, 'lightColorEventBoxGroups' | 'lightRotationEventBoxGroups' | 'lightTranslationEventBoxGroups' | 'fxEventBoxGroups'> | null) {
     this.boxGroupsVersion++;
+    this.revision++;
     this.boxGroups =
       groups === null
         ? null
@@ -166,6 +194,8 @@ export class Preview {
 
   /** The lightshow as events (jsonTime beats). */
   setEvents(events: readonly OutEvent[]) {
+    this.events = events;
+    this.revision++;
     const toSong = createBpmConverter(this.bpmEvents, this.songBpm);
     const difficulty = createDifficulty('3.3.0');
     difficulty.bpmEvents = this.bpmEvents;
@@ -195,5 +225,77 @@ export class Preview {
       environmentRemoval: [],
     });
     this.view.updateLightshow(data, this.colorScheme);
+  }
+
+  setSpectrumSource(source: ((seconds: number) => Float32Array | null) | null) {
+    this.spectrumSource = source;
+    this.view.setSpectrumSource(source);
+  }
+
+  snapshot(): PreviewSnapshot {
+    return {
+      revision: this.revision,
+      environmentVersion: this.environmentVersion,
+      songBpm: this.songBpm,
+      bpmEvents: this.bpmEvents,
+      colorScheme: this.colorScheme,
+      environment: this.environment,
+      noodle: this.noodle,
+      objects: this.objects,
+      jump: this.jump,
+      boxGroups: this.boxGroups,
+      events: this.events,
+      notesMode: this.notesMode,
+      options: {
+        platform: settings().platform,
+        distortion: settings().distortion,
+        notes: settings().notes,
+        ringTicks: settings().ringTicks,
+        trackScale: settings().trackScale,
+        trackBehind: settings().trackBehind,
+        visionLine: settings().visionLine,
+        fps: settings().fps,
+        previewLights: settings().previewLights,
+      },
+      horizontalFov: this.view.horizontalFieldOfView,
+      freeCamera: this.view.freeCameraPose(),
+    };
+  }
+
+  tick(beat: number, playing = false, beatRate = 0): PreviewTick {
+    const songBeat = createBpmConverter(this.bpmEvents, this.songBpm)(beat);
+    const spectrum = this.spectrumSource?.(songBpmTimeToSeconds(songBeat, this.songBpm)) ?? null;
+    return { beat, playing, beatRate: playing ? beatRate : 0, spectrum: spectrum === null ? null : Array.from(spectrum), highlight: this.highlight };
+  }
+
+  async applySnapshot(state: PreviewSnapshot) {
+    setRingTickRate(state.options.ringTicks);
+    setSettings({ ...state.options });
+    this.setTiming(state.songBpm, state.bpmEvents, state.colorScheme);
+    this.setNotesMode(state.notesMode);
+    this.setNoodle(state.noodle);
+    this.setObjects(state.objects);
+    this.setJump(state.jump.speed, state.jump.offset);
+    this.setBoxGroups(state.boxGroups);
+    this.view.setHorizontalFov(state.horizontalFov);
+    if (!this.initialized) {
+      this.view.setFreeCamera(state.freeCamera);
+      this.initialized = true;
+    }
+    if (state.environment !== null && state.environmentVersion !== this.appliedEnvironmentVersion) {
+      const loaded = await this.setEnvironment(state.environment.id, state.environment.chromaEnvironment);
+      if (loaded) this.appliedEnvironmentVersion = state.environmentVersion;
+    }
+    this.setEvents(state.events);
+  }
+
+  applyTick(state: PreviewTick) {
+    this.remoteBeat = state.beat;
+    this.remoteBeatRate = state.beatRate;
+    this.remoteBeatAt = performance.now();
+    this.remoteSpectrum = state.spectrum === null ? null : Float32Array.from(state.spectrum);
+    this.view.setBeatSource(() => this.remoteBeat + ((performance.now() - this.remoteBeatAt) / 1000) * this.remoteBeatRate);
+    this.view.setSpectrumSource(() => this.remoteSpectrum);
+    this.setHighlight(state.highlight?.lights ?? null, state.highlight?.color, state.highlight?.strength);
   }
 }

@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 
+function listen<T extends unknown[]>(channel: string, callback: (...values: T) => void) {
+  const listener = (_event: unknown, ...values: T) => callback(...values);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 // What the page may do with files (see src/editor/platform.ts): only through these calls, and the
 // main process only lets them touch folders the user opened.
 contextBridge.exposeInMainWorld('chroeditorNative', {
@@ -20,6 +26,31 @@ contextBridge.exposeInMainWorld('chroeditorNative', {
   log: (kind: string, message: string) => ipcRenderer.send('log', kind, message),
   openLogs: () => ipcRenderer.invoke('open-logs'),
   paletteFromMap: () => ipcRenderer.invoke('palette-from-map'),
+  preview: {
+    detach: (state: unknown) => ipcRenderer.invoke('preview-detach', state),
+    close: () => ipcRenderer.send('preview-close'),
+    sync: (state: unknown) => ipcRenderer.send('preview-sync', state),
+    tick: (state: unknown) => ipcRenderer.send('preview-tick', state),
+    patch: (state: unknown) => ipcRenderer.send('preview-editor-patch', state),
+    hotkey: (action: string) => ipcRenderer.send('preview-hotkey', action),
+    keyState: (code: string, down: boolean) => ipcRenderer.send('preview-key-state', code, down),
+    ready: () => ipcRenderer.send('preview-ready'),
+    setAlwaysOnTop: (alwaysOnTop: boolean) => ipcRenderer.invoke('preview-always-on-top', alwaysOnTop),
+    onSnapshot: (callback: (state: unknown) => void) => listen('preview-state', callback),
+    onTick: (callback: (state: unknown) => void) => listen('preview-tick', callback),
+    onPatch: (callback: (state: unknown) => void) => listen('preview-editor-patch', callback),
+    onHotkey: (callback: (action: string) => void) => listen('preview-hotkey', callback),
+    onKeyState: (callback: (code: string, down: boolean) => void) => listen('preview-key-state', callback),
+    onClosed: (callback: () => void) => listen('preview-closed', callback),
+    onAlwaysOnTop: (callback: (alwaysOnTop: boolean) => void) => listen('preview-always-on-top', callback),
+  },
+  maps: {
+    installations: (folder: string) => ipcRenderer.invoke('map-installations', folder),
+    scan: (folder: string) => ipcRenderer.invoke('map-scan', folder),
+    kind: (folder: string, gameFolder: string) => ipcRenderer.invoke('map-kind', folder, gameFolder),
+    cover: (file: string, gameFolder: string) => ipcRenderer.invoke('map-cover', file, gameFolder),
+    copy: (folder: string, gameFolder: string) => ipcRenderer.invoke('map-copy', folder, gameFolder),
+  },
   game: {
     pickFolder: () => ipcRenderer.invoke('game-pick-folder'),
     folder: (folder: string) => ipcRenderer.invoke('game-folder', folder),

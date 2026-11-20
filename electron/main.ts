@@ -7,7 +7,9 @@ import { backupFile } from './backup';
 import { importEnvironment, importedEnvironments, importedFolder, readGameFolder, removeImported } from './game-environments';
 import { pickScreenColor } from './eyedropper';
 import { log, logFolder } from './log';
+import { copyMapToWip, gameInstallations, mapLibraryKind, readMapCover, scanMapLibrary } from './map-library';
 import { findAdbServices } from './mdns';
+import { PreviewWindowManager } from './preview-window';
 import { connect, devices, disconnect, discover, downloadAdb, enableWifi, findAdb, pair, upload, type UploadOptions } from './quest';
 
 /**
@@ -24,6 +26,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const distRoot = path.join(__dirname, '..', 'dist');
+const previewWindows = new PreviewWindowManager(distRoot);
 const allowedRoots = new Set<string>();
 // (settings, recent folders and the rest of the page's storage stay where ChroEditor kept them)
 {
@@ -298,6 +301,23 @@ void app.whenReady().then(() => {
     await backupFile(file, 50);
     await fs.unlink(file);
   });
+  ipcMain.handle('map-installations', (_event, folder: string) => gameInstallations(folder));
+  ipcMain.handle('map-scan', (_event, folder: string) => scanMapLibrary(folder));
+  ipcMain.handle('map-kind', (_event, folder: string, gameFolder: string) => mapLibraryKind(folder, gameFolder));
+  ipcMain.handle('map-cover', (_event, file: string, gameFolder: string) => readMapCover(file, gameFolder));
+  ipcMain.handle('map-copy', async (_event, folder: string, gameFolder: string) => openFolder(await copyMapToWip(folder, gameFolder)));
+  ipcMain.handle('preview-detach', (event, state) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    return owner === null ? false : previewWindows.detach(owner, state);
+  });
+  ipcMain.on('preview-sync', (_event, state) => previewWindows.sync(state));
+  ipcMain.on('preview-tick', (_event, state) => previewWindows.tick(state));
+  ipcMain.on('preview-editor-patch', (_event, state) => previewWindows.patch(state));
+  ipcMain.on('preview-hotkey', (_event, action: string) => previewWindows.hotkey(action));
+  ipcMain.on('preview-key-state', (_event, code: string, down: boolean) => previewWindows.keyState(code, down));
+  ipcMain.on('preview-ready', (event) => previewWindows.ready(event.sender));
+  ipcMain.on('preview-close', () => previewWindows.close());
+  ipcMain.handle('preview-always-on-top', (_event, alwaysOnTop: boolean) => previewWindows.setAlwaysOnTop(alwaysOnTop));
   // the Quest: adb, the headsets, Wi-Fi, sending the map
   // a colour anywhere on the screen (the page's colour pick)
   ipcMain.handle('pick-screen-color', (event) => pickScreenColor(BrowserWindow.fromWebContents(event.sender)));

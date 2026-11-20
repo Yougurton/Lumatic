@@ -18,6 +18,12 @@ export default defineConfig({
     target: 'esnext',
     assetsInlineLimit: 0,
     chunkSizeWarningLimit: 20000,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        preview: fileURLToPath(new URL('./preview.html', import.meta.url)),
+      },
+    },
   },
   worker: {
     format: 'es',

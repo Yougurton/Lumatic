@@ -197,6 +197,10 @@ export class MapView implements RenderView {
   private horizontalFov: number | null = null;
   private usualFov: number | null = null;
 
+  get horizontalFieldOfView() {
+    return this.horizontalFov;
+  }
+
   setHorizontalFov(degrees: number | null) {
     if (degrees !== null && this.usualFov === null) this.usualFov = this.camera.fov;
     this.horizontalFov = degrees;
@@ -904,6 +908,10 @@ export class MapView implements RenderView {
       this.camera.position.copy(this.playerCameraLocal);
       this.camera.quaternion.identity();
     }
+  }
+
+  freeCameraPose(): { position: [number, number, number]; yaw: number; pitch: number } | null {
+    return this.freeCamera === null ? null : { position: [...this.freeCamera.position], yaw: this.freeCamera.yaw, pitch: this.freeCamera.pitch };
   }
 
   /** Where the camera is and where it looks (yaw, pitch in radians), in the world. */
