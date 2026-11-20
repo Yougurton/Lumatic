@@ -236,7 +236,15 @@ export class Editor {
   /** Opens a ring pose block's editor (set by the app). */
   ringEditorHook: ((id: string) => void) | null = null;
   status = '';
-  dirty = false;
+  private dirtyValue = false;
+  onDirty: (() => void) | null = null;
+  get dirty() {
+    return this.dirtyValue;
+  }
+  set dirty(value: boolean) {
+    if (value && !this.dirtyValue) this.onDirty?.();
+    this.dirtyValue = value;
+  }
 
   // ----- the notes side ---------------------------------------------------------------------------
 
@@ -769,7 +777,7 @@ export class Editor {
     if (map === null) return;
     this.clock?.dispose();
     this.clock = null;
-    this.preview.view.setSpectrumSource(null);
+    this.preview.setSpectrumSource(null);
     this.spectrogram = null;
     const audio = map.parsed.audioData;
     let buffer: AudioBuffer | null = null;
@@ -781,7 +789,7 @@ export class Editor {
           buffer = decoded;
           // (the environment's spectrograms move with the song's left channel)
           const spectrum = new SongSpectrum(decoded.getChannelData(0), decoded.sampleRate);
-          this.preview.view.setSpectrumSource((seconds) => spectrum.at(seconds));
+          this.preview.setSpectrumSource((seconds) => spectrum.at(seconds));
         },
       });
       if (result.isOk()) this.clock = result.value;
@@ -2203,7 +2211,7 @@ export class Editor {
     const map = this.map;
     const row = this.row;
     const project = this.project;
-    if (map === null || row === null || project === null) return;
+    if (map === null || row === null || project === null || map.folder.readOnly === true) return;
     const file = difficultyFile(row);
     // (changed while it's being written: still unsaved after)
     const version = this.version;
@@ -2256,7 +2264,7 @@ export class Editor {
     const map = this.map;
     const row = this.row;
     const project = this.project;
-    if (map === null || row === null || project === null || !this.dirty) return false;
+    if (map === null || row === null || project === null || !this.dirty || map.folder.readOnly === true) return false;
     const file = difficultyFile(row);
     const original = await map.folder.readText(file);
     const mods = project.environmentMods;

@@ -13,6 +13,7 @@ import { cloneClip, findGroup, groupLights, lightKey, newId, type ClipColor, typ
 import { classicGroupName, groupHue, lightGroupName, otherEventName } from './names';
 import { tr } from './i18n';
 import { chromaMoveBeats, fitRingBlock, isBarRing, isLasers, isSingleRing, isTurn, isZoom, laserBlockMove, newLaserBlock, newPose, newRingBlock, newZoomBlock, placeRingTemplate, poseBase, ringDelay, type RingBlock, type RingPose } from './rings';
+import { canMoveByLightId, clampLightIdShift } from './light-id-move';
 import { ringSpeedFor } from '../engine/core/lighting/ring-motion';
 import { settings } from './settings';
 import { GRIDS, nextGrid } from './grids';
@@ -97,7 +98,7 @@ interface EffectOrigin {
 type Drag =
   /** Drawing a new event: it is made only when the mouse has moved (a click alone makes nothing). */
   | { kind: 'create'; row: Row; from: number; to: number; x0: number; moved: boolean }
-  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number }>; grabBeat: number; anchor: number; moved: boolean; rowKey: string }
+  | { kind: 'move'; origin: Map<string, LightClip>; rawOrigin: Map<string, number>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number }>; grabBeat: number; anchor: number; moved: boolean; rowKey: string; axis: 'pending' | 'time' | 'lights'; grabX: number; grabY: number; availableIds: readonly number[] | null; idShift: number }
   | { kind: 'resize'; edge: 'start' | 'end'; origin: Map<string, { start: number; end: number }>; effectOrigin: Map<string, EffectOrigin>; blockOrigin: Map<string, { start: number; end: number; poses: Map<string, number> }>; anchor: number }
   | { kind: 'box'; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: 'seek' }
@@ -2851,8 +2852,18 @@ export class Timeline {
           text(row.label, 'th-name'),
           text(row.count > 0 ? String(row.count) : '', 'th-count'),
         );
-        item.title = row.missing ? 'В окружении нет такой группы света: блоки карты на ней ничего не зажигают' : 'Группа света игры (GLS). Блоки цвета карты; внутри — что получает каждый элемент. ▸ раскрывает группу по элементам. Только просмотр';
-      } else item.textContent = row.label;
+        item.title = row.missing ? 'В окружении нет такой группы света: блоки карты на ней ничего не зажигают' : 'Группа света игры (GLS). Клик — вспышка всех её источников в 3D; ▸ раскрывает группу по элементам';
+        item.addEventListener('click', () => {
+          if (row.missing) return;
+          editor.flashLights(Array.from({ length: row.count }, (_, id) => ({ kind: 'light', type: row.group, id })));
+        });
+      } else {
+        item.textContent = row.label;
+        item.title = 'Клик — вспышка этого элемента GLS в 3D';
+        item.addEventListener('click', () => {
+          if (!row.missing) editor.flashLights([{ kind: 'light', type: row.group, id: row.element! }]);
+        });
+      }
     } else if (row.kind === 'poses') {
       item.textContent = `${row.ring === 'zoom' ? '⇹' : row.ring === 'lasers' ? '✳' : '◎'} ${row.label}`;
       item.title = row.ring === 'lasers' ? 'Вращающиеся лазеры: протяните по строке, чтобы сделать блок; двойной клик по блоку — его настройки (крутятся рядом, повороты по шагам). Длина блока — сколько крутятся / сколько шагов' : row.ring === 'zoom' ? 'Зум колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор расстояний между кольцами' : 'Точные позы колец: протяните по строке, чтобы сделать блок; двойной клик по блоку — редактор поз';
@@ -3221,7 +3232,9 @@ export class Timeline {
       const rawOrigin = new Map<string, number>();
       for (const raw of this.editor.project.raw) if (this.editor.selection.has(raw.id)) rawOrigin.set(raw.id, raw.beat);
       const grabbed = 'clip' in hit ? hit.clip.start : 'block' in hit ? hit.block.start : hit.raw.beat;
-      this.drag = { kind: 'move', origin, rawOrigin, effectOrigin: this.effectOrigins(), blockOrigin: this.blockOrigins(false), grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key };
+      const clips = [...origin.values()];
+      const availableIds = canMoveByLightId(clips, this.editor.selection.size, this.editor.lightsByType) ? (this.editor.lightsByType.get(clips[0]!.type) ?? null) : null;
+      this.drag = { kind: 'move', origin, rawOrigin, effectOrigin: this.effectOrigins(), blockOrigin: this.blockOrigins(false), grabBeat: beat, anchor: grabbed, moved: false, rowKey: hit.row.key, axis: 'pending', grabX: x, grabY: y, availableIds, idShift: 0 };
     });
 
     canvas.addEventListener('mouseleave', () => this.lanes.leave());
@@ -3376,6 +3389,25 @@ export class Timeline {
         }
         this.editor.changed();
       } else {
+        if (drag.axis === 'pending') {
+          const dx = x - drag.grabX;
+          const dy = y - drag.grabY;
+          if (Math.max(Math.abs(dx), Math.abs(dy)) >= 4) drag.axis = drag.availableIds !== null && Math.abs(dy) > Math.abs(dx) ? 'lights' : 'time';
+        }
+        if (drag.axis === 'lights') {
+          const shift = clampLightIdShift([...drag.origin.values()], drag.availableIds ?? [], Math.trunc((y - drag.grabY) / LIGHT_H));
+          if (shift !== drag.idShift) {
+            for (const [id, origin] of drag.origin) {
+              const clip = this.editor.clipById(id);
+              if (clip !== undefined && origin.ids !== null) clip.ids = origin.ids.map((lightId) => lightId + shift);
+            }
+            drag.idShift = shift;
+            drag.moved = shift !== 0;
+          }
+          this.needsDraw = true;
+          return;
+        }
+        if (drag.axis === 'pending') return;
         const delta = (event.shiftKey ? this.xToBeat(x) : snap(drag.anchor + (beat - drag.grabBeat))) - drag.anchor;
         if (Math.abs(beat - drag.grabBeat) * this.pxPerBeat > 2) drag.moved = true;
         for (const [id, origin] of drag.origin) {
@@ -3559,6 +3591,10 @@ export class Timeline {
         // just a click: nothing moved — no undo step for it
         this.editor.undoDiscard();
       } else if (drag.kind === 'move') {
+        if (drag.idShift !== 0) {
+          this.editor.changed(true);
+          this.editor.setStatus(`Сдвиг по light ID: ${drag.idShift > 0 ? '+' : ''}${String(drag.idShift)}`);
+        }
         // (effects by sound: made anew from the song where they are now)
         this.editor.remakeSoundEffects([...drag.effectOrigin.keys()]);
       }

@@ -42,6 +42,7 @@ interface GlsColorSource {
 }
 
 interface GlsColorRuntime {
+  groupId: number;
   target: EnvironmentGlsColorTarget;
   source: GlsColorSource;
   initialVisible?: boolean;
@@ -311,6 +312,7 @@ export class EnvironmentLightRuntime {
           glsColorSources.set(sourceKey, source);
         }
         this.glsColorRuntime.push({
+          groupId: environmentGroup.groupId,
           target,
           source,
           initialVisible: target.node?.visible,
@@ -351,10 +353,12 @@ export class EnvironmentLightRuntime {
           sample = sampleGlsColorTween(runtime.source.tween, beat, this.colors, boosted);
           samples.set(runtime.source, sample);
         }
-        const controlled = runtime.target.transform(sample.color, sample.alpha);
+        const base = runtime.target.transform(sample.color, sample.alpha);
+        const highlighted = this.highlight?.glsIds.get(runtime.groupId)?.has(runtime.target.id) === true;
+        const controlled = highlighted ? this.highlightSample(base) : base;
         if (runtime.target.key !== undefined) this.glsControllerSamples.set(runtime.target.key, controlled);
         if (runtime.target.node !== undefined) {
-          runtime.target.node.visible = runtime.initialVisible !== false && controlled.visible;
+          runtime.target.node.visible = highlighted ? (controlled.visible ?? true) : runtime.initialVisible !== false && (controlled.visible ?? true);
         }
         for (const segment of runtime.target.segments) this.glsSegments.set(segment, controlled);
         for (const light of runtime.target.materialLights) this.glsMaterialLights.set(light, controlled);
@@ -548,17 +552,29 @@ export class EnvironmentLightRuntime {
 
   /** Lights shown lit over whatever the show does (the editor's picked lights flashing): by event type,
    *  the map's light IDs; the colour and how strongly (0–1+) it covers the show. */
-  private highlight: { ids: Map<number, Set<number>>; color: Rgb; strength: number } | null = null;
+  private highlight: { ids: Map<number, Set<number>>; glsIds: Map<number, Set<number>>; color: Rgb; strength: number } | null = null;
 
   setHighlight(lights: readonly { type: number; id: number }[] | null, color: Rgb = [1, 1, 1], strength = 1) {
     if (lights === null || lights.length === 0 || strength <= 0) {
       this.highlight = null;
       return;
     }
+    const glsGroups = new Set(this.environment?.glsColorGroups.map((group) => group.groupId) ?? []);
     const ids = new Map<number, Set<number>>();
-    for (const light of lights) (ids.get(light.type) ?? ids.set(light.type, new Set()).get(light.type)!).add(light.id);
-    const same = this.highlight !== null && [...ids].every(([type, set]) => this.highlight!.ids.get(type)?.size === set.size && [...set].every((id) => this.highlight!.ids.get(type)!.has(id)));
-    this.highlight = { ids: same ? this.highlight!.ids : ids, color, strength };
+    const glsIds = new Map<number, Set<number>>();
+    for (const light of lights) {
+      const target = glsGroups.has(light.type) ? glsIds : ids;
+      (target.get(light.type) ?? target.set(light.type, new Set()).get(light.type)!).add(light.id);
+    }
+    const sameIds = (left: Map<number, Set<number>>, right: Map<number, Set<number>>) =>
+      [...left].every(([type, set]) => right.get(type)?.size === set.size && [...set].every((id) => right.get(type)!.has(id)));
+    const same = this.highlight !== null && sameIds(ids, this.highlight.ids) && sameIds(glsIds, this.highlight.glsIds);
+    this.highlight = {
+      ids: same ? this.highlight!.ids : ids,
+      glsIds: same ? this.highlight!.glsIds : glsIds,
+      color,
+      strength,
+    };
   }
 
   /** Whether a light's binding is one of the highlighted lights (a map light ID reaches it). */
@@ -574,16 +590,23 @@ export class EnvironmentLightRuntime {
     return false;
   }
 
-  private sampleEnvironmentLight(bindings: EnvironmentLightBinding[], beat: number, boosted: boolean, songBpm: number) {
-    const sampled = this.sampleEnvironmentLightOwn(bindings, beat, boosted, songBpm);
+  private highlightSample(sample: null): ResolvedBindingSample | null;
+  private highlightSample(sample: ControlledLight): ResolvedBindingSample;
+  private highlightSample(sample: ControlledLight | null): ResolvedBindingSample | null;
+  private highlightSample(sample: ControlledLight | null): ControlledLight | ResolvedBindingSample | null {
     const highlight = this.highlight;
-    if (highlight === null || !bindings.some((binding) => this.isHighlighted(binding))) return sampled;
-    // (over the show: its colour mixed towards the highlight's as strongly as the highlight shines)
+    if (highlight === null) return sample;
     const k = Math.min(1, highlight.strength);
-    const base = sampled?.color ?? [0, 0, 0];
-    const alpha = Math.max(sampled?.alpha ?? 0, highlight.strength);
+    const base = sample?.color ?? [0, 0, 0];
+    const alpha = Math.max(sample?.alpha ?? 0, highlight.strength);
     const color: Rgb = [base[0] + (highlight.color[0] - base[0]) * k, base[1] + (highlight.color[1] - base[1]) * k, base[2] + (highlight.color[2] - base[2]) * k];
     return { color, alpha, rawAlpha: alpha, stateAlpha: alpha, fading: false };
+  }
+
+  private sampleEnvironmentLight(bindings: EnvironmentLightBinding[], beat: number, boosted: boolean, songBpm: number) {
+    const sampled = this.sampleEnvironmentLightOwn(bindings, beat, boosted, songBpm);
+    if (!bindings.some((binding) => this.isHighlighted(binding))) return sampled;
+    return this.highlightSample(sampled);
   }
 
   private sampleEnvironmentLightOwn(bindings: EnvironmentLightBinding[], beat: number, boosted: boolean, songBpm: number) {
