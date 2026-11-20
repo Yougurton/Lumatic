@@ -13,7 +13,11 @@ import {
 } from 'three';
 
 import { MAIN_ONLY_LAYER } from '../mirror/planar-mirror';
-import { referenceKey, rendererObjectsForMpbController } from './environment-component-utils';
+import {
+  referenceKey,
+  rendererObjectsForMpbController,
+  shaderMaterialsForMpbController,
+} from './environment-component-utils';
 import { createPositionConstraintApplicator } from './environment-constraints';
 import { createGeometry, ensureGeometryTangents, nodeFor } from './environment-geometry';
 import { buildEnvironmentParticleSystems } from './environment-particle-systems';
@@ -126,7 +130,12 @@ function collectLightEffects(data: EnvironmentData) {
   return { byObject, byTarget };
 }
 
-function buildSwitches(data: EnvironmentData, nodes: Group[]) {
+export function buildSwitches(
+  data: EnvironmentData,
+  nodes: Group[],
+  objectShaderMaterials: ShaderMaterial[][],
+  materialContext: EnvironmentMaterialContext,
+) {
   function genericEventType(reference: ObjectReference) {
     if (reference.component !== 'GenericCallbackEventEffect') return undefined;
     const effect = data.objects[reference.obj]?.components?.GenericCallbackEventEffect?.[reference.componentIndex ?? 0];
@@ -152,6 +161,28 @@ function buildSwitches(data: EnvironmentData, nodes: Group[]) {
       apply(component.DefaultValue);
       eventSwitches.push({
         eventType,
+        defaultValue: component.DefaultValue,
+        apply,
+      });
+    }
+    for (const component of object.components?.TextureIntSwitch ?? []) {
+      if (!component.enabled) continue;
+      const materials = shaderMaterialsForMpbController(data, objectShaderMaterials, component.MpbController);
+      const textures = new Map(component.Textures.map((texture) => [texture.Value, texture.Asset]));
+      function apply(value: number) {
+        const asset = textures.get(value) ?? textures.get(component.DefaultValue);
+        if (asset === undefined) return;
+        const texture = materialContext.textures?.get(asset);
+        if (texture === undefined) return;
+        for (const material of materials) {
+          const uniform = material.uniforms[component.Property];
+          if (uniform === undefined) material.uniforms[component.Property] = { value: texture };
+          else uniform.value = texture;
+        }
+      }
+      apply(component.DefaultValue);
+      eventSwitches.push({
+        eventType: component.EventType,
         defaultValue: component.DefaultValue,
         apply,
       });
@@ -380,7 +411,7 @@ export function buildEnvironmentScene(
     }
   }
 
-  const switches = buildSwitches(data, nodes);
+  const switches = buildSwitches(data, nodes, objectShaderMaterials, materialContext);
   root.updateMatrixWorld(true);
   const applyConstraints = createPositionConstraintApplicator(data, nodes);
   applyConstraints();

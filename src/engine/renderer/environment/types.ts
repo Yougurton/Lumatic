@@ -20,6 +20,7 @@ export type MaterialFamily =
 export interface EnvironmentMaterialData {
   name: string;
   shader: string;
+  gameShader?: string;
   family: MaterialFamily;
   colors: Record<string, [number, number, number, number]>;
   floats: Record<string, number>;
@@ -135,6 +136,15 @@ export interface GameObjectIntSwitchData {
     GameObjects: ObjectReference[];
   }[];
   DefaultValue: number;
+  enabled: boolean;
+}
+
+export interface TextureIntSwitchData {
+  MpbController: ObjectReference;
+  Property: string;
+  EventType: number;
+  DefaultValue: number;
+  Textures: { Value: number; Asset: string }[];
   enabled: boolean;
 }
 
@@ -604,6 +614,7 @@ export interface EnvironmentObjectData {
     ColorBoostEffect?: ColorBoostEffectData[];
     GenericCallbackEventEffect?: GenericCallbackEventEffectData[];
     GameObjectIntSwitch?: GameObjectIntSwitchData[];
+    TextureIntSwitch?: TextureIntSwitchData[];
     GameObjectSwitch?: GameObjectSwitchData[];
     LightRotationEffect?: LightRotationEffectData[];
     LightRotation?: LightRotationData[];

@@ -136,6 +136,7 @@ uniform sampler2D _DistortionTex;
 uniform vec2 _DistortionTexScale;
 uniform vec2 _DistortionTexOffset;
 uniform float _DistortionStrength;
+uniform vec2 _DistortionAxes;
 uniform vec2 _DistortionPanning;
 #endif
 varying vec3 vWorldPos;
@@ -171,12 +172,11 @@ void main() {
 
   vec2 baseUv = vUv;
   #ifdef DISTORTION_SIMPLE
-  // (as the game's shader cannot be read: the texture's red and green shift the picture's place)
   vec2 distortion = texture2D(
     _DistortionTex,
-    (vUv + _DistortionPanning * materialTime) * _DistortionTexScale + _DistortionTexOffset
-  ).rg - 0.5;
-  baseUv += distortion * _DistortionStrength;
+    (vUv + _DistortionPanning * materialTime * 0.1) * _DistortionTexScale + _DistortionTexOffset
+  ).rg;
+  baseUv += distortion * _DistortionAxes * _DistortionStrength * 0.2 - 1.0;
   #endif
   vec4 albedo = sourceColor;
   #ifdef MAIN_TEXTURE

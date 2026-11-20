@@ -1,4 +1,4 @@
-import type { CubeTexture, Texture } from 'three';
+import { DataTexture, SRGBColorSpace, type CubeTexture, type Texture } from 'three';
 
 import type { Rgb } from '../../../core/colors';
 import type { FogUniforms } from '../../bloomfog/pipeline';
@@ -47,4 +47,16 @@ export function materialTexture(data: EnvironmentMaterialData, context: Environm
   if (texture === undefined) return undefined;
   const loaded = context.textures?.get(texture.asset);
   return loaded === undefined ? undefined : { texture: loaded, scale: texture.scale, offset: texture.offset };
+}
+
+let whiteTexture: Texture | undefined;
+
+/** Unity's default when a material leaves a texture slot empty. */
+export function whiteMaterialTexture() {
+  if (whiteTexture === undefined) {
+    whiteTexture = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    whiteTexture.colorSpace = SRGBColorSpace;
+    whiteTexture.needsUpdate = true;
+  }
+  return { texture: whiteTexture, scale: [1, 1] as [number, number], offset: [0, 0] as [number, number] };
 }

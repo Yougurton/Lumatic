@@ -39,6 +39,7 @@ export interface CustomParticlesSettings {
   secondaryColorAlpha?: number;
   secondaryColorPanning?: [number, number];
   distortionStrength?: number;
+  distortionAxes?: [number, number];
   distortionPanning?: [number, number];
   vertexColor: boolean;
   vertexRedIsAlpha: boolean;
@@ -275,6 +276,7 @@ export function createCustomParticlesMaterial(
         : {
             ...textureUniforms('_DistortionTex', textures.distortion),
             _DistortionStrength: { value: settings.distortionStrength ?? 0 },
+            _DistortionAxes: { value: new Vector2(...(settings.distortionAxes ?? [1, 1])) },
             _DistortionPanning: { value: new Vector2(...(settings.distortionPanning ?? [0, 0])) },
           }),
       _BillboardScale: { value: settings.billboardScale },

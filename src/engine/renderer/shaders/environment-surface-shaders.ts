@@ -107,7 +107,7 @@ void main() {
   #ifdef DISPLACEMENT_SPATIAL
   localPosition += displacement * _DisplacementAxisMultiplier * _DisplacementStrength;
   #else
-  localPosition += localNormal * displacement.r * _DisplacementAxisMultiplier.x * _DisplacementStrength;
+  localPosition += localNormal * displacement.r * _DisplacementAxisMultiplier * _DisplacementStrength;
   #endif
   #endif
   #ifdef USE_VERTEX_COLOR

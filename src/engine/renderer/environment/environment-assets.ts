@@ -33,6 +33,9 @@ function materialTextureAssets(data: EnvironmentData) {
       Object.values(material.textures ?? {}).map((texture) => texture.asset),
     ),
     ...(data.particleSystems ?? []).map((system) => system.texture),
+    ...data.objects.flatMap((object) =>
+      (object.components?.TextureIntSwitch ?? []).flatMap((effect) => effect.Textures.map((texture) => texture.Asset)),
+    ),
   ];
 }
 

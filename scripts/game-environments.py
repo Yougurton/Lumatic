@@ -795,7 +795,7 @@ class Converter:
                     light = {
                         **address, 'Renderer': {'obj': index, 'component': 'MeshRenderer', 'componentIndex': 0}, 'SetAlphaOnly': 0, 'AlphaIntensity': 1,
                         'AlphaIntoColor': 0, 'SetColorOnly': 0, 'MultiplyColorWithAlpha': 0, 'MultiplyColor': 0, 'ColorMultiplier': 1, 'Alpha': 0,
-                        'Property': '_Color', 'enabled': True,
+                        'Property': '_EmissionTexColor', 'enabled': True,
                     }
                     self.objects.append({
                         'name': f"{whole['name']}Piece{piece}", 'parent': ref['obj'], 'active': True, 'layer': whole.get('layer', 0),
@@ -878,6 +878,18 @@ class Converter:
         if t.get('_vectors') or t.get('_colors'):
             self.unknown['MaterialPropertyValuesSetter: vector and colour values (not taken)'] += 1
         self.add(go_id, 'MaterialPropertyBlockFloatSetter', {'Controller': controller, 'Values': values, 'enabled': bool(t['m_Enabled'])}, obj.path_id)
+
+    def c_TextureIntSwitchEventEffect(self, go_id, obj):
+        t = obj.read_typetree()
+        controller = self.comp_ref.get(t['_materialPropertyBlockController']['m_PathID'])
+        if controller is None:
+            return
+        self.add(go_id, 'TextureIntSwitch', {
+            'MpbController': controller, 'Property': t['_texturePropertyName'], 'EventType': int(t['_beatmapEventType']),
+            'DefaultValue': int(t['_defaultIndex']),
+            'Textures': [{'Value': int(e['value']), 'Asset': asset} for e, raw in zip(t['_textureValueTuples'], obj.read()._textureValueTuples) for asset in [self.texture(raw.texture)] if asset],
+            'enabled': bool(t['m_Enabled']),
+        }, obj.path_id)
 
     def c_MoveInDirectionEffect(self, go_id, obj):
         t = obj.read_typetree()

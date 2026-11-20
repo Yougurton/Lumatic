@@ -137,6 +137,7 @@ export function createParticleEnvironmentMaterial(
       secondaryColorAlpha: data.colors._SecondaryColor?.[3] ?? 1,
       secondaryColorPanning: [data.colors._SecondaryColorPanning?.[0] ?? 0, data.colors._SecondaryColorPanning?.[1] ?? 0],
       distortionStrength: data.floats._DistortionStrength ?? 0,
+      distortionAxes: [data.colors._DistortionAxes?.[0] ?? 1, data.colors._DistortionAxes?.[1] ?? 1],
       distortionPanning: [data.colors._DistortionPanning?.[0] ?? 0, data.colors._DistortionPanning?.[1] ?? 0],
       alphaChannelRed: keywords.has('_ALPHACHANNEL_RED'),
       squareAlpha: keywords.has('SQUARE_ALPHA'),

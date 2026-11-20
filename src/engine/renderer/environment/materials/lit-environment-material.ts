@@ -7,6 +7,7 @@ import {
   materialFog,
   materialTexture,
   materialTimeMode,
+  whiteMaterialTexture,
   vectorColor,
   type EnvironmentMaterialContext,
 } from './material-context';
@@ -196,7 +197,7 @@ export function createLitEnvironmentMaterial(
     occlusionDetailIntensity: data.floats._OcclusionDetailIntensity ?? 0,
     normal: (data.floats._EnableNormalMap ?? 0) !== 0 ? materialTexture(data, context, '_NormalTexture') : undefined,
     normalScale: data.floats._NormalScale ?? data.floats._BumpScale ?? 1,
-    emission: (data.floats._EmissionTexture ?? 0) !== 0 ? materialTexture(data, context, '_EmissionTex') : undefined,
+    emission: (data.floats._EmissionTexture ?? 0) !== 0 ? (materialTexture(data, context, '_EmissionTex') ?? whiteMaterialTexture()) : undefined,
     parallaxMap: data.keywords.some((keyword) => keyword.startsWith('_PARALLAX_FLEXIBLE'))
       ? materialTexture(data, context, '_ParallaxMap')
       : undefined,
