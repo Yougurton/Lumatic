@@ -1,0 +1,89 @@
+{
+  "name": "lumatic",
+  "productName": "Lumatic",
+  "private": true,
+  "version": "0.1.0-Beta",
+  "description": "Beat Saber lightshow editor: a timeline with layers, light ID groups and effects, previewed with ChroPaper's renderer",
+  "author": "Yougurton",
+  "license": "GPL-2.0-only",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build:renderer": "vite build",
+    "build:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/main.cjs && esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/preload.cjs",
+    "build": "npm run build:renderer && npm run build:electron",
+    "typecheck": "tsc --noEmit -p .",
+    "start": "npm run build && electron .",
+    "notices": "node scripts/generate-third-party-notices.cjs",
+    "verify:dist": "node scripts/verify-distribution.cjs",
+    "release:check": "node scripts/release-source.cjs --check",
+    "dist:source": "node scripts/release-source.cjs --archive",
+    "dist:app": "npm run notices && npm run build && node scripts/build-online-distribution.mjs",
+    "dist:win:online": "npm run notices && npm run build && node scripts/build-online-distribution.mjs --compile",
+    "dist:win": "npm run notices && npm run build && electron-builder --win zip --x64 && npm run verify:dist",
+    "release:win": "npm run release:check && npm run dist:win && npm run dist:source",
+    "release:win:online": "npm run release:check && npm run dist:win:online && npm run dist:source"
+  },
+  "dependencies": {
+    "better-result": "2.8.2",
+    "fflate": "^0.8.3",
+    "lzma-web": "^3.0.1",
+    "three": "^0.185.1",
+    "troika-three-text": "^0.52.4",
+    "use-intl": "^4.14.9",
+    "wasm-media-encoders": "^0.7.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "@types/node": "^22.10.0",
+    "@types/three": "^0.185.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.12",
+    "rcedit": "^5.0.2",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.yougurton.lumatic",
+    "productName": "Lumatic",
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json",
+      "!**/node_modules/**"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts/game-environments.py",
+        "to": "game-environments.py"
+      },
+      {
+        "from": "scripts/game-environment-materials.json",
+        "to": "game-environment-materials.json"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "zip",
+      "icon": "build/icon.ico"
+    },
+    "extraFiles": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ]
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

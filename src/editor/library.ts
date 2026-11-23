@@ -1,0 +1,560 @@
+import { ringStepsDialog } from './ring-steps-dialog';
+import { laserDialog } from './laser-dialog';
+import { ringGlitchDialog } from './ring-glitch-dialog';
+import type { SchemeColors } from './bake';
+import type { Editor } from './editor';
+import { generateEffect, sketchLevel, type Effect, type EffectItem, type EffectKind, type EffectParams } from './effects';
+import type { ClipColor, LightClip, RawEvent } from './model';
+import { newColorBox } from './gls';
+import { PresetPanel } from './presets';
+import type { SoundSource } from './sound-effect';
+import { newRingBlock, newSpinBlock, newZoomBlock, type RingBlock } from './rings';
+import { otherEventName } from './names';
+import { tr } from './i18n';
+
+/**
+ * The library on the right: effects (a card each, its sketch moving while the mouse is over it) —
+ * click one, then drag along a row to draw it (or double-click it: it goes onto the row picked last,
+ * at the cursor; ▶ tries it out in the 3D view first); ring forms and spins (one click puts the ring
+ * event in at the cursor); and the user's presets.
+ */
+
+interface EffectCard {
+  name: string;
+  hint: string;
+  kind: EffectKind;
+  /** Beats it lasts when put in with a double click. */
+  length: number;
+  params: (colors: { main: ClipColor; other: ClipColor }) => Partial<EffectParams>;
+}
+
+const EFFECTS: EffectCard[] = [
+  { name: 'GLS-группа', hint: 'Блок как в редакторе Beat Saber (Group Lighting System): коробки с фильтрами, распределение по времени и яркости, свои события, строб, вращение колец', kind: 'gls', length: 4, params: () => ({}) },
+  { name: 'Волна', hint: 'Вспышка бежит по элементам группы по порядку', kind: 'wave', length: 4, params: () => ({ direction: 'forward', pulse: 1, startMode: 'flash', endMode: 'fade' }) },
+  { name: 'Туда-обратно', hint: 'Волна проходит туда и обратно', kind: 'wave', length: 4, params: () => ({ direction: 'pingpong', repeats: 2, pulse: 0.75, startMode: 'flash', endMode: 'fade' }) },
+  { name: 'От центра', hint: 'Волна расходится от середины к краям', kind: 'wave', length: 2, params: () => ({ direction: 'outward', pulse: 0.75, startMode: 'flash', endMode: 'fade' }) },
+  { name: 'К центру', hint: 'Волна сходится от краёв к середине', kind: 'wave', length: 2, params: () => ({ direction: 'inward', pulse: 0.75, startMode: 'flash', endMode: 'fade' }) },
+  {
+    name: 'Радужная волна',
+    hint: 'Волна, где каждый элемент своего оттенка',
+    kind: 'wave',
+    length: 4,
+    params: () => ({ direction: 'forward', pulse: 1.5, startMode: 'on', endMode: 'fade', color: { ref: 'custom', rgb: [1, 0, 0], brightness: 1 }, color2: { ref: 'custom', rgb: [0.7, 0, 1], brightness: 1 }, hsv: true }),
+  },
+  { name: 'Цветная волна', hint: 'Волна с переходом цвета от первого элемента к последнему', kind: 'wave', length: 4, params: ({ other }) => ({ direction: 'forward', pulse: 1, startMode: 'flash', endMode: 'fade', color2: other }) },
+  { name: 'Заполнение', hint: 'Элементы зажигаются по очереди и горят до конца', kind: 'fill', length: 4, params: () => ({ direction: 'forward', pulse: 2, startMode: 'on', endMode: 'fade' }) },
+  { name: 'Стробоскоп', hint: 'Все лампы мигают разом', kind: 'strobe', length: 2, params: () => ({ pattern: 'all', rate: 0.25, duty: 0.5, startMode: 'on', endMode: 'off' }) },
+  { name: 'Строб 2 цвета', hint: 'Мигание с чередованием двух цветов', kind: 'strobe', length: 2, params: ({ other }) => ({ pattern: 'all', rate: 0.25, duty: 0.6, startMode: 'on', endMode: 'off', color2: other }) },
+  { name: 'Чередование', hint: 'Чётные и нечётные элементы мигают по очереди', kind: 'strobe', length: 2, params: () => ({ pattern: 'alternate', rate: 0.25, duty: 0.9, startMode: 'on', endMode: 'off' }) },
+  { name: 'Бегущий огонь', hint: 'Огонёк бегает по элементам по кругу', kind: 'strobe', length: 4, params: () => ({ pattern: 'sequence', rate: 0.125, duty: 1, startMode: 'on', endMode: 'off' }) },
+  { name: 'Пульс', hint: 'Вспышка на каждую долю, гаснущая к следующей', kind: 'strobe', length: 4, params: () => ({ pattern: 'all', rate: 1, duty: 0.95, startMode: 'flash', endMode: 'fade' }) },
+  { name: 'Градиент', hint: 'Все элементы горят, цвет плавно меняется от первого к последнему', kind: 'gradient', length: 4, params: ({ other }) => ({ startMode: 'fadeIn', fadeIn: 0.5, endMode: 'fade', color2: other }) },
+  { name: 'Мерцание', hint: 'Случайные лампы вспыхивают и гаснут', kind: 'twinkle', length: 4, params: () => ({ rate: 0.25, density: 0.3, duty: 1.5, startMode: 'flash', endMode: 'fade' }) },
+  { name: 'Огонёк', hint: 'Горит и дрожит, как пламя: то чуть тусклее, то чуть ярче', kind: 'fire', length: 4, params: () => ({ shape: 'steady', tremor: 0.35, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
+  { name: 'Вибрато', hint: 'Свет ровно качается — тише и обратно, как вибрато в музыке; лампы чуть вразнобой', kind: 'fire', length: 4, params: () => ({ shape: 'steady', wobble: 'vibrato', tremor: 0.6, rate: 0.5, vibratoLag: 0.15, vibratoIn: 1, vibratoOut: 1, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
+  { name: 'Разгорается', hint: 'Медленно нарастает, дрожа, как разгорающийся огонь', kind: 'fire', length: 8, params: () => ({ shape: 'rise', floor: 0.1, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'stay' }) },
+  { name: 'Догорает', hint: 'Медленно затухает, дрожа, как догорающий огонь', kind: 'fire', length: 8, params: () => ({ shape: 'fall', floor: 0, tremor: 0.3, rate: 0.125, pattern: 'alternate', startMode: 'on', endMode: 'off' }) },
+  { name: 'Эквалайзер', hint: 'По звуку песни: первые лампы — низкие частоты, последние — высокие; яркость — их громкость', kind: 'sound', length: 4, params: ({ other }) => ({ soundMode: 'eq', soundStep: 1 / 16, release: 0.4, gain: 1, lowHz: 40, highHz: 12000, color2: other, soundColorBy: 'level', startMode: 'on', endMode: 'off' }) },
+  { name: 'Индикатор громкости', hint: 'По звуку песни: чем громче, тем больше ламп горит; верхняя медленно опускается', kind: 'sound', length: 4, params: ({ other }) => ({ soundMode: 'meter', soundStep: 1 / 16, release: 0.3, peakFall: 2, gain: 1, lowHz: 40, highHz: 12000, color2: other, soundColorBy: 'item', startMode: 'on', endMode: 'off' }) },
+  { name: 'Свет по громкости', hint: 'По звуку песни: все лампы светят ярче, когда громче', kind: 'sound', length: 4, params: () => ({ soundMode: 'level', soundStep: 1 / 16, release: 0.5, gain: 1, lowHz: 40, highHz: 12000, soundDelay: 0, startMode: 'on', endMode: 'off' }) },
+  { name: 'Волна под звук', hint: 'По звуку песни: яркость по громкости, на следующие лампы — с задержкой', kind: 'sound', length: 4, params: () => ({ soundMode: 'level', soundStep: 1 / 16, release: 0.5, gain: 1, lowHz: 40, highHz: 12000, soundDelay: 0.125, startMode: 'on', endMode: 'off' }) },
+];
+
+/** A made-up song for the sketches of the effects by sound: a kick on the beats, a hat between them,
+ *  a swell in the middle. */
+let sketchSound: SoundSource | null = null;
+function fakeSound(): SoundSource {
+  if (sketchSound !== null) return sketchSound;
+  const bands = 32;
+  const frames = 600;
+  const secondsPerFrame = 0.02;
+  const values = new Uint8Array(frames * bands);
+  for (let f = 0; f < frames; f++) {
+    const t = f * secondsPerFrame;
+    const kick = Math.exp(-((t % 0.5) / 0.08));
+    const hat = Math.exp(-(((t + 0.25) % 0.5) / 0.04));
+    const swell = 0.5 + 0.5 * Math.sin(t * 1.7);
+    for (let b = 0; b < bands; b++) {
+      const u = b / (bands - 1);
+      const level = kick * Math.max(0, 1 - u * 3) + swell * Math.exp(-(((u - 0.5) / 0.18) ** 2)) * 0.8 + hat * Math.max(0, u * 1.4 - 0.4);
+      values[f * bands + b] = Math.round(Math.min(1, 0.08 + level) * 255);
+    }
+  }
+  sketchSound = { secondsPerFrame, frames, bands, values, lowHz: 30, highHz: 16000 };
+  return sketchSound;
+}
+
+interface RingCard {
+  name: string;
+  hint: string;
+  type: 8 | 9;
+  data: Record<string, number>;
+}
+
+const RINGS: RingCard[] = [
+  { name: 'Ровно', hint: 'Все кольца встают ровно, одно за другим', type: 8, data: { rotation: 0, step: 0, prop: 50, speed: 2, direction: 0 } },
+  { name: 'Спираль', hint: 'Каждое следующее кольцо повёрнуто на 15°', type: 8, data: { rotation: 0, step: 15, prop: 50, speed: 2, direction: 0 } },
+  { name: 'Крутая спираль', hint: 'Каждое кольцо повёрнуто на 45°', type: 8, data: { rotation: 0, step: 45, prop: 50, speed: 2, direction: 0 } },
+  { name: 'Крест', hint: 'Кольца через одно повёрнуты на 90°', type: 8, data: { rotation: 0, step: 90, prop: 50, speed: 2, direction: 0 } },
+  { name: 'Поворот 90°', hint: 'Все кольца разом поворачиваются на 90°', type: 8, data: { rotation: 90, step: 0, prop: 50, speed: 2, direction: 0 } },
+  { name: 'Поворот волной', hint: 'Поворот на 90° бежит от ближних колец к дальним', type: 8, data: { rotation: 90, step: 0, prop: 1, speed: 1, direction: 0 } },
+  { name: 'Закрутка', hint: 'Пол-оборота со спиралью, волной', type: 8, data: { rotation: 180, step: 15, prop: 2, speed: 1, direction: 0 } },
+  { name: 'Обратно', hint: 'Поворот на 90° в другую сторону (по часовой)', type: 8, data: { rotation: 90, step: 0, prop: 50, speed: 2, direction: 1 } },
+  { name: 'Сжать', hint: 'Кольца сдвигаются ближе друг к другу', type: 9, data: { step: 0.5, speed: 2 } },
+  { name: 'Растянуть', hint: 'Кольца расходятся дальше друг от друга', type: 9, data: { step: 4, speed: 2 } },
+];
+
+/** The effect sketch: 8 items in a row, lit as the effect would light them at `t`. */
+function drawEffectSketch(canvas: HTMLCanvasElement, card: EffectCard, colors: SchemeColors, t: number | null) {
+  const ctx = canvas.getContext('2d')!;
+  const { width, height } = canvas;
+  ctx.fillStyle = '#0c0d11';
+  ctx.fillRect(0, 0, width, height);
+  const main: ClipColor = { ref: 'right', brightness: 1 };
+  const other: ClipColor = { ref: 'left', brightness: 1 };
+  const effect: Effect = {
+    id: 'sketch',
+    name: card.name,
+    kind: card.kind,
+    type: 0,
+    ids: null,
+    start: 0,
+    end: card.length,
+    layer: 1,
+    ...(card.kind === 'gls' ? { gls: { boxes: [{ ...newColorBox(main), beatValue: 2, blocks: [{ id: 'a', start: 0, end: 1.5, color: { ...main, brightness: 1 }, endColor: null, startMode: 'on' as const, fadeIn: 0.25, endMode: 'fade' as const, strobe: 0 }] }] } } : {}),
+    params: { color: main, color2: null, hsv: false, startMode: 'flash', endMode: 'fade', fadeIn: 0.25, pulse: 1, repeats: 1, direction: 'forward', rate: 0.25, duty: 0.5, pattern: 'all', density: 0.3, seed: 7, ...card.params({ main, other }) },
+  };
+  const items: EffectItem[] = Array.from({ length: 8 }, (_, id) => ({ kind: 'light', type: 0, id }));
+  const clips: LightClip[] = generateEffect(effect, items, colors, card.kind === 'sound' ? { secondsPerBeat: 0.5, ringCount: () => 1, sound: fakeSound() } : undefined);
+  const time = t ?? card.length * 0.45;
+  const gap = width / 8;
+  for (let i = 0; i < 8; i++) {
+    const { level, color } = sketchLevel(clips, i, time, 2);
+    const cx = gap * (i + 0.5);
+    const rgb = color === null ? [0, 0, 0] : color.ref === 'custom' ? (color.rgb ?? [1, 1, 1]) : colors[color.ref];
+    const k = Math.min(1.3, level);
+    ctx.fillStyle = '#1d1f27';
+    ctx.fillRect(cx - gap * 0.32, height * 0.2, gap * 0.64, height * 0.6);
+    if (k > 0.02) {
+      const c = rgb.map((v) => Math.round(Math.min(255, v * 255 * k + (k > 1 ? (k - 1) * 255 : 0))));
+      ctx.shadowColor = `rgb(${c.join(',')})`;
+      ctx.shadowBlur = 10 * k;
+      ctx.fillStyle = `rgb(${c.join(',')})`;
+      ctx.fillRect(cx - gap * 0.32, height * 0.2, gap * 0.64, height * 0.6);
+      ctx.shadowBlur = 0;
+    }
+  }
+  if (t !== null) {
+    ctx.fillStyle = 'rgba(255,80,110,0.8)';
+    ctx.fillRect((Math.min(t, card.length) / card.length) * width, height - 3, 2, 3);
+  }
+}
+
+/** The ring sketch: 7 rings seen down the tunnel turning to the form. */
+export interface RingShape {
+  /** x, y pairs, three a triangle (the ring's plane, y up). */
+  triangles: Float32Array;
+  radius: number;
+}
+
+/** An environment's ring (see Preview.ringOutline) filled, `reach` px from the middle to its farthest point. */
+export function fillRingShape(ctx: CanvasRenderingContext2D, shape: RingShape, reach: number) {
+  const unit = reach / shape.radius;
+  const t = shape.triangles;
+  ctx.beginPath();
+  for (let k = 0; k + 5 < t.length; k += 6) {
+    ctx.moveTo(t[k]! * unit, -t[k + 1]! * unit);
+    ctx.lineTo(t[k + 2]! * unit, -t[k + 3]! * unit);
+    ctx.lineTo(t[k + 4]! * unit, -t[k + 5]! * unit);
+    ctx.closePath();
+  }
+  ctx.fill();
+}
+
+function drawRingSketch(canvas: HTMLCanvasElement, card: RingCard, t: number | null, outline: RingShape | null = null) {
+  const ctx = canvas.getContext('2d')!;
+  const { width, height } = canvas;
+  ctx.fillStyle = '#0c0d11';
+  ctx.fillRect(0, 0, width, height);
+  const time = t ?? 2.5;
+  const rings = 7;
+  const cx = width / 2;
+  const cy = height / 2;
+  for (let k = rings - 1; k >= 0; k--) {
+    let angle: number;
+    let scale = 1 / (1 + k * 0.32);
+    if (card.type === 8) {
+      const prop = card.data.prop ?? 50;
+      const delay = prop >= 20 ? 0 : (k / Math.max(0.5, prop)) * 0.35;
+      const speed = card.data.speed ?? 2;
+      const progress = Math.min(1, Math.max(0, time - 0.3 - delay) * speed * 0.6);
+      const eased = 1 - (1 - progress) ** 3;
+      const from = 20;
+      const sign = card.data.direction === 1 ? -1 : 1;
+      const to = from + sign * (card.data.rotation ?? 0) + k * (card.data.step ?? 0);
+      angle = ((from + (to - from) * eased) * Math.PI) / 180;
+    } else {
+      angle = (20 * Math.PI) / 180;
+      const progress = Math.min(1, Math.max(0, time - 0.3) * 0.8);
+      const eased = 1 - (1 - progress) ** 3;
+      const spread = 1.5 + ((card.data.step ?? 1) - 1.5) * eased;
+      scale = 1 / (1 + k * 0.2 * spread);
+    }
+    const size = Math.min(width, height * 1.6) * 0.42 * scale;
+    ctx.save();
+    ctx.translate(cx, cy);
+    // (a growing angle turns the rings counterclockwise as the player sees them)
+    ctx.rotate(-angle);
+    const hue = 270 - k * 12;
+    ctx.strokeStyle = `hsl(${String(hue)} 80% ${String(70 - k * 5)}%)`;
+    ctx.lineWidth = Math.max(1, 3 * scale);
+    if (outline === null) ctx.strokeRect(-size, -size * 0.62, size * 2, size * 1.24);
+    else {
+      // (the environment's own ring, filled)
+      ctx.fillStyle = ctx.strokeStyle;
+      fillRingShape(ctx, outline, size * 1.15);
+    }
+    ctx.restore();
+  }
+}
+
+export class Library {
+  private tab: 'effects' | 'rings' | 'presets' = 'effects';
+  private readonly body: HTMLElement;
+  private readonly presetBox: HTMLElement;
+  readonly presets: PresetPanel;
+  private targetLabel: HTMLElement | null = null;
+  /** Which ring system ring events go to (Chroma's nameFilter; null: all of them). */
+  private ringFilter: string | null = null;
+  private animating: { canvas: HTMLCanvasElement; draw: (t: number) => void; started: number } | null = null;
+
+  constructor(private readonly editor: Editor, private readonly root: HTMLElement) {
+    root.classList.add('lib');
+    const tabs = document.createElement('div');
+    tabs.className = 'lib-tabs';
+    this.body = document.createElement('div');
+    this.body.className = 'lib-body';
+    this.presetBox = document.createElement('div');
+    this.presetBox.className = 'lib-presets';
+    this.presets = new PresetPanel(editor, this.presetBox);
+    for (const [key, label] of [
+      ['effects', 'Эффекты'],
+      ['rings', 'Кольца'],
+      ['presets', 'Пресеты'],
+    ] as const) {
+      const button = document.createElement('button');
+      button.textContent = label;
+      button.dataset.tab = key;
+      button.addEventListener('click', () => {
+        this.tab = key;
+        this.render();
+      });
+      tabs.append(button);
+    }
+    root.append(tabs, this.body);
+    let rings = '';
+    editor.onChange((what) => {
+      if (what === 'selection' || what === 'rows' || what === 'all') this.updateTarget();
+      // (another environment: its own rings on the cards)
+      const now = editor.preview.ringSystems().map((system) => system.name).join('|');
+      if (what === 'all' && now !== rings) {
+        rings = now;
+        if (this.tab === 'rings') this.render();
+      }
+    });
+    const loop = () => {
+      const anim = this.animating;
+      if (anim !== null) anim.draw(((performance.now() - anim.started) / 1000) * 2);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+    this.render();
+  }
+
+  private colors(): SchemeColors {
+    return this.editor.scheme();
+  }
+
+  render() {
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('.lib-tabs button')) button.classList.toggle('active', button.dataset.tab === this.tab);
+    this.animating = null;
+    this.body.replaceChildren();
+    if (this.tab === 'presets') {
+      this.body.append(this.presetBox);
+      return;
+    }
+    const head = document.createElement('div');
+    head.className = 'lib-head';
+    this.targetLabel = document.createElement('span');
+    this.targetLabel.className = 'lib-target';
+    head.append(this.targetLabel);
+    if (this.tab === 'effects') {
+      const plain = document.createElement('button');
+      plain.textContent = 'Обычный свет';
+      plain.title = 'Рисовать обычные события (Esc)';
+      plain.className = this.editor.tool.kind === 'clip' ? 'active' : '';
+      plain.addEventListener('click', () => this.arm(null));
+      head.append(plain);
+    }
+    this.body.append(head);
+    if (this.tab === 'rings') {
+      const systems = this.editor.preview.ringSystems().filter((system) => system.rotates || system.zooms);
+      if (systems.length > 1) {
+        const pick = document.createElement('select');
+        pick.className = 'lib-select';
+        pick.title = 'Какие кольца поворачивать (Chroma nameFilter)';
+        pick.append(Object.assign(document.createElement('option'), { value: '', textContent: 'Все кольца' }));
+        for (const system of systems) pick.append(Object.assign(document.createElement('option'), { value: system.name, textContent: `${ringSystemName(system.name)} (${String(system.rings)})` }));
+        pick.value = this.ringFilter ?? '';
+        pick.addEventListener('change', () => (this.ringFilter = pick.value === '' ? null : pick.value));
+        head.append(pick);
+      } else this.ringFilter = null;
+    }
+    this.updateTarget();
+    const grid = document.createElement('div');
+    grid.className = 'lib-grid';
+    if (this.tab === 'effects') for (const card of EFFECTS) grid.append(this.effectCard(card));
+    else for (const card of RINGS) grid.append(this.ringCard(card));
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
+      // the exact poses: a block of them at the cursor, its editor opened
+      const poses = document.createElement('button');
+      poses.className = 'lib-poses';
+      poses.textContent = '◎ Точные позы колец…';
+      poses.title = 'Блок поз у курсора: угол каждого кольца, спирали, волны, ручная раскладка — с предпросмотром';
+      poses.title = 'Кисть: поставьте блок поз мышью на строку «Вращение колец» (клик — 4 доли, протянуть — своя длина), откроется его редактор';
+      this.armedLook(poses, 'Точные позы колец');
+      poses.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        this.disarmOr('Точные позы колец', () => this.armRing('Точные позы колец', [8], newRingBlock(editor.ringInfo[0]!.name, 'event', 0, 4), true));
+      });
+      this.body.append(poses);
+    }
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
+      // a turn in steps: a small window of its own, the block at the cursor
+      const steps = document.createElement('button');
+      steps.className = 'lib-poses';
+      steps.textContent = '⟳ Кольца по шагам…';
+      steps.title = 'Кольца переходят из начального угла в конечный за несколько шагов: число шагов и скорость поворота настраиваются';
+      this.armedLook(steps, 'Кольца по шагам');
+      steps.addEventListener('click', () => this.disarmOr('Кольца по шагам', () => ringStepsDialog(this.editor, null, (block) => this.armRing('Кольца по шагам', [8], block))));
+      this.body.append(steps);
+    }
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0) {
+      // rings jerking about (scratches, glitches)
+      const glitch = document.createElement('button');
+      glitch.className = 'lib-poses';
+      glitch.textContent = '⚡ Глитч колец…';
+      glitch.title = 'Кольца дёргаются в случайные стороны — по сетке или по ударам песни (скретчи, глюки). Над выделенным участком песни, иначе от курсора';
+      this.armedLook(glitch, 'Глитч колец');
+      glitch.addEventListener('click', () => this.disarmOr('Глитч колец', () => ringGlitchDialog(this.editor, null, (block) => this.armRing('Глитч колец', [8], block))));
+      this.body.append(glitch);
+    }
+    if (this.tab === 'rings' && this.editor.project !== null) {
+      // the rotating lasers: in a row, one way, by a set angle (Chroma's laser speed data)
+      const lasers = document.createElement('button');
+      lasers.className = 'lib-poses';
+      lasers.textContent = '✳ Лазеры…';
+      lasers.title = 'Вращающиеся лазеры: крутятся ровным рядом в выбранную сторону или поворачиваются на угол по шагам (нужен Chroma)';
+      this.armedLook(lasers, 'Лазеры');
+      lasers.addEventListener('click', () =>
+        this.disarmOr('Лазеры', () =>
+          laserDialog(this.editor, null, (block) => {
+            const sides = block.lasers?.sides ?? 'both';
+            this.armRing('Лазеры', sides === 'left' ? [12] : sides === 'right' ? [13] : [12, 13], block);
+          }),
+        ),
+      );
+      this.body.append(lasers);
+    }
+    if (this.tab === 'rings' && this.editor.zoomInfo.length > 0) {
+      const zoom = document.createElement('button');
+      zoom.className = 'lib-poses';
+      zoom.textContent = '⇹ Зум колец…';
+      zoom.title = 'Блок зума у курсора: расстояние между кольцами по позам — с предпросмотром';
+      zoom.title = 'Кисть: поставьте блок зума мышью на строку «Зум колец» (клик — 4 доли, протянуть — своя длина), откроется его редактор';
+      this.armedLook(zoom, 'Зум колец');
+      zoom.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        this.disarmOr('Зум колец', () => this.armRing('Зум колец', [9], newZoomBlock(editor.zoomInfo[0], 0, 4, editor.zoomInfo.length > 1 ? editor.zoomInfo[0]!.name : ''), true));
+      });
+      this.body.append(zoom);
+    }
+    // rings kept moving from the start to the stop: turning / twisting, the zoom (settings on the right)
+    const spinButton = (kind: 'rotation' | 'zoom', text: string, title: string) => {
+      const button = document.createElement('button');
+      button.className = 'lib-poses';
+      button.textContent = text;
+      button.title = title;
+      this.armedLook(button, text);
+      button.addEventListener('click', () => {
+        const editor = this.editor;
+        if (editor.project === null) return;
+        const system = kind === 'zoom' ? (editor.zoomInfo.length > 1 ? (editor.zoomInfo[0]?.name ?? '') : '') : (editor.ringInfo[0]?.name ?? '');
+        // (the spin's settings as the last such block had them: set there, on the right, once it's put)
+        const template = newSpinBlock(system, kind, 0, 8);
+        const last = [...editor.ringBlocks].reverse().find((block) => block.spin !== undefined && (block.kind === 'zoom') === (kind === 'zoom'));
+        if (last?.spin !== undefined) template.spin = structuredClone(last.spin);
+        this.disarmOr(text, () => this.armRing(text, [kind === 'zoom' ? 9 : 8], template));
+      });
+      this.body.append(button);
+    };
+    if (this.tab === 'rings' && this.editor.ringInfo.length > 0 && this.editor.project !== null) spinButton('rotation', '∞ Постоянное вращение', 'Кольца крутятся (и закручиваются) с постоянной скоростью от начала блока до конца, с разгоном и торможением. Настройки — справа');
+    if (this.tab === 'rings' && this.editor.zoomInfo.length > 0 && this.editor.project !== null) spinButton('zoom', '∞ Постоянный зум', 'Расстояние между кольцами всё время меняется — в одну сторону или туда-обратно — от начала блока до конца. Настройки — справа');
+    const tip = document.createElement('div');
+    tip.className = 'lib-tip';
+    tip.textContent =
+      this.tab === 'effects'
+        ? 'Клик — выбрать эффект и протянуть по строке таймлайна. Двойной клик — вставить на выбранную строку у курсора. ▶ — попробовать в окне просмотра.'
+        : 'Кнопки сверху — кисти: выберите, настройте и поставьте мышью на свою строку таймлайна (клик — своя длина, протянуть — по мыши; Esc — обычный свет). Карточки: клик — событие колец у курсора, ▶ — посмотреть.';
+    this.body.append(grid, tip);
+  }
+
+  private updateTarget() {
+    if (this.targetLabel === null) return;
+    const row = this.editor.libraryRow();
+    this.targetLabel.textContent = this.tab === 'rings' ? 'Кнопки — кисти (ставятся мышью), карточки — у курсора' : row === null ? 'Откройте карту' : `Строка: ${row.label}`;
+    this.targetLabel.title = 'Строка, на которую эффект ставится двойным кликом: последняя, по которой вы кликнули на таймлайне';
+  }
+
+  /** A ring tool's button lit while it's the brush. */
+  private armedLook(button: HTMLButtonElement, name: string) {
+    const tool = this.editor.tool;
+    button.classList.toggle('armed', tool.kind === 'ring' && tool.name === name);
+  }
+
+  /** The ring tool already the brush: let go; else `open` (its window: the brush taken from it). */
+  private disarmOr(name: string, open: () => void) {
+    const tool = this.editor.tool;
+    if (tool.kind === 'ring' && tool.name === name) this.armRing(name, [], null);
+    else open();
+  }
+
+  /** A ring tool made the brush (the same again, or `template` null: back to plain light). */
+  private armRing(name: string, types: number[], template: RingBlock | null, open = false) {
+    const editor = this.editor;
+    if (template === null) {
+      editor.tool = { kind: 'clip' };
+      editor.setStatus('Рисование обычного света');
+    } else {
+      editor.tool = { kind: 'ring', name, types, template, open };
+      const rows = types.map((type) => otherEventName(type)).join(' / ');
+      editor.setStatus(tr('Кисть «{0}»: кликните или протяните по строке «{1}» (Esc — обычный свет)', tr(name), rows));
+    }
+    this.render();
+  }
+
+  /** Effect cards: click arms the tool for drawing. */
+  private arm(card: EffectCard | null) {
+    const editor = this.editor;
+    if (card === null || (editor.tool.kind === 'effect' && editor.tool.name === card.name)) editor.tool = { kind: 'clip' };
+    else editor.tool = { kind: 'effect', name: card.name, effect: card.kind, params: card.params(this.cardColors()) };
+    editor.setStatus(editor.tool.kind === 'effect' ? `Протяните по строке таймлайна, чтобы нарисовать «${card!.name}» (Esc — обычный свет)` : 'Рисование обычного света');
+    this.render();
+  }
+
+  private cardColors() {
+    const main = { ...this.editor.brush.color };
+    const other: ClipColor = main.ref === 'left' ? { ref: 'right', brightness: main.brightness } : { ref: 'left', brightness: main.brightness };
+    return { main, other };
+  }
+
+  private cardFrame(name: string, hint: string, canvas: HTMLCanvasElement, draw: (t: number | null) => void, onTry: () => void) {
+    const card = document.createElement('div');
+    card.className = 'lib-card';
+    card.title = hint;
+    canvas.width = 200;
+    canvas.height = 64;
+    draw(null);
+    const label = document.createElement('div');
+    label.className = 'lib-name';
+    label.textContent = name;
+    const play = document.createElement('button');
+    play.className = 'lib-try';
+    play.textContent = '▶';
+    play.title = 'Попробовать в окне просмотра (не добавляя)';
+    play.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onTry();
+    });
+    play.addEventListener('dblclick', (event) => event.stopPropagation());
+    card.append(canvas, label, play);
+    card.addEventListener('mouseenter', () => (this.animating = { canvas, draw: (t) => draw(t % 5), started: performance.now() }));
+    card.addEventListener('mouseleave', () => {
+      if (this.animating?.canvas === canvas) this.animating = null;
+      draw(null);
+    });
+    return card;
+  }
+
+  private effectCard(card: EffectCard) {
+    const canvas = document.createElement('canvas');
+    const element = this.cardFrame(card.name, card.hint, canvas, (t) => drawEffectSketch(canvas, card, this.colors(), t === null ? null : t % (card.length + 1)), () => this.tryEffect(card));
+    if (this.editor.tool.kind === 'effect' && this.editor.tool.name === card.name) element.classList.add('armed');
+    element.addEventListener('click', () => this.arm(card));
+    element.addEventListener('dblclick', () => this.insertEffect(card));
+    return element;
+  }
+
+  private ringCard(card: RingCard) {
+    const canvas = document.createElement('canvas');
+    // (the environment's own rings — the ones these events turn, or move)
+    const systems = this.editor.preview.ringSystems();
+    const index = systems.findIndex((system) => (card.type === 8 ? system.rotates : system.zooms));
+    const outline = index < 0 ? null : this.editor.preview.ringOutline(index);
+    const element = this.cardFrame(card.name, card.hint, canvas, (t) => drawRingSketch(canvas, card, t, outline), () => this.tryRing(card));
+    element.addEventListener('click', () => this.insertRing(card));
+    return element;
+  }
+
+  private effectAtCursor(card: EffectCard): Effect | null {
+    const editor = this.editor;
+    const row = editor.libraryRow();
+    if (row === null || editor.project === null) return null;
+    const start = editor.snapBeat(editor.playhead());
+    return editor.makeEffect(card.kind, card.params(this.cardColors()), row, start, start + card.length, card.name);
+  }
+
+  private insertEffect(card: EffectCard) {
+    const effect = this.effectAtCursor(card);
+    if (effect === null) return;
+    this.editor.tool = { kind: 'clip' };
+    this.editor.addEffect(effect);
+    this.render();
+    if (effect.kind === 'gls') this.editor.glsEditorHook?.(effect.id);
+  }
+
+  private tryEffect(card: EffectCard) {
+    const effect = this.effectAtCursor(card);
+    if (effect === null) return;
+    this.editor.startTrial({ clips: this.editor.previewEffectChildren(effect), raw: [], start: effect.start, end: effect.end });
+    this.editor.setStatus(`Пробую «${card.name}» — Esc, чтобы остановить`);
+  }
+
+  private ringEvent(card: RingCard): Omit<RawEvent, 'id'> {
+    return { beat: this.editor.snapBeat(this.editor.playhead()), type: card.type, value: 0, floatValue: 1, customData: { ...card.data, ...(this.ringFilter === null ? {} : { nameFilter: this.ringFilter }) } };
+  }
+
+  private insertRing(card: RingCard) {
+    if (this.editor.project === null) return;
+    this.editor.addRaw([this.ringEvent(card)]);
+    this.editor.setStatus(`«${card.name}» добавлено на ${String(this.editor.snapBeat(this.editor.playhead()))} долю`);
+  }
+
+  private tryRing(card: RingCard) {
+    if (this.editor.project === null) return;
+    const event = { ...this.ringEvent(card), id: 'trial' };
+    this.editor.startTrial({ clips: [], raw: [event], start: event.beat, end: event.beat + 4 });
+    this.editor.setStatus(`Пробую «${card.name}» — Esc, чтобы остановить`);
+  }
+}
+
+/** A ring system's name as people say it. */
+export function ringSystemName(name: string) {
+  const lower = name.toLowerCase();
+  if (lower.includes('small')) return 'Малые кольца';
+  if (lower.includes('big')) return 'Большие кольца';
+  if (lower.includes('panel')) return 'Панели';
+  return name === '' ? 'Кольца' : name;
+}

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark" />
+    <title>Lumatic — 3D</title>
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #d9dce4; font: 13px system-ui, 'Segoe UI', sans-serif; user-select: none; }
+      #view { position: relative; width: 100%; height: 100%; }
+      #preview { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      #tools { position: absolute; z-index: 2; top: 8px; right: 8px; display: flex; gap: 5px; max-width: calc(100% - 16px); flex-wrap: wrap; justify-content: flex-end; }
+      [hidden] { display: none !important; }
+      button { color: #d9dce4; background: rgba(16, 17, 22, 0.76); border: 1px solid #2a2c34; border-radius: 5px; padding: 5px 9px; font: inherit; cursor: pointer; backdrop-filter: blur(4px); }
+      button:hover { background: rgba(38, 42, 54, 0.9); }
+      button.active { background: rgba(38, 58, 92, 0.9); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      #fly-hint { position: absolute; top: 78px; right: 9px; color: rgba(220, 225, 235, 0.62); font-size: 11px; pointer-events: none; opacity: 0; transition: opacity 0.2s; }
+      #view:hover #fly-hint { opacity: 1; }
+      #status { position: absolute; left: 9px; bottom: 8px; color: rgba(220, 225, 235, 0.7); font-size: 11px; pointer-events: none; }
+      #track-title { position: absolute; left: 10px; bottom: 54px; max-width: calc(100% - 20px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(220, 225, 235, 0.72); font-size: 11px; text-shadow: 0 1px 4px #000; pointer-events: none; }
+      #grid-badge { position: absolute; left: 10px; bottom: 28px; display: flex; align-items: baseline; gap: 6px; text-shadow: 0 1px 4px #000; pointer-events: none; }
+      #grid-badge .gb-label { color: rgba(220, 225, 235, 0.55); font-size: 10px; text-transform: uppercase; }
+      #grid-badge .gb-value { color: #fff; font-size: 24px; font-weight: 700; }
+      #fps { position: absolute; right: 10px; bottom: 8px; color: rgba(220, 225, 235, 0.72); font-size: 11px; pointer-events: none; }
+      .track-box { position: absolute; border: 1px solid rgba(140, 180, 255, 0.9); background: rgba(120, 170, 255, 0.14); pointer-events: none; z-index: 1; }
+    </style>
+  </head>
+  <body>
+    <div id="view">
+      <canvas id="preview"></canvas>
+      <div id="tools">
+        <button id="view-mode" hidden></button>
+        <button id="view-reset" title="Вернуть камеру на место игрока">⟲ Вид</button>
+        <button id="view-lights" title="Свет карты в 3D">💡</button>
+        <button id="view-notes" title="Показать ноты, бомбы и стены в 3D">◆</button>
+        <button id="view-top" title="Держать 3D-окно поверх других окон">📌</button>
+        <button id="view-attach" title="Закрыть отдельное окно и вернуть 3D-вид в редактор">↙ В редактор</button>
+      </div>
+      <span id="fly-hint">ПКМ + мышь — осмотреться, WASD — лететь, Пробел / Ctrl — вверх / вниз, Shift — быстрее</span>
+      <div id="track-title"></div>
+      <div id="grid-badge"><span class="gb-label">сетка</span><span class="gb-value"></span></div>
+      <span id="status"></span>
+      <span id="fps" hidden></span>
+    </div>
+    <script type="module" src="/src/preview-window.ts"></script>
+  </body>
+</html>

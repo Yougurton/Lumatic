@@ -1,0 +1,437 @@
+import { BoxGeometry, BufferGeometry, EdgesGeometry, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Matrix4, Object3D, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import type { EnvironmentData } from '../engine/renderer/environment/types';
+import type { Editor } from './editor';
+import { animRuns, animValue, placingMatrix, sortedKeys } from './env-anim';
+import { childrenOf, dataRotation, generatedRootOf, generatedRoots, localFromWorld, objectBox, rayBox, shown, shownBoxes, worldMatrix } from './env-scene';
+import { tr } from './i18n';
+
+export type GizmoMode = 'translate' | 'rotate' | 'scale';
+
+/**
+ * The Environment side in the 3D view: a click picks the thing under the mouse (again on the same
+ * spot: the one behind it; Ctrl / Shift adds), the picked ones are framed, and the first of them has
+ * handles — arrows to move it (W), rings to turn it (E), cubes to size it (R). Let go, the change is written — the other picked ones changed by as much — and the
+ * environment built anew with it.
+ */
+export class EnvView {
+  private readonly root = new Group();
+  private readonly frames = new Group();
+  private readonly proxy = new Object3D();
+  private readonly controls: TransformControls;
+  private readonly raycaster = new Raycaster();
+  private children: { data: EnvironmentData; map: Map<number, number[]> } | null = null;
+  private framedKey = '';
+  private down: { x: number; y: number } | null = null;
+  private lastPick: { x: number; y: number; order: string[]; at: number } | null = null;
+  private dragging: 'translate' | 'rotate' | 'scale' | null = null;
+  mode: GizmoMode = 'translate';
+  snap = false;
+  /** Called when something is picked in the view (the tree shows it). */
+  onPick: ((key: string) => void) | null = null;
+  onMode: (() => void) | null = null;
+
+  constructor(
+    private readonly editor: Editor,
+    private readonly canvas: HTMLCanvasElement,
+  ) {
+    const view = editor.preview.view;
+    this.root.visible = false;
+    this.controls = new TransformControls(view.viewCamera, canvas);
+    this.controls.attach(this.proxy);
+    this.controls.setSpace('local');
+    this.controls.addEventListener('objectChange', () => this.followProxy());
+    this.controls.setSize(0.9);
+    this.root.add(this.frames, this.proxy, this.controls.getHelper());
+    view.overlayScene.add(this.root);
+    // (the note track draws in the same overlay: both kept up before each frame)
+    const before = view.overlayUpdate;
+    view.overlayUpdate = () => {
+      before?.();
+      this.update();
+    };
+    // (the overlay is drawn — and kept up — only while something in it shows: switched with the side)
+    editor.onChange(() => {
+      this.root.visible = this.active();
+    });
+    this.controls.addEventListener('dragging-changed', (event: unknown) => {
+      const on = (event as { value: boolean }).value;
+      if (on) this.dragging = this.controls.getMode();
+      else {
+        const mode = this.dragging;
+        this.dragging = null;
+        if (mode !== null) this.commit(mode);
+      }
+    });
+    canvas.addEventListener('mousedown', (event) => {
+      if (this.active() && event.button === 0) this.down = { x: event.clientX, y: event.clientY };
+    });
+    canvas.addEventListener('mouseup', (event) => {
+      const down = this.down;
+      this.down = null;
+      if (!this.active() || event.button !== 0 || down === null) return;
+      // (a drag — of a handle or across the view — is not a click)
+      if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4 || this.dragging !== null || this.controls.axis !== null) return;
+      this.pick(event.clientX, event.clientY, event.ctrlKey || event.metaKey || event.shiftKey);
+    });
+    // W / E / R: move, turn, size (only on this side; the lights' brush keys stay theirs elsewhere)
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        if (!this.active() || event.ctrlKey || event.metaKey || event.altKey) return;
+        const target = event.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || document.querySelector('.ce-shade') !== null) return;
+        const mode: GizmoMode | null = event.code === 'KeyW' ? 'translate' : event.code === 'KeyE' ? 'rotate' : event.code === 'KeyR' ? 'scale' : null;
+        if (mode === null) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.setMode(mode);
+      },
+      true,
+    );
+    this.setMode('translate', false);
+  }
+
+  private active() {
+    return this.editor.envMode && this.editor.project !== null;
+  }
+
+  setMode(mode: GizmoMode, say = true) {
+    this.mode = mode;
+    this.controls.setMode(mode);
+    this.onMode?.();
+    if (say) this.editor.setStatus(tr(mode === 'translate' ? 'Двигать (W): тяните за стрелку — по оси, за квадрат — по плоскости' : mode === 'rotate' ? 'Вращать (E): тяните за кольцо' : 'Масштаб (R): тяните за кубик на оси, за центр — весь объект'));
+  }
+
+  /** The handles step: a tenth of a metre, 15°, a tenth of the size. */
+  setSnap(on: boolean) {
+    this.snap = on;
+    this.controls.setTranslationSnap(on ? 0.1 : null);
+    this.controls.setRotationSnap(on ? (15 * Math.PI) / 180 : null);
+    this.controls.setScaleSnap(on ? 0.1 : null);
+    this.onMode?.();
+  }
+
+  /** The environment as the 3D view has it now (with the map's and the scene's changes). */
+  private data(): EnvironmentData | null {
+    return this.editor.preview.environmentData();
+  }
+
+  private kids(data: EnvironmentData) {
+    if (this.children?.data !== data) this.children = { data, map: childrenOf(data) };
+    return this.children.map;
+  }
+
+  /** Where a picked thing is among the view's objects (null: not there — yet). */
+  renderedIndex(key: string): number | null {
+    const data = this.data();
+    const source = this.editor.envSceneData;
+    if (data === null || source === null) return null;
+    if (key.startsWith('g:')) {
+      const index = Number(key.slice(2));
+      return data.objects[index] !== undefined && data.objects[index]!.name === source.objects[index]?.name ? index : null;
+    }
+    // (the scene's own objects are the last Chroma made, in their order)
+    const objects = this.editor.sceneRendered();
+    const order = objects.findIndex((object) => `o:${object.uid}` === key);
+    const roots = generatedRoots(data, source.objects.length);
+    const index = roots[roots.length - objects.length + order];
+    return order < 0 || index === undefined || roots.length < objects.length ? null : index;
+  }
+
+  /** The key of the thing an object of the view belongs to (null: nothing that can be picked). */
+  private keyOf(data: EnvironmentData, index: number): string | null {
+    const source = this.editor.envSceneData;
+    if (source === null) return null;
+    const count = source.objects.length;
+    if (index < count) return data.objects[index]?.name === source.objects[index]?.name ? `g:${String(index)}` : null;
+    const root = generatedRootOf(data, count, index);
+    if (root === null) return null;
+    const objects = this.editor.sceneRendered();
+    const roots = generatedRoots(data, count);
+    const order = roots.indexOf(root) - (roots.length - objects.length);
+    const object = objects[order];
+    // (one of an array's others: the object it's of)
+    return order < 0 || object === undefined ? null : `o:${object.of ?? object.uid}`;
+  }
+
+  /** An array's others in the view (for an added object that is many). */
+  private othersOf(key: string): number[] {
+    if (!key.startsWith('o:')) return [];
+    const uid = key.slice(2);
+    return this.editor.sceneRendered().flatMap((object) => (object.of === uid ? [this.renderedIndex(`o:${object.uid}`)] : [])).filter((index): index is number => index !== null);
+  }
+
+  /** Where a picked thing stands in the world now — an animated one: as its keys have it at the
+   *  playhead (the view's data knows only where it stands without them). */
+  private placed(data: EnvironmentData, index: number, key: string): Matrix4 {
+    // (hung on another: carried along by its motion)
+    const carry = this.editor.linkCarry(key);
+    const now = this.editor.sceneShown(key);
+    if (now === null || (now.keyed.length === 0 && this.editor.motionsOf(key).length === 0)) return carry === null ? worldMatrix(data, index) : carry.multiply(worldMatrix(data, index));
+    const local = new Matrix4().compose(new Vector3(now.position[0], now.position[1], -now.position[2]), new Quaternion().fromArray(dataRotation(now.rotation)), new Vector3().fromArray(now.scale));
+    const parent = data.objects[index]!.parent;
+    const world = now.space === 'world' || parent < 0 ? local : worldMatrix(data, parent).multiply(local);
+    return carry === null ? world : carry.multiply(world);
+  }
+
+  /** The player: where it stands at the playhead (it has no object of its own in the view). */
+  private playerMatrix(): Matrix4 {
+    const now = this.editor.sceneShown('p:player');
+    return placingMatrix({ position: now?.position ?? [0, 0, 0], rotation: now?.rotation ?? [0, 0, 0], scale: [1, 1, 1] });
+  }
+
+  /** Before each frame: the frames round the picked things, the handles on the first of them. */
+  private update() {
+    if (!this.active()) return;
+    const data = this.data();
+    const selection = this.editor.envSelection;
+    const camera = this.editor.preview.view.viewCamera;
+    this.controls.camera = camera;
+    const first = selection[0] === undefined ? null : this.renderedIndex(selection[0]);
+    const player = selection[0] === 'p:player';
+    const usable = data !== null && (first !== null || player);
+    this.controls.enabled = usable;
+    this.controls.getHelper().visible = usable;
+    if (data === null) return;
+    const moving = selection.some((item) => this.editor.animOf(item) !== undefined || this.editor.linkParentOf(item) !== null || this.editor.motionsOf(item).length > 0);
+    const key = `${selection.join(',')}|${String(this.editor.version)}|${String(data.objects.length)}|${moving ? this.editor.playhead().toFixed(3) : ''}`;
+    if ((key === this.framedKey && this.children?.data === data) || this.dragging !== null) return;
+    this.framedKey = key;
+    const kids = this.kids(data);
+    this.clearFrames();
+    selection.forEach((item, order) => {
+      const index = this.renderedIndex(item);
+      if (index !== null) {
+        const carried = this.placed(data, index, item).multiply(worldMatrix(data, index).invert());
+        for (const { box, matrix } of shownBoxes(data, index, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, carried.clone().multiply(matrix), order === 0 ? 0xffe27a : 0x6aa6ff));
+      }
+      for (const other of this.othersOf(item)) for (const { box, matrix } of shownBoxes(data, other, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, matrix, 0x4fd6a0));
+    });
+    this.addPath(data, selection[0], first);
+    if (player) this.frames.add(frame(PLAYER_BOX.min, PLAYER_BOX.max, this.playerMatrix(), 0xffe27a));
+    if (usable) {
+      (player ? this.playerMatrix() : this.placed(data, first!, selection[0]!)).decompose(this.proxy.position, this.proxy.quaternion, this.proxy.scale);
+      this.proxy.updateMatrixWorld(true);
+    }
+  }
+
+  /** The way the first picked thing goes (its place's keys): a line through it, a dot a key. */
+  private addPath(data: EnvironmentData, key: string | undefined, index: number | null) {
+    this.pathKeys = [];
+    if (key === undefined || (index === null && key !== 'p:player')) return;
+    const anim = this.editor.animOf(key);
+    const keys = sortedKeys(anim?.keys.position);
+    if (keys.length < 2) return;
+    const parent = index === null ? -1 : data.objects[index]!.parent;
+    const base = parent < 0 ? new Matrix4() : worldMatrix(data, parent);
+    const at = (value: readonly number[]) => new Vector3(value[0]!, value[1]!, -value[2]!).applyMatrix4(base);
+    const [from, to] = [keys[0]!.beat, keys[keys.length - 1]!.beat];
+    const points: number[] = [];
+    const steps = Math.min(256, Math.max(16, keys.length * 16));
+    let before: Vector3 | null = null;
+    for (let n = 0; n <= steps; n++) {
+      const value = animValue({ target: '', keys: { position: keys } }, 'position', from + ((to - from) * n) / steps);
+      if (value === null) continue;
+      const point = at(value);
+      if (before !== null) points.push(before.x, before.y, before.z, point.x, point.y, point.z);
+      before = point;
+    }
+    // (a little cross a key)
+    for (const item of keys) {
+      const point = at(item.value);
+      this.pathKeys.push({ id: item.id, beat: item.beat, point });
+      for (let k = 0; k < 3; k++) {
+        const arm = [0, 0, 0];
+        arm[k] = 0.12;
+        points.push(point.x - arm[0]!, point.y - arm[1]!, point.z - arm[2]!, point.x + arm[0]!, point.y + arm[1]!, point.z + arm[2]!);
+      }
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
+    const line = new LineSegments(geometry, lineMaterial(animRuns(anim, 'position') > 1 ? 0x9fd0ff : 0x6aa6ff, 0.85));
+    line.renderOrder = 9;
+    line.frustumCulled = false;
+    this.frames.add(line);
+  }
+
+  /** The keys of the drawn path (a click on one goes to it). */
+  private pathKeys: { id: string; beat: number; point: Vector3 }[] = [];
+
+  private clearFrames() {
+    for (const child of [...this.frames.children]) {
+      this.frames.remove(child);
+      // (the geometry only: the materials are shared — disposing them made the renderer drop their
+      // shader and compile it again on the next frame, every frame while an animated thing played)
+      (child as LineSegments).geometry.dispose();
+    }
+  }
+
+  /** While a handle is dragged: the first thing's frame goes with it. */
+  private followProxy() {
+    const data = this.data();
+    const first = this.editor.envSelection[0] === undefined ? null : this.renderedIndex(this.editor.envSelection[0]);
+    if (data !== null && this.editor.envSelection[0] === 'p:player') {
+      this.clearFrames();
+      this.proxy.updateMatrixWorld(true);
+      this.frames.add(frame(PLAYER_BOX.min, PLAYER_BOX.max, this.proxy.matrixWorld.clone(), 0xffe27a));
+      return;
+    }
+    if (data === null || first === null) return;
+    this.clearFrames();
+    this.proxy.updateMatrixWorld(true);
+    const kids = this.kids(data);
+    // (its own frame, or — a holder — its children's, carried along by how far it has gone)
+    const delta = this.proxy.matrixWorld.clone().multiply(worldMatrix(data, first).invert());
+    for (const { box, matrix } of shownBoxes(data, first, (at) => kids.get(at) ?? [])) this.frames.add(frame(box.min, box.max, delta.clone().multiply(matrix), 0xffe27a));
+  }
+
+  /** A handle let go: where the first thing now stands, written as its own place, turn or size — the
+   *  other picked ones moved, turned or sized by as much. */
+  private commit(mode: 'translate' | 'rotate' | 'scale') {
+    const editor = this.editor;
+    const data = this.data();
+    const keys = editor.envSelection;
+    const first = keys[0] === undefined ? null : this.renderedIndex(keys[0]);
+    this.framedKey = '';
+    if (data !== null && keys[0] === 'p:player') {
+      // (the player: its place and turn are keys — its size is the game's)
+      this.proxy.updateMatrixWorld(true);
+      const local = localFromWorld(this.proxy.matrixWorld, new Matrix4());
+      if (mode !== 'scale') editor.applyScene(['p:player'], () => (mode === 'translate' ? { position: local.position } : { rotation: local.rotation }));
+      return;
+    }
+    if (data === null || first === null) return;
+    const before = editor.sceneShown(keys[0]!);
+    if (before === null || (before.object === undefined && (before.id === null || before.id === undefined))) {
+      editor.setStatus(tr('У этого объекта нет id для Chroma: его нельзя изменить'));
+      return;
+    }
+    this.proxy.updateMatrixWorld(true);
+    const object = data.objects[first]!;
+    // (hung on another: where it would stand without that one's motion)
+    const carry = editor.linkCarry(keys[0]!);
+    const world = carry === null ? this.proxy.matrixWorld : carry.invert().multiply(this.proxy.matrixWorld);
+    const local = localFromWorld(world, before.space === 'world' || object.parent < 0 ? new Matrix4() : worldMatrix(data, object.parent));
+    const part = mode === 'translate' ? 'position' : mode === 'rotate' ? 'rotation' : 'scale';
+    const was = before[part];
+    const now = local[part];
+    const tidy = (value: number) => Math.round(value * 10000) / 10000;
+    // (the snap on, a shape moved: an axis close to another shape's is made the same)
+    if (this.snap && mode === 'translate' && before.object?.kind === 'shape') {
+      const others = editor.sceneRendered().filter((item) => item.kind === 'shape' && !keys.includes(`o:${item.of ?? item.uid}`));
+      for (let axis = 0; axis < 3; axis++) {
+        if (Math.abs(now[axis]! - was[axis]!) < 1e-6) continue;
+        const near = others.map((item) => item.position[axis]!).sort((a, b) => Math.abs(a - now[axis]!) - Math.abs(b - now[axis]!))[0];
+        if (near !== undefined && Math.abs(near - now[axis]!) <= 0.25) now[axis] = near;
+      }
+    }
+    editor.applyScene(keys, (key, values) => {
+      // (the first: where the handle left it — a ready motion on it: by as much, its own place kept)
+      if (key === keys[0] && editor.motionsOf(key).length === 0) return { [part]: now };
+      // (the others: by as much — sizes by as many times)
+      const own = values[part];
+      return { [part]: own.map((value, axis) => tidy(part === 'scale' ? (Math.abs(was[axis]!) < 1e-9 ? value : (value * now[axis]!) / was[axis]!) : value + now[axis]! - was[axis]!)) as [number, number, number] };
+    });
+  }
+
+  /** A click: the nearest thing with a mesh under the mouse (the same spot again: the next behind). */
+  private pick(clientX: number, clientY: number, adding: boolean) {
+    const data = this.data();
+    if (data === null) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const camera = this.editor.preview.view.viewCamera;
+    camera.updateMatrixWorld();
+    this.raycaster.setFromCamera(new Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
+    const { origin, direction } = this.raycaster.ray;
+    // (a key's cross on the path: the song taken to it, the key picked — the handles then change it)
+    if (!adding && this.editor.linkPicking === null) {
+      const near = this.pathKeys
+        .map((item) => {
+          const at = item.point.clone().project(camera);
+          return { item, far: Math.hypot(rect.left + ((at.x + 1) / 2) * rect.width - clientX, rect.top + ((1 - at.y) / 2) * rect.height - clientY), behind: at.z > 1 };
+        })
+        .filter((item) => !item.behind && item.far <= 9)
+        .sort((a, b) => a.far - b.far)[0];
+      if (near !== undefined) {
+        this.editor.seek(near.item.beat);
+        this.editor.selectAnimKeys([near.item.id]);
+        return;
+      }
+    }
+    const hits = new Map<string, number>();
+    data.objects.forEach((object, index) => {
+      if (object.mesh === undefined || object.rendererEnabled === false || !shown(data, index)) return;
+      const key = this.keyOf(data, index);
+      if (key !== null && this.editor.sceneValues(key)?.locked === true) return;
+      const box = key === null ? null : objectBox(data, index);
+      if (key === null || box === null) return;
+      const distance = rayBox(origin, direction, box, worldMatrix(data, index));
+      if (distance !== null && distance < (hits.get(key) ?? Infinity)) hits.set(key, distance);
+    });
+    const order = [...hits].sort((a, b) => a[1] - b[1]).map(([key]) => key);
+    if (order.length === 0) {
+      if (!adding) this.editor.selectEnv([]);
+      this.lastPick = null;
+      return;
+    }
+    const last = this.lastPick;
+    const again = last !== null && Math.hypot(last.x - clientX, last.y - clientY) < 4 && JSON.stringify(last.order) === JSON.stringify(order);
+    const at = again ? (last.at + 1) % order.length : 0;
+    this.lastPick = { x: clientX, y: clientY, order, at };
+    const key = order[at]!;
+    // (the parent being picked: this one)
+    if (this.editor.linkPicking !== null) {
+      this.editor.setLinkParent(this.editor.linkPicking, key);
+      return;
+    }
+    this.editor.selectEnv([key], adding ? 'toggle' : 'replace');
+    this.onPick?.(key);
+  }
+
+  /** A place a few metres in front of the camera (Chroma's: z ahead) — where a new thing goes. */
+  placeAhead(distance = 6): [number, number, number] {
+    const camera = this.editor.preview.view.viewCamera;
+    camera.updateMatrixWorld();
+    const at = new Vector3();
+    const way = new Vector3();
+    camera.getWorldPosition(at);
+    camera.getWorldDirection(way);
+    at.addScaledVector(way, distance);
+    const round = (value: number) => Math.round(value * 10) / 10;
+    return [round(at.x), Math.max(0, round(at.y)), round(-at.z)];
+  }
+}
+
+const LINE_MATERIALS = new Map<string, LineBasicMaterial>();
+
+/** The frames' and paths' line material of a colour — one for good, shared. */
+function lineMaterial(color: number, opacity = 1): LineBasicMaterial {
+  const key = `${String(color)}|${String(opacity)}`;
+  let material = LINE_MATERIALS.get(key);
+  if (material === undefined) LINE_MATERIALS.set(key, (material = new LineBasicMaterial({ color, depthTest: false, transparent: true, opacity })));
+  return material;
+}
+
+/** The player's frame: as tall as a person, on the floor. */
+const PLAYER_BOX = { min: [-0.35, 0, -0.35], max: [0.35, 1.8, 0.35] };
+
+const UNIT_EDGES = new EdgesGeometry(new BoxGeometry(1, 1, 1)).getAttribute('position');
+
+/** A box's edges standing by `matrix`. */
+function frame(min: readonly number[], max: readonly number[], matrix: Matrix4, color: number) {
+  const points: number[] = [];
+  const size = [Math.max(1e-3, max[0]! - min[0]!), Math.max(1e-3, max[1]! - min[1]!), Math.max(1e-3, max[2]! - min[2]!)];
+  const middle = [(min[0]! + max[0]!) / 2, (min[1]! + max[1]!) / 2, (min[2]! + max[2]!) / 2];
+  const point = new Vector3();
+  for (let i = 0; i < UNIT_EDGES.count; i++) {
+    point.set(UNIT_EDGES.getX(i) * size[0]! + middle[0]!, UNIT_EDGES.getY(i) * size[1]! + middle[1]!, UNIT_EDGES.getZ(i) * size[2]! + middle[2]!).applyMatrix4(matrix);
+    points.push(point.x, point.y, point.z);
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
+  const lines = new LineSegments(geometry, lineMaterial(color));
+  lines.renderOrder = 10;
+  lines.frustumCulled = false;
+  return lines;
+}
