@@ -1,0 +1,1619 @@
+{
+ "WeaveEnvironment": [
+  {
+   "id": 0,
+   "name": "0",
+   "count": 8
+  },
+  {
+   "id": 1,
+   "name": "1",
+   "count": 8
+  },
+  {
+   "id": 2,
+   "name": "2",
+   "count": 8
+  },
+  {
+   "id": 3,
+   "name": "3",
+   "count": 8
+  },
+  {
+   "id": 4,
+   "name": "4",
+   "count": 8
+  },
+  {
+   "id": 5,
+   "name": "5",
+   "count": 8
+  },
+  {
+   "id": 6,
+   "name": "6",
+   "count": 8
+  },
+  {
+   "id": 7,
+   "name": "7",
+   "count": 8
+  },
+  {
+   "id": 8,
+   "name": "8",
+   "count": 8
+  },
+  {
+   "id": 9,
+   "name": "9",
+   "count": 8
+  },
+  {
+   "id": 10,
+   "name": "10",
+   "count": 8
+  },
+  {
+   "id": 11,
+   "name": "11",
+   "count": 8
+  },
+  {
+   "id": 12,
+   "name": "12",
+   "count": 12
+  },
+  {
+   "id": 13,
+   "name": "13",
+   "count": 12
+  },
+  {
+   "id": 14,
+   "name": "14",
+   "count": 8
+  },
+  {
+   "id": 15,
+   "name": "15",
+   "count": 8
+  }
+ ],
+ "EDMEnvironment": [
+  {
+   "id": 0,
+   "name": "CloseCircle",
+   "count": 24
+  },
+  {
+   "id": 1,
+   "name": "TopCircle",
+   "count": 24
+  },
+  {
+   "id": 2,
+   "name": "DistantCircle1",
+   "count": 24
+  },
+  {
+   "id": 3,
+   "name": "DistantCircle2",
+   "count": 24
+  },
+  {
+   "id": 4,
+   "name": "SSCircleL",
+   "count": 24
+  },
+  {
+   "id": 5,
+   "name": "SSCircleR",
+   "count": 24
+  },
+  {
+   "id": 6,
+   "name": "SSLaserLeftUp",
+   "count": 10
+  },
+  {
+   "id": 7,
+   "name": "SSLaserLeftOut",
+   "count": 10
+  },
+  {
+   "id": 8,
+   "name": "SSLaserLeftDown",
+   "count": 10
+  },
+  {
+   "id": 9,
+   "name": "SSLaserRightUp",
+   "count": 10
+  },
+  {
+   "id": 10,
+   "name": "SSLaserRightOut",
+   "count": 10
+  },
+  {
+   "id": 11,
+   "name": "SSLaserRightDown",
+   "count": 10
+  },
+  {
+   "id": 12,
+   "name": "TopCircleRotation",
+   "count": 1
+  },
+  {
+   "id": 13,
+   "name": "CloseCircleRotation",
+   "count": 1
+  },
+  {
+   "id": 14,
+   "name": "DistantCircle1Rotation",
+   "count": 1
+  },
+  {
+   "id": 15,
+   "name": "DistantCircle2Rotation",
+   "count": 1
+  },
+  {
+   "id": 16,
+   "name": "SSCircleLRotation",
+   "count": 1
+  },
+  {
+   "id": 17,
+   "name": "SSCircleRRotation",
+   "count": 1
+  }
+ ],
+ "TheSecondEnvironment": [
+  {
+   "id": 0,
+   "name": "BigRings",
+   "count": 15
+  },
+  {
+   "id": 1,
+   "name": "SmallRings",
+   "count": 24
+  },
+  {
+   "id": 2,
+   "name": "RunwayLasersLeft",
+   "count": 12
+  },
+  {
+   "id": 3,
+   "name": "RunwayLasersRight",
+   "count": 12
+  },
+  {
+   "id": 4,
+   "name": "SpotlightsLeft",
+   "count": 12
+  },
+  {
+   "id": 5,
+   "name": "SpotlightsRight",
+   "count": 12
+  },
+  {
+   "id": 6,
+   "name": "TopLasersLeftBottom",
+   "count": 4
+  },
+  {
+   "id": 7,
+   "name": "TopLasersRightBottom",
+   "count": 4
+  },
+  {
+   "id": 8,
+   "name": "TopLasersLeftTop",
+   "count": 4
+  },
+  {
+   "id": 9,
+   "name": "TopLasersRightTop",
+   "count": 4
+  },
+  {
+   "id": 10,
+   "name": "BottomLasersLeftBottom",
+   "count": 4
+  },
+  {
+   "id": 11,
+   "name": "BottomLasersRightBottom",
+   "count": 4
+  },
+  {
+   "id": 12,
+   "name": "BottomLasersLeftTop",
+   "count": 4
+  },
+  {
+   "id": 13,
+   "name": "BottomLasersRightTop",
+   "count": 4
+  }
+ ],
+ "LizzoEnvironment": [
+  {
+   "id": 0,
+   "name": "DanceFloor",
+   "count": 40
+  },
+  {
+   "id": 1,
+   "name": "Rainbow0",
+   "count": 16
+  },
+  {
+   "id": 2,
+   "name": "Rainbow1",
+   "count": 16
+  },
+  {
+   "id": 3,
+   "name": "Rainbow2",
+   "count": 16
+  },
+  {
+   "id": 4,
+   "name": "Rainbow3",
+   "count": 16
+  },
+  {
+   "id": 5,
+   "name": "Rainbow4",
+   "count": 16
+  },
+  {
+   "id": 6,
+   "name": "RainbowLeftRotation",
+   "count": 1
+  },
+  {
+   "id": 7,
+   "name": "RainbowRightRotation",
+   "count": 1
+  },
+  {
+   "id": 8,
+   "name": "RainbowEndLeft",
+   "count": 12
+  },
+  {
+   "id": 9,
+   "name": "RainbowEndRight",
+   "count": 12
+  },
+  {
+   "id": 10,
+   "name": "TopLasers",
+   "count": 12
+  },
+  {
+   "id": 11,
+   "name": "StandsLeft",
+   "count": 6
+  },
+  {
+   "id": 12,
+   "name": "StandsRight",
+   "count": 6
+  },
+  {
+   "id": 13,
+   "name": "CloudsLeft",
+   "count": 14
+  },
+  {
+   "id": 14,
+   "name": "CloudsRight",
+   "count": 14
+  },
+  {
+   "id": 15,
+   "name": "LasersSidewayLeft",
+   "count": 4
+  },
+  {
+   "id": 16,
+   "name": "LasersSidewayRight",
+   "count": 4
+  },
+  {
+   "id": 17,
+   "name": "StandLasersLeft",
+   "count": 3
+  },
+  {
+   "id": 18,
+   "name": "StandLasersRight",
+   "count": 3
+  },
+  {
+   "id": 19,
+   "name": "SpotlightsBehindRainbow",
+   "count": 14
+  }
+ ],
+ "TheWeekndEnvironment": [
+  {
+   "id": 0,
+   "name": "LampPolesLeft",
+   "count": 4
+  },
+  {
+   "id": 1,
+   "name": "LampPolesRight",
+   "count": 4
+  },
+  {
+   "id": 2,
+   "name": "LampRingSetsLeft",
+   "count": 4
+  },
+  {
+   "id": 3,
+   "name": "LampRingSetsRight",
+   "count": 4
+  },
+  {
+   "id": 4,
+   "name": "Arrows",
+   "count": 8
+  },
+  {
+   "id": 5,
+   "name": "LasersParallelLeft",
+   "count": 4
+  },
+  {
+   "id": 6,
+   "name": "LasersParallelRight",
+   "count": 4
+  },
+  {
+   "id": 7,
+   "name": "MidLaneLasers",
+   "count": 12
+  },
+  {
+   "id": 8,
+   "name": "RingTransform",
+   "count": 1
+  },
+  {
+   "id": 9,
+   "name": "RingLasers",
+   "count": 6
+  },
+  {
+   "id": 10,
+   "name": "BuildingLeft1Front",
+   "count": 25
+  },
+  {
+   "id": 11,
+   "name": "BuildingLeft1Side",
+   "count": 25
+  },
+  {
+   "id": 12,
+   "name": "BuildingLeft2Side",
+   "count": 25
+  },
+  {
+   "id": 13,
+   "name": "BuildingLeft3Front",
+   "count": 25
+  },
+  {
+   "id": 14,
+   "name": "BuildingLeft3Side",
+   "count": 25
+  },
+  {
+   "id": 15,
+   "name": "BuildingRight1Front",
+   "count": 25
+  },
+  {
+   "id": 16,
+   "name": "BuildingRight1Side",
+   "count": 25
+  },
+  {
+   "id": 17,
+   "name": "BuildingRight2Side",
+   "count": 25
+  },
+  {
+   "id": 18,
+   "name": "BuildingRight3Front",
+   "count": 25
+  },
+  {
+   "id": 19,
+   "name": "BuildingRight3Side",
+   "count": 25
+  },
+  {
+   "id": 20,
+   "name": "BuildingsMovementLeft",
+   "count": 3
+  },
+  {
+   "id": 21,
+   "name": "BuildingsMovementRight",
+   "count": 3
+  },
+  {
+   "id": 22,
+   "name": "RoofWindowsLeft",
+   "count": 8
+  },
+  {
+   "id": 23,
+   "name": "RoofWindowsRight",
+   "count": 8
+  },
+  {
+   "id": 29,
+   "name": "LampRingsLeft1",
+   "count": 3
+  },
+  {
+   "id": 30,
+   "name": "LampRingsLeft2",
+   "count": 3
+  },
+  {
+   "id": 31,
+   "name": "LampRingsLeft3",
+   "count": 3
+  },
+  {
+   "id": 32,
+   "name": "LampRingsLeft4",
+   "count": 3
+  },
+  {
+   "id": 33,
+   "name": "LampRingsRight1",
+   "count": 3
+  },
+  {
+   "id": 34,
+   "name": "LampRingsRight2",
+   "count": 3
+  },
+  {
+   "id": 35,
+   "name": "LampRingsRight3",
+   "count": 3
+  },
+  {
+   "id": 36,
+   "name": "LampRingsRight4",
+   "count": 3
+  },
+  {
+   "id": 37,
+   "name": "BGBuildingsLeft",
+   "count": 6
+  },
+  {
+   "id": 38,
+   "name": "BGBuildingsRight",
+   "count": 6
+  },
+  {
+   "id": 40,
+   "name": "SideBuildings",
+   "count": 2
+  }
+ ],
+ "Dragons2Environment": [
+  {
+   "id": 0,
+   "name": "SmallRingTransforms",
+   "count": 24
+  },
+  {
+   "id": 1,
+   "name": "SmallRingLights",
+   "count": 96
+  },
+  {
+   "id": 2,
+   "name": "Underground",
+   "count": 35
+  },
+  {
+   "id": 3,
+   "name": "BigRings",
+   "count": 15
+  },
+  {
+   "id": 4,
+   "name": "TopSpotlights",
+   "count": 8
+  },
+  {
+   "id": 5,
+   "name": "RunwayLasersLeft",
+   "count": 12
+  },
+  {
+   "id": 6,
+   "name": "RunwayLasersRight",
+   "count": 12
+  },
+  {
+   "id": 7,
+   "name": "ParticlesLeft",
+   "count": 5
+  },
+  {
+   "id": 8,
+   "name": "ParticlesRight",
+   "count": 5
+  },
+  {
+   "id": 9,
+   "name": "LasersLeftBottom",
+   "count": 5
+  },
+  {
+   "id": 10,
+   "name": "LasersLeftTop",
+   "count": 5
+  },
+  {
+   "id": 11,
+   "name": "LasersRightTop",
+   "count": 5
+  },
+  {
+   "id": 12,
+   "name": "LasersRightBottom",
+   "count": 5
+  }
+ ],
+ "LatticeEnvironment": [
+  {
+   "id": 0,
+   "name": "CubesBottomLeftGlobalTransforms",
+   "count": 8
+  },
+  {
+   "id": 1,
+   "name": "CubesBottomLeftLocalTransforms",
+   "count": 8
+  },
+  {
+   "id": 2,
+   "name": "CubesBottomLeftRadialTransforms",
+   "count": 8
+  },
+  {
+   "id": 3,
+   "name": "CubesBottomLeftSpot01",
+   "count": 8
+  },
+  {
+   "id": 4,
+   "name": "CubesBottomLeftSpot02",
+   "count": 8
+  },
+  {
+   "id": 5,
+   "name": "CubesBottomLeftLaser01",
+   "count": 8
+  },
+  {
+   "id": 6,
+   "name": "CubesBottomLeftLaser02",
+   "count": 8
+  },
+  {
+   "id": 7,
+   "name": "CubesBottomRightGlobalTransforms",
+   "count": 8
+  },
+  {
+   "id": 8,
+   "name": "CubesBottomRightLocalTransforms",
+   "count": 8
+  },
+  {
+   "id": 9,
+   "name": "CubesBottomRightRadialTransforms",
+   "count": 8
+  },
+  {
+   "id": 10,
+   "name": "CubesBottomRightSpot01",
+   "count": 8
+  },
+  {
+   "id": 11,
+   "name": "CubesBottomRightSpot02",
+   "count": 8
+  },
+  {
+   "id": 12,
+   "name": "CubesBottomRightLaser01",
+   "count": 8
+  },
+  {
+   "id": 13,
+   "name": "CubesBottomRightLaser02",
+   "count": 8
+  },
+  {
+   "id": 14,
+   "name": "CubesTopLeftGlobalTransforms",
+   "count": 8
+  },
+  {
+   "id": 15,
+   "name": "CubesTopLeftLocalTransforms",
+   "count": 8
+  },
+  {
+   "id": 16,
+   "name": "CubesTopLeftRadialTransforms",
+   "count": 8
+  },
+  {
+   "id": 17,
+   "name": "CubesTopLeftSpot01",
+   "count": 8
+  },
+  {
+   "id": 18,
+   "name": "CubesTopLeftSpot02",
+   "count": 8
+  },
+  {
+   "id": 19,
+   "name": "CubesTopLeftLaser01",
+   "count": 8
+  },
+  {
+   "id": 20,
+   "name": "CubesTopLeftLaser02",
+   "count": 8
+  },
+  {
+   "id": 21,
+   "name": "CubesTopRightGlobalTransforms",
+   "count": 8
+  },
+  {
+   "id": 22,
+   "name": "CubesTopRightLocalTransforms",
+   "count": 8
+  },
+  {
+   "id": 23,
+   "name": "CubesTopRightRadialTransforms",
+   "count": 8
+  },
+  {
+   "id": 24,
+   "name": "CubesTopRightSpot01",
+   "count": 8
+  },
+  {
+   "id": 25,
+   "name": "CubesTopRightSpot02",
+   "count": 8
+  },
+  {
+   "id": 26,
+   "name": "CubesTopRightLaser01",
+   "count": 8
+  },
+  {
+   "id": 27,
+   "name": "CubesTopRightLaser02",
+   "count": 8
+  },
+  {
+   "id": 28,
+   "name": "RunwayDiagonals",
+   "count": 8
+  },
+  {
+   "id": 29,
+   "name": "RunwayOutline",
+   "count": 3
+  },
+  {
+   "id": 30,
+   "name": "Chevron",
+   "count": 1
+  }
+ ],
+ "DaftPunkEnvironment": [
+  {
+   "id": 0,
+   "name": "TrisWallPrimaryL",
+   "count": 75
+  },
+  {
+   "id": 1,
+   "name": "TrisWallPrimaryR",
+   "count": 75
+  },
+  {
+   "id": 2,
+   "name": "LasersTopSet01L",
+   "count": 12
+  },
+  {
+   "id": 3,
+   "name": "LasersTopSet02L",
+   "count": 12
+  },
+  {
+   "id": 4,
+   "name": "LasersTopSet01R",
+   "count": 12
+  },
+  {
+   "id": 5,
+   "name": "LasersTopSet02R",
+   "count": 12
+  },
+  {
+   "id": 6,
+   "name": "LasersBottomSet01L",
+   "count": 12
+  },
+  {
+   "id": 7,
+   "name": "LasersBottomSet02L",
+   "count": 12
+  },
+  {
+   "id": 8,
+   "name": "LasersBottomSet01R",
+   "count": 12
+  },
+  {
+   "id": 9,
+   "name": "LasersBottomSet02R",
+   "count": 12
+  },
+  {
+   "id": 10,
+   "name": "LasersWallTopL",
+   "count": 5
+  },
+  {
+   "id": 11,
+   "name": "LasersWallTopR",
+   "count": 5
+  },
+  {
+   "id": 12,
+   "name": "LasersWallBottomL",
+   "count": 5
+  },
+  {
+   "id": 13,
+   "name": "LasersWallBottomR",
+   "count": 5
+  },
+  {
+   "id": 14,
+   "name": "Orbit01",
+   "count": 1
+  },
+  {
+   "id": 15,
+   "name": "Orbit02",
+   "count": 1
+  },
+  {
+   "id": 16,
+   "name": "Orbit03",
+   "count": 1
+  },
+  {
+   "id": 17,
+   "name": "Orbit04",
+   "count": 1
+  },
+  {
+   "id": 18,
+   "name": "Runway",
+   "count": 32
+  },
+  {
+   "id": 19,
+   "name": "VisorSpectrogram01",
+   "count": 17
+  },
+  {
+   "id": 20,
+   "name": "VisorSpectrogram02",
+   "count": 37
+  },
+  {
+   "id": 21,
+   "name": "VisorText01",
+   "count": 1
+  },
+  {
+   "id": 22,
+   "name": "VisorText02",
+   "count": 1
+  },
+  {
+   "id": 23,
+   "name": "Helmet01",
+   "count": 1
+  },
+  {
+   "id": 24,
+   "name": "Helmet02",
+   "count": 1
+  },
+  {
+   "id": 25,
+   "name": "RunwaySideL",
+   "count": 16
+  },
+  {
+   "id": 26,
+   "name": "RunwaySideR",
+   "count": 16
+  },
+  {
+   "id": 27,
+   "name": "BackgroundStars",
+   "count": 3
+  },
+  {
+   "id": 28,
+   "name": "Stars01",
+   "count": 4
+  },
+  {
+   "id": 29,
+   "name": "Stars02",
+   "count": 4
+  },
+  {
+   "id": 30,
+   "name": "Stars03",
+   "count": 4
+  },
+  {
+   "id": 31,
+   "name": "Stars04",
+   "count": 4
+  },
+  {
+   "id": 32,
+   "name": "Stars05",
+   "count": 4
+  },
+  {
+   "id": 33,
+   "name": "Stars06",
+   "count": 4
+  },
+  {
+   "id": 34,
+   "name": "Stars07",
+   "count": 4
+  },
+  {
+   "id": 35,
+   "name": "Stars08",
+   "count": 4
+  },
+  {
+   "id": 36,
+   "name": "Stars09",
+   "count": 4
+  },
+  {
+   "id": 37,
+   "name": "Stars10",
+   "count": 4
+  },
+  {
+   "id": 38,
+   "name": "Stars11",
+   "count": 4
+  },
+  {
+   "id": 39,
+   "name": "Stars12",
+   "count": 4
+  },
+  {
+   "id": 40,
+   "name": "Stars13",
+   "count": 4
+  },
+  {
+   "id": 41,
+   "name": "Stars14",
+   "count": 4
+  },
+  {
+   "id": 42,
+   "name": "Stars15",
+   "count": 4
+  },
+  {
+   "id": 43,
+   "name": "Stars16",
+   "count": 4
+  },
+  {
+   "id": 44,
+   "name": "StarsTransformSet01",
+   "count": 4
+  },
+  {
+   "id": 45,
+   "name": "StarsTransformSet02",
+   "count": 4
+  },
+  {
+   "id": 46,
+   "name": "StarsTransformSet03",
+   "count": 4
+  },
+  {
+   "id": 47,
+   "name": "StarsTransformSet04",
+   "count": 4
+  },
+  {
+   "id": 48,
+   "name": "Visor02OffsetX",
+   "count": 1
+  },
+  {
+   "id": 49,
+   "name": "Visor02OffsetY",
+   "count": 1
+  },
+  {
+   "id": 50,
+   "name": "Visor02PaddingX",
+   "count": 1
+  },
+  {
+   "id": 51,
+   "name": "Visor01OffsetX",
+   "count": 1
+  },
+  {
+   "id": 52,
+   "name": "Visor01OffsetY",
+   "count": 1
+  },
+  {
+   "id": 53,
+   "name": "Visor01PaddingX",
+   "count": 1
+  },
+  {
+   "id": 54,
+   "name": "Visor01PaddingY",
+   "count": 1
+  },
+  {
+   "id": 55,
+   "name": "Visor02PaddingY",
+   "count": 1
+  }
+ ],
+ "HipHopEnvironment": [
+  {
+   "id": 0,
+   "name": "LasersParallelLeft",
+   "count": 5
+  },
+  {
+   "id": 1,
+   "name": "LasersParallelRight",
+   "count": 5
+  },
+  {
+   "id": 2,
+   "name": "CeilingLightsLeft",
+   "count": 12
+  },
+  {
+   "id": 5,
+   "name": "CeilingLightsRight",
+   "count": 12
+  },
+  {
+   "id": 6,
+   "name": "ATrainTransforms",
+   "count": 1
+  },
+  {
+   "id": 7,
+   "name": "ATrainColors",
+   "count": 30
+  },
+  {
+   "id": 8,
+   "name": "BTrainTransforms",
+   "count": 1
+  },
+  {
+   "id": 9,
+   "name": "BTrainColors",
+   "count": 30
+  },
+  {
+   "id": 10,
+   "name": "CTrainTransforms",
+   "count": 1
+  },
+  {
+   "id": 11,
+   "name": "CTrainColors",
+   "count": 12
+  },
+  {
+   "id": 12,
+   "name": "DTrainTransforms",
+   "count": 1
+  },
+  {
+   "id": 13,
+   "name": "DTrainColors",
+   "count": 12
+  },
+  {
+   "id": 14,
+   "name": "Walls",
+   "count": 1
+  },
+  {
+   "id": 15,
+   "name": "Roof",
+   "count": 1
+  },
+  {
+   "id": 16,
+   "name": "Platforms",
+   "count": 1
+  },
+  {
+   "id": 17,
+   "name": "PillarsLeft",
+   "count": 4
+  },
+  {
+   "id": 18,
+   "name": "PillarsRight",
+   "count": 4
+  },
+  {
+   "id": 19,
+   "name": "RunwayRing",
+   "count": 1
+  },
+  {
+   "id": 20,
+   "name": "Hoop_1",
+   "count": 3
+  },
+  {
+   "id": 21,
+   "name": "HoopPieces_1",
+   "count": 12
+  },
+  {
+   "id": 22,
+   "name": "BallTransforms_1",
+   "count": 1
+  },
+  {
+   "id": 23,
+   "name": "Hoop_2",
+   "count": 3
+  },
+  {
+   "id": 24,
+   "name": "HoopPieces_2",
+   "count": 12
+  },
+  {
+   "id": 25,
+   "name": "BallTransforms_2",
+   "count": 1
+  },
+  {
+   "id": 26,
+   "name": "Hoop_3",
+   "count": 3
+  },
+  {
+   "id": 27,
+   "name": "HoopPieces_3",
+   "count": 12
+  },
+  {
+   "id": 28,
+   "name": "BallTransforms_3",
+   "count": 1
+  },
+  {
+   "id": 29,
+   "name": "Hoop_4",
+   "count": 3
+  },
+  {
+   "id": 30,
+   "name": "HoopPieces_4",
+   "count": 12
+  },
+  {
+   "id": 31,
+   "name": "BallTransforms_4",
+   "count": 1
+  },
+  {
+   "id": 32,
+   "name": "GraffitiRight",
+   "count": 16
+  },
+  {
+   "id": 33,
+   "name": "GraffitiLeft",
+   "count": 16
+  },
+  {
+   "id": 34,
+   "name": "GraffitiBoomBox",
+   "count": 1
+  },
+  {
+   "id": 35,
+   "name": "BoomboxShards",
+   "count": 6
+  },
+  {
+   "id": 36,
+   "name": "SpectrogramLeft",
+   "count": 16
+  },
+  {
+   "id": 37,
+   "name": "SpectrogramRight",
+   "count": 16
+  },
+  {
+   "id": 38,
+   "name": "CTrainGraffiti",
+   "count": 12
+  },
+  {
+   "id": 39,
+   "name": "DTrainGraffiti",
+   "count": 12
+  },
+  {
+   "id": 40,
+   "name": "RunwayLasers",
+   "count": 2
+  },
+  {
+   "id": 41,
+   "name": "Spectrograms_Y",
+   "count": 1
+  }
+ ],
+ "ColliderEnvironment": [
+  {
+   "id": 0,
+   "name": "MiddleBlocksLocalSet_01",
+   "count": 20
+  },
+  {
+   "id": 1,
+   "name": "MiddleBlocksGlobalSet_01",
+   "count": 20
+  },
+  {
+   "id": 2,
+   "name": "MiddleBlocksLocalSetInnerLasers_01",
+   "count": 40
+  },
+  {
+   "id": 3,
+   "name": "MiddleBlocksLocalSetOuterLasers_01",
+   "count": 40
+  },
+  {
+   "id": 4,
+   "name": "MiddleBlocksLocalSetSide01Lasers_01",
+   "count": 40
+  },
+  {
+   "id": 5,
+   "name": "MiddleBlocksLocalSetSide02Lasers_01",
+   "count": 40
+  },
+  {
+   "id": 6,
+   "name": "DiamondColliders",
+   "count": 4
+  },
+  {
+   "id": 7,
+   "name": "SideBlocksLocalSet_01",
+   "count": 5
+  },
+  {
+   "id": 8,
+   "name": "SideBlocksLocalSet_02",
+   "count": 5
+  },
+  {
+   "id": 9,
+   "name": "SideBlocksGlobalSet_01",
+   "count": 5
+  },
+  {
+   "id": 10,
+   "name": "SideBlocksGlobalSet_02",
+   "count": 5
+  },
+  {
+   "id": 11,
+   "name": "SideBlocksLocalSetInnerLasers_01",
+   "count": 10
+  },
+  {
+   "id": 12,
+   "name": "SideBlocksLocalSetInnerLasers_02",
+   "count": 10
+  },
+  {
+   "id": 13,
+   "name": "SideBlocksLocalSetOuterLasers_01",
+   "count": 10
+  },
+  {
+   "id": 14,
+   "name": "SideBlocksLocalSetOuterLasers_02",
+   "count": 10
+  },
+  {
+   "id": 15,
+   "name": "SideBlocksLocalSetSide01Lasers_01",
+   "count": 10
+  },
+  {
+   "id": 16,
+   "name": "SideBlocksLocalSetSide01Lasers_02",
+   "count": 10
+  },
+  {
+   "id": 17,
+   "name": "SideBlocksLocalSetSide02Lasers_01",
+   "count": 10
+  },
+  {
+   "id": 18,
+   "name": "SideBlocksLocalSetSide02Lasers_02",
+   "count": 10
+  },
+  {
+   "id": 19,
+   "name": "RunwayL",
+   "count": 5
+  },
+  {
+   "id": 20,
+   "name": "RunwayR",
+   "count": 5
+  },
+  {
+   "id": 21,
+   "name": "CubeCollidersL",
+   "count": 4
+  },
+  {
+   "id": 22,
+   "name": "CubeCollidersR",
+   "count": 4
+  },
+  {
+   "id": 23,
+   "name": "Chevron",
+   "count": 1
+  },
+  {
+   "id": 24,
+   "name": "ChevronMask",
+   "count": 1
+  },
+  {
+   "id": 25,
+   "name": "MiddleBlocksEmissionMask",
+   "count": 20
+  },
+  {
+   "id": 26,
+   "name": "SideBlocksMask01",
+   "count": 5
+  },
+  {
+   "id": 27,
+   "name": "SideBlocksMask02",
+   "count": 5
+  }
+ ],
+ "GridEnvironment": [
+  {
+   "id": 0,
+   "name": "Chevron",
+   "count": 1
+  },
+  {
+   "id": 1,
+   "name": "Grid2DLeft",
+   "count": 36
+  },
+  {
+   "id": 2,
+   "name": "Grid2DLeftGlobal",
+   "count": 36
+  },
+  {
+   "id": 3,
+   "name": "Grid2DRight",
+   "count": 36
+  },
+  {
+   "id": 4,
+   "name": "Grid2DRightGlobal",
+   "count": 36
+  },
+  {
+   "id": 5,
+   "name": "Grid2DFront",
+   "count": 36
+  },
+  {
+   "id": 6,
+   "name": "Grid2DFrontGlobal",
+   "count": 36
+  },
+  {
+   "id": 7,
+   "name": "Grid2DFrontLasersBottom",
+   "count": 36
+  },
+  {
+   "id": 8,
+   "name": "Grid2DLeftLasersBottom",
+   "count": 36
+  },
+  {
+   "id": 9,
+   "name": "Grid2DRightLasersBottom",
+   "count": 36
+  },
+  {
+   "id": 10,
+   "name": "InfiniteLasersLeft",
+   "count": 8
+  },
+  {
+   "id": 11,
+   "name": "InfiniteLasersRight",
+   "count": 8
+  },
+  {
+   "id": 12,
+   "name": "LasersTopL",
+   "count": 8
+  },
+  {
+   "id": 13,
+   "name": "LasersBottomL",
+   "count": 8
+  },
+  {
+   "id": 14,
+   "name": "LasersTopR",
+   "count": 8
+  },
+  {
+   "id": 15,
+   "name": "LasersBottomR",
+   "count": 8
+  },
+  {
+   "id": 16,
+   "name": "SpeedA",
+   "count": 1
+  },
+  {
+   "id": 17,
+   "name": "ScaleA",
+   "count": 1
+  },
+  {
+   "id": 18,
+   "name": "PhaseA",
+   "count": 1
+  },
+  {
+   "id": 19,
+   "name": "Param1A",
+   "count": 1
+  },
+  {
+   "id": 20,
+   "name": "Param2A",
+   "count": 1
+  },
+  {
+   "id": 21,
+   "name": "TextureA",
+   "count": 1
+  },
+  {
+   "id": 22,
+   "name": "OffsetA",
+   "count": 1
+  },
+  {
+   "id": 23,
+   "name": "MotionPreset",
+   "count": 1
+  },
+  {
+   "id": 24,
+   "name": "CubeFrontSwitch",
+   "count": 1
+  },
+  {
+   "id": 25,
+   "name": "CubeLeftSwitch",
+   "count": 1
+  },
+  {
+   "id": 26,
+   "name": "CubeRightSwitch",
+   "count": 1
+  },
+  {
+   "id": 27,
+   "name": "ChevronMask",
+   "count": 1
+  },
+  {
+   "id": 28,
+   "name": "FloorL",
+   "count": 8
+  },
+  {
+   "id": 29,
+   "name": "FloorR",
+   "count": 8
+  },
+  {
+   "id": 30,
+   "name": "FloorMaskL",
+   "count": 8
+  },
+  {
+   "id": 31,
+   "name": "FloorMaskR",
+   "count": 8
+  },
+  {
+   "id": 32,
+   "name": "ChevronsL",
+   "count": 12
+  },
+  {
+   "id": 33,
+   "name": "ChevronsR",
+   "count": 12
+  },
+  {
+   "id": 34,
+   "name": "Runway",
+   "count": 4
+  },
+  {
+   "id": 35,
+   "name": "RunwayMask",
+   "count": 4
+  },
+  {
+   "id": 36,
+   "name": "FloorMaskIntensityL",
+   "count": 8
+  },
+  {
+   "id": 37,
+   "name": "FloorMaskIntensityR",
+   "count": 8
+  },
+  {
+   "id": 38,
+   "name": "TP_Left",
+   "count": 1
+  },
+  {
+   "id": 39,
+   "name": "TP_Right",
+   "count": 1
+  },
+  {
+   "id": 40,
+   "name": "TP_Front",
+   "count": 1
+  },
+  {
+   "id": 41,
+   "name": "ChevronsScaleL",
+   "count": 12
+  },
+  {
+   "id": 42,
+   "name": "ChevronsScaleR",
+   "count": 12
+  },
+  {
+   "id": 43,
+   "name": "ChevronsScale",
+   "count": 1
+  },
+  {
+   "id": 44,
+   "name": "RunwayBottom",
+   "count": 4
+  },
+  {
+   "id": 45,
+   "name": "RunwayBottomMask",
+   "count": 4
+  },
+  {
+   "id": 46,
+   "name": "InfiniteLasersGlobalLeft",
+   "count": 8
+  },
+  {
+   "id": 47,
+   "name": "InfiniteLasersGlobalRight",
+   "count": 8
+  }
+ ]
+}
