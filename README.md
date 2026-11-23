@@ -4,8 +4,6 @@
 
 Lumatic brings a timeline-first lighting workflow, practical beatmap editing tools, and a 3D environment editor into one application. Create and arrange lighting effects against the music, organize environment lights by ID, edit notes and obstacles, and preview your work in a live 3D scene.
 
-> **Development status:** Lumatic is in active beta development. Features, workflows, and supported map data may change between versions. The `dev` branch is the current development branch.
-
 [![The Lumatic lighting workspace with a timeline and live 3D preview](docs/images/lumatic-showreel-poster.jpg)](docs/images/lumatic-showreel-poster.jpg)
 
 *The lighting workspace with the timeline, Light ID groups, and live 3D preview. Click any screenshot to view it at full size.*
@@ -127,10 +125,6 @@ Lumatic works with standard Beat Saber beatmap data and supported custom data us
 Maps that use mod-dependent features still require the corresponding mods in Beat Saber. Lumatic does not install those mods into the game.
 
 **Format note:** Lumatic currently saves v2 and v3 maps. v4 support is incomplete. When a workflow depends on lighting or custom data that cannot yet be written to v4, use a v3 copy.
-
-## Screenshots
-
-The screenshots above show the current editor in action. Additional captures will be added as the interface evolves.
 
 ## Technology
 
