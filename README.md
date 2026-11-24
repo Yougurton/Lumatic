@@ -14,7 +14,7 @@ Lumatic is built around a simple idea: complex Beat Saber lighting should be eas
 
 Instead of relying on a 3D timeline where the mapper constantly moves around the environment, Lumatic uses a flat, layered timeline inspired by video and motion-graphics editors. The 3D viewport remains available for visual feedback and scene editing, while the timeline is the main workspace for arranging and shaping a lightshow.
 
-Lumatic is a standalone desktop application built on the ChroViewer rendering and beatmap technology, with editor workflows developed specifically for Beat Saber mapping and lighting.
+Lumatic is a standalone desktop application built on the [ChroViewer](https://github.com/Umbranoxio/chroviewer) rendering and beatmap technology, with editor workflows developed specifically for Beat Saber mapping and lighting.
 
 ## Features
 
@@ -69,7 +69,7 @@ The checks draw on guidance from the Beat Saber Mapping Wiki (BSMG), BeatLeader,
 
 [![Notes, obstacles, and mapping checks on the timeline and in the 3D preview](docs/images/05-mapping-workspace.png)](docs/images/05-mapping-workspace.png)
 
-### 3D environment editor
+### 3D environment editor (Alpha)
 
 Lumatic includes a dedicated scene-editing workspace for Chroma environment modifications.
 
@@ -88,7 +88,7 @@ Lumatic includes a dedicated scene-editing workspace for Chroma environment modi
 
 The environment editor aims to provide a direct, scene-oriented workflow instead of requiring every change to be made through raw JSON.
 
-### Game environment support
+### Game environment support (Alpha)
 
 - Browse the environments included with Lumatic.
 - Use ready-made custom Chroma environments bundled with the project, subject to their individual terms and attribution requirements.
