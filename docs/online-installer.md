@@ -50,7 +50,7 @@ Publish the app-only ZIP as `Lumatic-win-x64.zip`; do not publish the older full
 
 ## Licensing boundary
 
-This layout keeps the Electron runtime out of the Lumatic payload and downloads it separately from the official Electron release. It is a distribution/packaging choice, not a legal determination that the installed application is a GPLv2 "mere aggregation". Lumatic executes inside Electron, so the legal relationship between application and runtime still needs separate assessment. Separate downloads alone do not settle that question.
+This layout keeps the Electron runtime out of the Lumatic payload and downloads it separately from the official Electron release. It is a distribution/packaging choice, not a legal determination that the installed application is a GPLv2 "mere aggregation".
 
 Do not remove `electron/main.ts`, `electron/preload.ts` or other Lumatic sources from the source repository. They are part of Lumatic's corresponding source code. See the GNU GPL FAQ: https://www.gnu.org/licenses/gpl-faq.html#MereAggregation
 
