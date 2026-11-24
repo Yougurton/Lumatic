@@ -256,6 +256,28 @@ Bug reports, reproducible examples, and workflow feedback are welcome. When repo
 
 Please do not upload or commit extracted Beat Saber game assets, converted environment bundles, or other copyrighted game files.
 
+## AI-Assisted Development Disclosure
+
+Lumatic is developed with substantial assistance from AI coding tools, including **Claude** and **KimiCode**. AI assistance is a significant part of the development workflow and is used for implementation work, not just occasional suggestions.
+
+### How AI is used
+
+- **Code implementation:** AI tools help write and modify application code, implement features from specifications, generate boilerplate, and refactor existing code.
+- **Debugging assistance:** AI tools are used to investigate errors, interpret logs, propose fixes, and iterate on implementation problems.
+- **Documentation and localization:** AI assists with drafting and revising documentation, technical explanations, and translations.
+
+### Human direction and validation
+
+- **Product direction and requirements:** The project maintainer defines Lumatic's goals, feature priorities, expected workflows, and user-facing behaviour.
+- **Design decisions:** The editor's concepts, interface direction, and feature requirements are specified and guided by the maintainer.
+- **Testing and evaluation:** AI-generated changes are evaluated in the context of the application. The maintainer tests workflows, reports unexpected behaviour, and guides further corrections.
+
+### Review limitations
+
+AI-generated code can contain bugs, incomplete implementations, or incorrect assumptions. Code review is best-effort and does not mean that every generated line has been independently audited. Automated tests and manual checks are used where appropriate, but they cannot guarantee that every issue has been found.
+
+Lumatic is an active beta project. Please report bugs, regressions, and unexpected behaviour through [GitHub Issues](https://github.com/Yougurton/Lumatic/issues). Clear reproduction steps and small example projects are especially helpful.
+
 ## License
 
 Lumatic is licensed under **GNU General Public License v2.0 only (GPL-2.0-only)**. See [LICENSE](LICENSE) for the full license text.
