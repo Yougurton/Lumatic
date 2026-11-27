@@ -1,4 +1,4 @@
-import type { CubeTexture, Group, Object3D, ShaderMaterial, Vector3, Vector4 } from 'three';
+import type { Camera, CubeTexture, Group, Object3D, ShaderMaterial, Vector3, Vector4 } from 'three';
 
 import type { ChromaEnvironmentData } from '../../core/chroma-environment';
 import type { Rgb } from '../../core/colors';
@@ -43,7 +43,7 @@ export interface LoadedEnvironment {
   applyChromaRemoval: (ids: readonly string[]) => void;
   enforceChromaRemoval: () => void;
   applyConstraints: () => boolean;
-  syncInstancedMeshes: () => void;
+  syncInstancedMeshes: (camera?: Camera) => void;
   applyReflections: (segments: EnvironmentLightSegment[]) => void;
   dispose: () => void;
 }

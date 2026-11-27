@@ -110,7 +110,7 @@ function groupSchema<T extends z.ZodType>(box: T) {
   return z.object({
     b: numberSchema,
     g: integerSchema,
-    t: integerSchema,
+    t: integerSchema.default(0),
     e: z.array(box).catch([]),
     customData: customDataSchema.optional().catch(undefined),
   });

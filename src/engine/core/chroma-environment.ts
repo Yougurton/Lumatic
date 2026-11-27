@@ -232,7 +232,7 @@ const v2MaterialSchema = z
     _shader: shaderSchema,
     _color: optionalColorSchema,
     _shaderKeywords: optionalKeywordsSchema,
-    _track: beatSaberTrackSchema,
+    _track: beatSaberTrackSchema.default([]),
   })
   .transform(
     (data): ChromaMaterial => ({
@@ -248,7 +248,7 @@ const v3MaterialSchema = z
     shader: shaderSchema,
     color: optionalColorSchema,
     shaderKeywords: optionalKeywordsSchema,
-    track: beatSaberTrackSchema,
+    track: beatSaberTrackSchema.default([]),
   })
   .transform(
     (data): ChromaMaterial => ({
@@ -263,7 +263,7 @@ const v2GeometrySchema = z
   .looseObject({
     _type: geometryTypeSchema,
     _material: z.union([z.string(), v2MaterialSchema]),
-    _collision: beatSaberBooleanSchema,
+    _collision: beatSaberBooleanSchema.default(false),
   })
   .transform(
     (data): ChromaGeometry => ({
@@ -277,7 +277,7 @@ const v3GeometrySchema = z
   .looseObject({
     type: geometryTypeSchema,
     material: z.union([z.string(), v3MaterialSchema]),
-    collision: beatSaberBooleanSchema,
+    collision: beatSaberBooleanSchema.default(false),
   })
   .transform(
     (data): ChromaGeometry => ({
@@ -325,7 +325,7 @@ const v2EnhancementSchema = z
     _id: optionalStringSchema,
     _lookupMethod: lookupMethodSchema.optional().catch(undefined),
     _geometry: v2GeometrySchema.optional().catch(undefined),
-    _track: beatSaberTrackSchema,
+    _track: beatSaberTrackSchema.default([]),
     _duplicate: optionalIntegerSchema,
     _active: optionalBooleanSchema,
     _scale: optionalVectorSchema,
@@ -365,7 +365,7 @@ const v3EnhancementSchema = z
     id: optionalStringSchema,
     lookupMethod: lookupMethodSchema.optional().catch(undefined),
     geometry: v3GeometrySchema.optional().catch(undefined),
-    track: beatSaberTrackSchema,
+    track: beatSaberTrackSchema.default([]),
     duplicate: optionalIntegerSchema,
     active: optionalBooleanSchema,
     scale: optionalVectorSchema,

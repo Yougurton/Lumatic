@@ -23,8 +23,8 @@ import type {
   ChromaTrackAnimation,
   ChromaVectorPoint,
 } from '../../core/chroma-environment';
-import type { NoodleBeatmapData } from '../../core/noodle-data';
-import { sampleNoodleParent } from '../../core/noodle-runtime';
+import type { NoodleBeatmapData, NoodleParentEvent } from '../../core/noodle-data';
+import { hasNoodleParent, sampleNoodleParent, type NoodleParentSample } from '../../core/noodle-runtime';
 import type {
   EnvironmentChromaTubeTarget,
   EnvironmentLightSegment,
@@ -79,6 +79,11 @@ interface TransformTarget {
   position: Vector3;
   rotation: Quaternion;
   scale: Vector3;
+  events?: readonly (readonly [VectorEvent | undefined, VectorEvent | undefined, RotationEvent | undefined, RotationEvent | undefined, VectorEvent | undefined])[];
+  parent?: boolean;
+  beat?: number;
+  nextChange?: number;
+  static?: boolean;
 }
 
 interface MaterialTarget {
@@ -137,6 +142,8 @@ function emptyComponentTrack(): ComponentTrackRuntime {
 }
 
 function latestEvent<T extends { beat: number }>(events: readonly T[], beat: number) {
+  if (events.length === 0 || (events[0]?.beat ?? Number.POSITIVE_INFINITY) > beat) return undefined;
+  if (events.length === 1 || (events[events.length - 1]?.beat ?? Number.POSITIVE_INFINITY) <= beat) return events[events.length - 1];
   let low = 0;
   let high = events.length;
   while (low < high) {
@@ -147,13 +154,25 @@ function latestEvent<T extends { beat: number }>(events: readonly T[], beat: num
   return events[low - 1];
 }
 
-function sampleEvent<T, R>(
+function followingEvent<T extends { beat: number }>(events: readonly T[], beat: number) {
+  let low = 0;
+  let high = events.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((events[middle]?.beat ?? Number.POSITIVE_INFINITY) <= beat) low = middle + 1;
+    else high = middle;
+  }
+  return events[low];
+}
+
+function sampleEvent<T extends { expression?: unknown; value: R }, R>(
   event: PointEvent<T> | undefined,
   beat: number,
   sample: (points: readonly T[], time: number, context?: PointSampleContext, songBpmTime?: number) => R,
   context?: PointSampleContext,
 ) {
   if (event === undefined) return undefined;
+  if (event.points.length === 1 && event.points[0]?.expression === undefined) return event.points[0].value as R;
   return sample(
     event.points,
     eventProgress(beat, event.beat, event.duration, event.repeat, event.easing),
@@ -210,6 +229,10 @@ function rotationPoints(points: ChromaVectorPoint[] | undefined) {
 
 function push<T>(items: T[], item: T | undefined) {
   if (item !== undefined) items.push(item);
+}
+
+function eventOrder(left: TimedEvent & { order: number }, right: TimedEvent & { order: number }) {
+  return left.beat - right.beat || left.order - right.order;
 }
 
 function addTargetTrack<T>(targets: Map<T, string[]>, track: string, target: T) {
@@ -322,6 +345,27 @@ export class ChromaTrackRuntime {
       }
     }
 
+    for (const track of this.tracks.values()) {
+      track.position.sort(eventOrder);
+      track.localPosition.sort(eventOrder);
+      track.rotation.sort(eventOrder);
+      track.localRotation.sort(eventOrder);
+      track.scale.sort(eventOrder);
+      track.color.sort(eventOrder);
+      track.fogHeight.sort(eventOrder);
+      track.fogStartY.sort(eventOrder);
+      track.fogAttenuation.sort(eventOrder);
+      track.fogOffset.sort(eventOrder);
+    }
+    for (const track of this.componentTracks.values()) {
+      track.fogHeight.sort(eventOrder);
+      track.fogStartY.sort(eventOrder);
+      track.fogAttenuation.sort(eventOrder);
+      track.fogOffset.sort(eventOrder);
+      track.colorAlphaMultiplier.sort(eventOrder);
+      track.bloomFogIntensityMultiplier.sort(eventOrder);
+    }
+
     const transformTracks = new Map<Object3D, string[]>();
     for (const [track, targets] of environment.chromaTracks ?? []) {
       for (const target of targets) addTargetTrack(transformTracks, track, target);
@@ -423,7 +467,39 @@ export class ChromaTrackRuntime {
   }
 
   private updateTransforms(beat: number, noodle?: NoodleBeatmapData, context?: PointSampleContext) {
+    const dynamicEvent = (event: PointEvent<VectorPoint> | PointEvent<RotationPoint> | undefined, time: number) =>
+      event !== undefined && (event.repeat > 0 || time < event.beat + event.duration || event.points.some((point) => point.expression !== undefined));
+    const childTracks = new Set(noodle?.parentEvents.flatMap((event) => event.childrenTracks) ?? []);
+    const parentCache = new Map<NoodleParentEvent, NoodleParentSample>();
     for (const runtime of this.transformTargets) {
+      const hasParent = noodle !== undefined && runtime.tracks.some((track) => childTracks.has(track)) && hasNoodleParent(noodle, runtime.tracks, beat);
+      if (
+        !hasParent &&
+        runtime.static === true &&
+        runtime.parent === false &&
+        runtime.beat !== undefined &&
+        beat >= runtime.beat &&
+        (runtime.nextChange === undefined || beat < runtime.nextChange)
+      ) {
+        continue;
+      }
+      const events = runtime.tracks.map((name) => {
+        const track = this.track(name);
+        return track === undefined
+          ? ([undefined, undefined, undefined, undefined, undefined] as const)
+          : ([latestEvent(track.position, beat), latestEvent(track.localPosition, beat), latestEvent(track.rotation, beat), latestEvent(track.localRotation, beat), latestEvent(track.scale, beat)] as const);
+      });
+      const parent = hasParent;
+      const moving = parent || events.some((list) => list.some((event) => dynamicEvent(event, beat)));
+      if (
+        !moving &&
+        runtime.static === true &&
+        runtime.events !== undefined &&
+        runtime.parent === parent &&
+        events.every((list, index) => list.every((event, property) => event === runtime.events![index]?.[property]))
+      ) {
+        continue;
+      }
       let position: Vector3Tuple | undefined;
       let localPosition: Vector3Tuple | undefined;
       let rotation: QuaternionTuple | undefined;
@@ -469,7 +545,22 @@ export class ChromaTrackRuntime {
 
       target.updateMatrix();
       target.updateWorldMatrix(false, true);
-      if (noodle !== undefined) this.applyNoodleParent(runtime, noodle, beat, context);
+      if (parent && noodle !== undefined) this.applyNoodleParent(runtime, noodle, beat, context, parentCache);
+      runtime.events = events;
+      runtime.parent = parent;
+      runtime.beat = beat;
+      runtime.static = !moving;
+      runtime.nextChange = moving
+        ? undefined
+        : runtime.tracks.reduce<number | undefined>((next, name) => {
+            const track = this.track(name);
+            if (track === undefined) return next;
+            for (const property of [track.position, track.localPosition, track.rotation, track.localRotation, track.scale]) {
+              const event = followingEvent<{ beat: number }>(property, beat);
+              if (event !== undefined && (next === undefined || event.beat < next)) next = event.beat;
+            }
+            return next;
+          }, undefined);
     }
   }
 
@@ -477,9 +568,10 @@ export class ChromaTrackRuntime {
     runtime: TransformTarget,
     noodle: NoodleBeatmapData,
     beat: number,
-    context?: PointSampleContext,
+    context: PointSampleContext | undefined,
+    cache: Map<NoodleParentEvent, NoodleParentSample>,
   ) {
-    const parent = sampleNoodleParent(noodle, runtime.tracks, beat, context);
+    const parent = sampleNoodleParent(noodle, runtime.tracks, beat, context, cache);
     if (parent?.matrix === undefined) return;
     const target = runtime.target;
     this.parentMatrix.fromArray(parent.matrix).premultiply(this.noodleBasis).multiply(this.noodleBasis);

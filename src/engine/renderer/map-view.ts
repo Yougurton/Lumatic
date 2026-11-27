@@ -982,7 +982,7 @@ export class MapView implements RenderView {
     }
     this.scene.updateMatrixWorld();
     if (this.environment?.applyConstraints() === true) this.scene.updateMatrixWorld();
-    this.environment?.syncInstancedMeshes();
+    this.environment?.syncInstancedMeshes(this.camera);
     if (this.environment !== null) this.environmentLights.updateWorldLights(now);
     // (chrome shapes: their surroundings taken anew, as the mirror floors' are)
     if (hasLiveReflections()) renderLiveReflections(renderer, this.scene);

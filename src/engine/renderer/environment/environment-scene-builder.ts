@@ -1,12 +1,15 @@
 import {
   DynamicDrawUsage,
+  Frustum,
   Group,
   InstancedMesh,
   Matrix4,
   Mesh,
+  Sphere,
   Vector3,
   Vector4,
   type BufferGeometry,
+  type Camera,
   type Material,
   type Object3D,
   type ShaderMaterial,
@@ -48,7 +51,7 @@ export interface EnvironmentSceneBuild {
   applyChromaRemoval: (ids: readonly string[]) => void;
   enforceChromaRemoval: () => void;
   applyConstraints: () => boolean;
-  syncInstancedMeshes: () => void;
+  syncInstancedMeshes: (camera?: Camera) => void;
   disposeInstancedMeshes: () => void;
 }
 
@@ -288,7 +291,6 @@ export function buildEnvironmentScene(
       !rendererMaterial.transparent &&
       rendererMaterial.depthWrite &&
       !rendererMaterial.stencilWrite &&
-      geometry.groups.length === 0 &&
       object.components?.PlanarReflection === undefined
     ) {
       const layer = object.layer;
@@ -365,14 +367,25 @@ export function buildEnvironmentScene(
   const relativeMatrix = new Matrix4();
   const mirroredMatrix = new Matrix4();
   const mirrorX = new Matrix4().makeScale(-1, 1, 1);
-  function syncInstancedMeshes() {
+  const projection = new Matrix4();
+  const frustum = new Frustum();
+  const sphere = new Sphere();
+  function syncInstancedMeshes(camera?: Camera) {
     if (instancedBatches.length === 0) return;
+    if (camera !== undefined) {
+      projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      frustum.setFromProjectionMatrix(projection);
+    }
     rootInverse.copy(root.matrixWorld).invert();
     for (const batch of instancedBatches) {
       let regularCount = 0;
       let mirroredCount = 0;
       for (const source of batch.sources) {
         if (!source.rendererEnabled || !visibleInHierarchy(source.node)) continue;
+        if (camera !== undefined && batch.regular.geometry.boundingSphere !== null) {
+          sphere.copy(batch.regular.geometry.boundingSphere).applyMatrix4(source.node.matrixWorld);
+          if (!frustum.intersectsSphere(sphere)) continue;
+        }
         relativeMatrix.multiplyMatrices(rootInverse, source.node.matrixWorld);
         if (relativeMatrix.determinant() < 0) {
           mirroredMatrix.multiplyMatrices(mirrorX, relativeMatrix);

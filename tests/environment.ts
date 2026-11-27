@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { EnvironmentData } from '../src/engine/renderer/environment/types';
+import { parseV2ChromaEnvironment, parseV3ChromaEnvironment } from '../src/engine/core/chroma-environment';
+import { buildChromaEnvironmentVariant } from '../src/engine/renderer/environment/chroma-environment';
 import { environmentParts, findPreset, modsFragment, PRESET_COLLECTIONS, PRESETS, replaceFragment, ringSystemParts, type EnvironmentFragment } from '../src/editor/environment-mods';
 
 /**
@@ -71,6 +73,24 @@ for (const preset of PRESETS) {
   check(PRESET_COLLECTIONS.some((collection) => collection.id === preset.collection) && preset.author !== '', 'preset credit', preset.id);
 }
 check(findPreset('cage')?.id === 'madchase-cage', 'old ids');
+
+// Geometry may omit collision: it means false, not a discarded environment entry (Zod 4.6 regression).
+const v3Geometry = parseV3ChromaEnvironment({ environment: [{ geometry: { type: 'Cube', material: 'm' }, position: [0, 1, 2], track: 'cube' }], materials: { m: { shader: 'Standard', color: [1, 1, 1, 1] } } }).chromaEnvironment;
+check(v3Geometry.enhancements.length === 1 && v3Geometry.enhancements[0]?.geometry?.collision === false, 'v3 geometry without collision', v3Geometry.enhancements);
+const v2Geometry = parseV2ChromaEnvironment({ _environment: [{ _geometry: { _type: 'Cube', _material: 'm' } }], _materials: { m: { _shader: 'Standard', _color: [1, 1, 1, 1] } } }).chromaEnvironment;
+check(v2Geometry.enhancements.length === 1 && v2Geometry.enhancements[0]?.geometry?.collision === false, 'v2 geometry without collision', v2Geometry.enhancements);
+
+const standardVariant = buildChromaEnvironmentVariant(load('DefaultEnvironment'), v3Geometry);
+const standardObject = standardVariant.data.objects.at(-1)!;
+const standardMaterial = standardVariant.data.materials[standardObject.materials![0]!]!;
+check(standardMaterial.shader === 'ChroMapper/Lit' && standardMaterial.family === 'lit', 'empty keywords do not turn Standard into Glowing', standardMaterial);
+check(standardMaterial.colors._Color?.join(',') === '1,1,1,1', 'Standard keeps its RGBA color', standardMaterial.colors);
+const trackedGeometry = parseV3ChromaEnvironment({ environment: [{ geometry: { type: 'Cube', material: 'm' }, track: 'cube' }], materials: { m: { shader: 'Standard', color: [1, 0.153, 1, 1], track: 'pulse' } } }).chromaEnvironment;
+const trackedVariant = buildChromaEnvironmentVariant(load('DefaultEnvironment'), trackedGeometry);
+const trackedObject = trackedVariant.data.objects.at(-1)!;
+const trackedMaterial = trackedVariant.data.materials[trackedObject.materials![0]!]!;
+check(trackedMaterial.colors._NominalDiffuseLevel?.join(',') === '1,1,1,1', 'animated Standard does not keep a stale diffuse tint', trackedMaterial.colors);
+check(trackedVariant.materialTracks.get('pulse')?.includes(trackedObject.materials![0]!) === true, 'animated Standard material track', trackedVariant.materialTracks);
 // v2: positions in lanes, a light ID as v2 has it — and back as they were
 const lonely = JSON.parse(readFileSync(new URL('../public/custom-envs/lonely-panic.json', import.meta.url), 'utf8')) as EnvironmentFragment;
 const written = replaceFragment({}, undefined, { environment: lonely.environment, materials: {}, customEvents: [], pointDefinitions: {} }, true)._environment as Record<string, unknown>[];

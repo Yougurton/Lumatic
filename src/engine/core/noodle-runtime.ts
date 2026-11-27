@@ -629,18 +629,32 @@ function parentMatrixForTracks(
   return current.multiply(initial.invert());
 }
 
+export function hasNoodleParent(data: NoodleBeatmapData, tracks: readonly string[], beat: number) {
+  return latestParentEvent(data, tracks, beat) !== undefined;
+}
+
+export interface NoodleParentSample {
+  matrix: number[];
+  worldPositionStays: boolean;
+}
+
 export function sampleNoodleParent(
   data: NoodleBeatmapData,
   tracks: readonly string[],
   beat: number,
   context?: PointSampleContext,
+  cache?: Map<NoodleParentEvent, NoodleParentSample>,
 ) {
   const event = latestParentEvent(data, tracks, beat);
   if (event === undefined) return undefined;
-  return {
+  const cached = cache?.get(event);
+  if (cached !== undefined) return cached;
+  const sample = {
     matrix: parentObjectMatrix(data, event, beat, context, false, new Set(), false).toArray(),
     worldPositionStays: event.worldPositionStays,
   };
+  cache?.set(event, sample);
+  return sample;
 }
 
 function genericTrackTransform(

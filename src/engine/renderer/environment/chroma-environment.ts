@@ -733,15 +733,19 @@ function standardMaterial(color: ChromaMaterial['color']): EnvironmentMaterialDa
     name: '__chroma_standard',
     shader: 'ChroMapper/Lit',
     family: 'lit',
-    colors: { _Color: [...(color ?? [0, 0, 0, 0])] },
+    colors: {
+      _Color: [...(color ?? [0, 0, 0, 0])],
+      _NominalDiffuseLevel: color === undefined ? [0, 0, 0, 1] : [color[0], color[1], color[2], 1],
+    },
     floats: {
       _AmbientMinimalValue: 0,
       _AmbientMultiplier: 1,
       _EnableDiffuse: 1,
-      _EnableSpecular: 1,
+      _EnableSpecular: 0,
       _Smoothness: 0.5,
-      _SpecularIntensity: 1,
-      _EnableFog: 1,
+      _SpecularIntensity: 0,
+      _EnableFog: 0,
+      _EnableHeightFog: 0,
       _CullMode: 2,
       _ZWrite: 1,
     },
@@ -832,16 +836,10 @@ function glowingMaterial(color: ChromaMaterial['color']): EnvironmentMaterialDat
 }
 
 function materialData(data: EnvironmentData, material: ChromaMaterial) {
-  const useGlowingCompatibility =
-    (material.shader === 'Standard' || material.shader === 'BTSPillar') && material.keywords?.length === 0;
-  const color: ChromaMaterial['color'] =
-    useGlowingCompatibility && material.color !== undefined
-      ? [material.color[0], material.color[1], material.color[2], 0]
-      : material.color;
+  const color = material.color;
   const preset = data.materials[chromaMaterialPresetKey(material.shader)];
   let result: EnvironmentMaterialData | undefined;
-  if (useGlowingCompatibility) result = glowingMaterial(color);
-  else if (preset !== undefined) result = structuredClone(preset);
+  if (preset !== undefined) result = structuredClone(preset);
   else {
     switch (material.shader) {
       case 'Standard':
@@ -864,6 +862,9 @@ function materialData(data: EnvironmentData, material: ChromaMaterial) {
     }
   }
   if (color !== undefined) result.colors._Color = [...color];
+  if (material.shader === 'Standard' && material.tracks.length > 0) {
+    result.colors._NominalDiffuseLevel = [1, 1, 1, 1];
+  }
   if (material.keywords !== undefined && material.keywords.length > 0) result.keywords = [...material.keywords];
   return lookAsInGame(material.shader, result, data);
 }
@@ -909,6 +910,7 @@ function lookAsInGame(shader: ChromaMaterial['shader'], result: EnvironmentMater
       break;
     }
     case 'Standard':
+      break;
     case 'BTSPillar':
       reflective(0.6, 0.85);
       break;
