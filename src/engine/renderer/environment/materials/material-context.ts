@@ -2,7 +2,7 @@ import { DataTexture, SRGBColorSpace, type CubeTexture, type Texture } from 'thr
 
 import type { Rgb } from '../../../core/colors';
 import type { FogUniforms } from '../../bloomfog/pipeline';
-import type { DirectionalLightUniforms, MaterialFogSettings } from '../../materials/shared';
+import type { DirectionalLightUniforms, MapPointLightUniforms, MaterialFogSettings } from '../../materials/shared';
 import type { EnvironmentBakedReflectionProbe } from '../environment-runtime';
 import type { EnvironmentMaterialData } from '../types';
 
@@ -10,6 +10,7 @@ export interface EnvironmentMaterialContext {
   fog: FogUniforms;
   reflectionTexture: { value: Texture };
   directionalLights: DirectionalLightUniforms;
+  mapPointLights?: MapPointLightUniforms;
   reflectionProbe?: CubeTexture;
   bakedReflectionProbe?: EnvironmentBakedReflectionProbe;
   songTime?: { value: number };

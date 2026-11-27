@@ -26,6 +26,8 @@ export interface EnvironmentMaterialData {
   floats: Record<string, number>;
   textures?: Record<string, EnvironmentTextureData>;
   keywords: string[];
+  /** A map's custom-geometry material: the map's light-ID tubes light it as point lights. */
+  receiveMapPointLights?: boolean;
 }
 
 export interface EnvironmentTextureData {

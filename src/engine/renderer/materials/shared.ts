@@ -21,6 +21,19 @@ export interface DirectionalLightUniforms {
   radii: { value: number[] };
 }
 
+/** How many of a map's light-ID tubes act as point lights for lit custom geometry. */
+export const MAP_POINT_LIGHT_COUNT = 8;
+
+/**
+ * The map's own light tubes (light-ID segments) as point lights: world positions and
+ * colours × intensity, brightest first, zero-colour entries unused. Filled per frame by
+ * the environment light runtime; read by lit materials of map custom geometry.
+ */
+export interface MapPointLightUniforms {
+  positions: { value: Vector3[] };
+  colors: { value: Vector3[] };
+}
+
 export const additive = {
   transparent: true,
   blending: CustomBlending,

@@ -31,7 +31,7 @@ import type {
   EnvironmentLightSegment,
   LoadedEnvironment,
 } from '../environment/environment-runtime';
-import { shaderColorUniform, shaderNumberUniform, shaderUniformValue } from '../materials/shared';
+import { shaderColorUniform, shaderNumberUniform, shaderUniformValue, MAP_POINT_LIGHT_COUNT } from '../materials/shared';
 import { ChromaTrackRuntime } from './chroma-track-runtime';
 import { lightBindingKey, rebuildEnvironmentLightEventCache } from './environment-light-timeline-routing';
 import { EnvironmentTransformRuntime } from './environment-transform-runtime';
@@ -97,6 +97,12 @@ export class EnvironmentLightRuntime {
     positions: Array.from({ length: 5 }, () => new Vector3()),
     radii: Array.from({ length: 5 }, () => 100),
   };
+  readonly mapPointLights = {
+    positions: { value: Array.from({ length: MAP_POINT_LIGHT_COUNT }, () => new Vector3()) },
+    colors: { value: Array.from({ length: MAP_POINT_LIGHT_COUNT }, () => new Vector3()) },
+  };
+  private readonly mapPointLightCandidates: { x: number; y: number; z: number; brightness: number; color: Rgb; intensity: number }[] = [];
+  private readonly mapPointLightPicks: { x: number; y: number; z: number; brightness: number; color: Rgb; intensity: number }[] = [];
   readonly songTime = { value: 0 };
   readonly lightSegments: EnvironmentLightSegment[] = [];
 
@@ -237,6 +243,71 @@ export class EnvironmentLightRuntime {
       segment.end[2] = this.position.z;
     }
     this.updateDirectionalLights(beat);
+    this.updateMapPointLights();
+  }
+
+  /**
+   * The brightest light-ID tubes as point lights for a map's custom geometry (POINT_LIGHTS in the
+   * lit shader): the game lights that geometry with the tubes' lights, this is the same in the
+   * editor's forward renderer — a bounded handful, brightest first. Maps often drive hundreds of
+   * tubes with one colour at once, so ties are broken by spreading the picks apart (a lone
+   * brightest seed, then the brightest candidate far enough from those already picked).
+   */
+  private updateMapPointLights() {
+    const candidates = this.mapPointLightCandidates;
+    candidates.length = 0;
+    for (const segment of this.lightSegments) {
+      const color = segment.color;
+      const intensity = segment.intensityMultiplier ?? 1;
+      const brightness =
+        (0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]) * intensity;
+      if (brightness <= 0.00390625) continue;
+      candidates.push({
+        x: (segment.start[0] + segment.end[0]) * 0.5,
+        y: (segment.start[1] + segment.end[1]) * 0.5,
+        z: (segment.start[2] + segment.end[2]) * 0.5,
+        brightness,
+        color,
+        intensity,
+      });
+    }
+    candidates.sort((a, b) => b.brightness - a.brightness);
+    const picks = this.mapPointLightPicks;
+    picks.length = 0;
+    const minSpacingSq = 36;
+    for (const candidate of candidates) {
+      if (picks.length >= MAP_POINT_LIGHT_COUNT) break;
+      let spaced = true;
+      for (const pick of picks) {
+        const dx = candidate.x - pick.x;
+        const dy = candidate.y - pick.y;
+        const dz = candidate.z - pick.z;
+        if (dx * dx + dy * dy + dz * dz < minSpacingSq) {
+          spaced = false;
+          break;
+        }
+      }
+      if (spaced) picks.push(candidate);
+    }
+    for (const candidate of candidates) {
+      if (picks.length >= MAP_POINT_LIGHT_COUNT) break;
+      if (!picks.includes(candidate)) picks.push(candidate);
+    }
+    const positions = this.mapPointLights.positions.value;
+    const colors = this.mapPointLights.colors.value;
+    for (let index = 0; index < positions.length; index++) {
+      const pick = picks[index];
+      if (pick === undefined) {
+        colors[index].set(0, 0, 0);
+        continue;
+      }
+      positions[index].set(pick.x, pick.y, pick.z);
+      colors[index].set(
+        pick.color[0] * pick.intensity,
+        pick.color[1] * pick.intensity,
+        pick.color[2] * pick.intensity,
+      );
+    }
   }
 
   private rebuildTimelineCaches() {

@@ -142,6 +142,8 @@ export function createLitEnvironmentMaterial(
     specularIntensity: data.floats._SpecularIntensity ?? 1,
     lightFalloffEnabled: (data.floats._EnableLightFalloff ?? 0) !== 0,
     privatePointLightEnabled: (data.floats._EnablePrivatePointLight ?? 0) !== 0,
+    receiveMapPointLights: data.receiveMapPointLights === true,
+    mapPointLights: givenContext.mapPointLights,
     privatePointLightColor: vectorColor(data.colors._PrivatePointLightColor, [0, 0.5, 1]),
     privatePointLightPosition: unityVectorColor(data.colors._PrivatePointLightPosition, [0, 0, 0]),
     privatePointLightLocal: (data.floats._PointLightPositionLocal ?? 0) !== 0,

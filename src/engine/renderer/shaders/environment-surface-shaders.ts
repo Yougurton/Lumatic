@@ -1,3 +1,4 @@
+import { MAP_POINT_LIGHT_COUNT } from '../materials/shared';
 import { ACES_CHUNK, BASE_COLOR_CHUNK, DXT5_NORMAL_CHUNK, FOG_CHUNK } from './chunks';
 
 // (a volume texture of the game — its 3D noise — as the converter lays it out: its slices side by
@@ -299,6 +300,10 @@ uniform vec3 _PrivatePointLightColor;
 uniform vec3 _PrivatePointLightPosition;
 uniform float _PrivatePointLightLocal;
 uniform float _PrivatePointLightIntensity;
+#ifdef POINT_LIGHTS
+uniform vec3 _PointLightPositions[${MAP_POINT_LIGHT_COUNT}];
+uniform vec3 _PointLightColors[${MAP_POINT_LIGHT_COUNT}];
+#endif
 uniform float _GroundFadeEnabled;
 uniform float _GroundFadeScale;
 uniform float _GroundFadeOffset;
@@ -565,6 +570,23 @@ void main() {
       specularLight += chroSpecularTerm(lightDir, viewDirection, normal, albedo, metallic, smoothness) * pointColor;
     }
   }
+  #ifdef POINT_LIGHTS
+  // (the map's own light-ID tubes, as point lights — the game lights a map's custom
+  // geometry with them; see the environment light runtime's brightest-segment selection)
+  for (int i = 0; i < ${MAP_POINT_LIGHT_COUNT}; i++) {
+    vec3 pointLightColor = _PointLightColors[i];
+    if (pointLightColor.r == 0.0 && pointLightColor.g == 0.0 && pointLightColor.b == 0.0) continue;
+    vec3 pointOffset = _PointLightPositions[i] - vWorldPos;
+    float pointDistanceSq = dot(pointOffset, pointOffset);
+    vec3 lightDir = pointOffset * inversesqrt(max(pointDistanceSq, 1e-6));
+    float attenuation = 1.0 / (1.0 + 0.08 * pointDistanceSq);
+    diffuseLight += chroDiffuseTerm(normal, lightDir) * pointLightColor * attenuation * _DiffuseEnabled;
+    if (_SpecularEnabled != 0.0) {
+      specularLight += chroSpecularTerm(lightDir, viewDirection, normal, albedo, metallic, smoothness)
+        * pointLightColor * attenuation;
+    }
+  }
+  #endif
   vec3 calculated = diffuseLight * albedo * (1.0 - metallic);
   if (_SpecularEnabled != 0.0) {
     calculated += specularLight * _SpecularIntensity;

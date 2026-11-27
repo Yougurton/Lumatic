@@ -316,6 +316,10 @@ export class MapView implements RenderView {
               positions: { value: this.environmentLights.directionalLights.positions },
               radii: { value: this.environmentLights.directionalLights.radii },
             },
+            mapPointLights: {
+              positions: { value: this.environmentLights.mapPointLights.positions.value },
+              colors: { value: this.environmentLights.mapPointLights.colors.value },
+            },
             songTime: this.environmentLights.songTime,
           },
           controller.signal,

@@ -16,6 +16,7 @@ import {
   materialFogUniforms,
   textureUniforms,
   type DirectionalLightUniforms,
+  type MapPointLightUniforms,
   type MaterialFogSettings,
   type MaterialTexture,
 } from './shared';
@@ -36,6 +37,9 @@ export interface EnvironmentLitSettings {
   privatePointLightPosition: Rgb;
   privatePointLightLocal: boolean;
   privatePointLightIntensity: number;
+  /** The map's own light-ID tubes light this surface (map custom geometry only). */
+  receiveMapPointLights?: boolean;
+  mapPointLights?: MapPointLightUniforms;
   groundFadeEnabled: boolean;
   groundFadeScale: number;
   groundFadeOffset: number;
@@ -290,6 +294,9 @@ export function createEnvironmentLitMaterial(
   }
   if (settings.customTime === 'freeze') Object.assign(defines, { CUSTOM_TIME_FREEZE: 1 });
   if (settings.customTime === 'song') Object.assign(defines, { CUSTOM_TIME_SONG: 1 });
+  if (settings.receiveMapPointLights === true && settings.mapPointLights !== undefined) {
+    Object.assign(defines, { POINT_LIGHTS: 1 });
+  }
   const material = new ShaderMaterial({
     defines,
     vertexShader: ENVIRONMENT_LIT_VERT,
@@ -414,6 +421,12 @@ export function createEnvironmentLitMaterial(
       _PrivatePointLightIntensity: {
         value: settings.privatePointLightIntensity,
       },
+      ...(settings.receiveMapPointLights === true && settings.mapPointLights !== undefined
+        ? {
+            _PointLightPositions: settings.mapPointLights.positions,
+            _PointLightColors: settings.mapPointLights.colors,
+          }
+        : {}),
       _GroundFadeEnabled: { value: settings.groundFadeEnabled ? 1 : 0 },
       _GroundFadeScale: { value: settings.groundFadeScale },
       _GroundFadeOffset: { value: settings.groundFadeOffset },

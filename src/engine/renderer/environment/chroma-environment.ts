@@ -866,6 +866,9 @@ function materialData(data: EnvironmentData, material: ChromaMaterial) {
     result.colors._NominalDiffuseLevel = [1, 1, 1, 1];
   }
   if (material.keywords !== undefined && material.keywords.length > 0) result.keywords = [...material.keywords];
+  // (a map's own geometry is lit by the map's light-ID tubes, as in the game: see POINT_LIGHTS
+  // in the lit shader; only the lit material family acts on this)
+  result.receiveMapPointLights = true;
   return lookAsInGame(material.shader, result, data);
 }
 
