@@ -1067,5 +1067,175 @@ applySplit();
 
 refreshToolbar();
 
+// Automation bridge for agents (electron/automation.ts drives it over the local HTTP server that
+// the app starts with --automation). Kept tiny: the editor instance and the detached-preview
+// wrapper this page already own.
+{
+  // Console capture for the automation bridge: agents read the page's logs over the local server
+  // (renderer console lines never reach the main process stdout). The original console still works.
+  const automationLogs: { seq: number; beat: number; level: string; text: string }[] = [];
+  let automationLogSeq = 0;
+  const stringifyArgument = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) return `${value.name}: ${value.message}${value.stack === undefined ? '' : `\n${value.stack.split('\n').slice(1, 4).join('\n')}`}`;
+    try {
+      const seen = new WeakSet<object>();
+      return JSON.stringify(value, (_key, item: unknown) => {
+        if (typeof item === 'object' && item !== null) {
+          if (seen.has(item)) return '[circular]';
+          seen.add(item);
+          if (item instanceof Error) return `${item.name}: ${item.message}`;
+        }
+        return item;
+      }) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  };
+  for (const level of ['log', 'info', 'warn', 'error'] as const) {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      try {
+        automationLogSeq += 1;
+        automationLogs.push({
+          seq: automationLogSeq,
+          beat: Math.round(editor.playhead() * 1000) / 1000,
+          level,
+          text: args.map(stringifyArgument).join(' ').slice(0, 2000),
+        });
+        if (automationLogs.length > 600) automationLogs.splice(0, automationLogs.length - 600);
+      } catch {
+        // (logging must never break the app)
+      }
+      original(...args);
+    };
+  }
+  // Event queries over the parsed difficulty: what fires in a beat window (animations, basic
+  // light events, parent assignments) — the map questions agents used to answer with ad-hoc
+  // scripts over the raw .dat files.
+  const queryDifficulty = (from: number, to: number, track: string | null, kind: string | null) => {
+    const difficulty = editor.row?.difficulty;
+    if (difficulty === undefined) return { error: 'no open difficulty' };
+    const matches = (name: string) => track === null || track === '' || name.toLowerCase().includes(track.toLowerCase());
+    const kindWanted = (wanted: string) => kind === null || kind === '' || kind === 'all' || kind === wanted;
+    const result: Record<string, unknown> = { from, to, kind: kind ?? 'all', track: track ?? '' };
+    if (kindWanted('animation')) {
+      const rows: Record<string, unknown>[] = [];
+      let total = 0;
+      for (const animation of difficulty.chromaEnvironment.animations) {
+        const beat = animation.songBpmTime;
+        if (beat < from || beat > to) continue;
+        const names = animation.track.filter(matches);
+        if (names.length === 0) continue;
+        total += 1;
+        if (rows.length >= 2000) continue;
+        const props: Record<string, unknown> = {};
+        for (const [prop, points] of [['position', animation.position], ['scale', animation.scale], ['color', animation.color]] as const) {
+          const last = points?.[points.length - 1];
+          if (last !== undefined && 'value' in last) props[prop] = last.value;
+        }
+        rows.push({ b: Math.round(beat * 1000) / 1000, track: names.join('+'), dur: animation.durationSongBpmTime, props });
+      }
+      result.animations = rows;
+      result.animationsTotal = total;
+      result.animationsTruncated = total > rows.length;
+    }
+    if (kindWanted('event')) {
+      const rows: Record<string, unknown>[] = [];
+      let total = 0;
+      for (const event of difficulty.events) {
+        const beat = event.songBpmTime;
+        if (beat < from || beat > to) continue;
+        total += 1;
+        if (rows.length >= 4000) continue;
+        const lightIds = event.customData?.lightIds;
+        rows.push({
+          b: Math.round(beat * 1000) / 1000,
+          type: event.type,
+          value: event.value,
+          float: Math.round((event.floatValue ?? 0) * 1000) / 1000,
+          ...(Array.isArray(lightIds) ? { lightIds } : {}),
+        });
+      }
+      result.events = rows;
+      result.eventsTotal = total;
+      result.eventsTruncated = total > rows.length;
+    }
+    if (kindWanted('parent')) {
+      const rows: Record<string, unknown>[] = [];
+      for (const parent of difficulty.noodle.parentEvents) {
+        const beat = parent.songBpmTime;
+        if (beat < from || beat > to) continue;
+        const children = parent.childrenTracks ?? [];
+        if (track !== null && track !== '' && !children.some(matches) && !matches(parent.parentTrack ?? '')) continue;
+        rows.push({
+          b: Math.round(beat * 1000) / 1000,
+          parent: parent.parentTrack,
+          wps: parent.worldPositionStays === true,
+          children: children.length,
+          sample: children.slice(0, 4),
+        });
+      }
+      result.parents = rows;
+    }
+    return result;
+  };
+  Object.assign((window as unknown as { chroeditor: Record<string, unknown> }).chroeditor, {
+    automation: {
+      state: () => ({
+        map: editor.map === null ? null : editor.map.folder.name,
+        difficulty: editor.row === null ? null : editor.row.key,
+        beat: Math.round(editor.playhead() * 1000) / 1000,
+        playing: editor.isPlaying(),
+        previewDetached: detachedPreview.active,
+      }),
+      seek: (beat: number) => editor.seek(Math.max(0, Number.isFinite(beat) ? beat : 0)),
+      play: () => {
+        if (!editor.isPlaying()) editor.togglePlay();
+      },
+      pause: () => {
+        if (editor.isPlaying()) editor.togglePlay();
+      },
+      open: (folder: string) => {
+        void openRecentFolder(folder, settings().mapFolder || settings().gameFolder).then(openFolder);
+      },
+      difficulties: () => editor.difficulties().map((row) => ({ key: row.key, label: row.label })),
+      difficulty: (key: string) => {
+        const row = editor.difficulties().find((row) => row.key === key);
+        if (row !== undefined) void editor.openDifficulty(row);
+      },
+      previewDetach: () => {
+        void detachedPreview.detach().catch(() => undefined);
+      },
+      previewAttach: () => detachedPreview.close(),
+      logs: (after: number, clear: boolean) => {
+        const entries = automationLogs.filter((entry) => entry.seq > after);
+        if (clear === true) automationLogs.length = 0;
+        return { lastSeq: automationLogSeq, kept: automationLogs.length, entries };
+      },
+      query: queryDifficulty,
+      scene: () => preview.view.chromaSceneStats(),
+      rows: async () => {
+        const infoProbe = editor.map === null
+          ? null
+          : await editor.map.folder.readText('Info.dat').then((text) => {
+              const root = JSON.parse(text) as { _difficultyBeatmapSets?: unknown[] };
+              return { length: text.length, head: text.slice(0, 100), sets: Array.isArray(root._difficultyBeatmapSets) ? root._difficultyBeatmapSets.length : -1 };
+            }).catch((error: unknown) => ({ readError: String(error) }));
+        return {
+          files: editor.map?.folder.files ?? null,
+          rows: editor.map?.parsed.rows.map((row) => ({
+            key: row.key,
+            hasDifficulty: row.difficulty !== undefined,
+            environmentId: row.environmentId,
+            environmentSupported: row.environmentSupported,
+          })) ?? null,
+          infoProbe,
+        };
+      },
+    },
+  });
+}
+
 // (the notes side's track and camera too, for tests and the console)
 Object.assign((window as unknown as { chroeditor: Record<string, unknown> }).chroeditor, { noteTrack, fly, detachedPreview });

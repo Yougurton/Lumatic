@@ -23,7 +23,11 @@ export class PreviewWindowManager {
   private saveTimer: NodeJS.Timeout | null = null;
   private readonly observedOwners = new WeakSet<BrowserWindow>();
 
-  constructor(private readonly distRoot: string) {}
+  constructor(
+    private readonly distRoot: string,
+    /** Automation drives the window while it may be occluded: keep its render loop un-throttled. */
+    private readonly keepUnthrottled = false,
+  ) {}
 
   private preferencesFile() {
     return path.join(app.getPath('userData'), 'preview-window.json');
@@ -57,6 +61,19 @@ export class PreviewWindowManager {
     else this.saveTimer = setTimeout(write, 200);
   }
 
+  /** The detached 3D window, if it is open and alive. */
+  previewWindow(): BrowserWindow | null {
+    return this.window !== null && !this.window.isDestroyed() ? this.window : null;
+  }
+
+  /** PNG bytes of the detached 3D window's current frame, or null when it is not open. */
+  async capture(): Promise<Buffer | null> {
+    const window = this.previewWindow();
+    if (window === null) return null;
+    const image = await window.webContents.capturePage();
+    return image.toPNG();
+  }
+
   async detach(owner: BrowserWindow, state: PreviewSnapshot): Promise<boolean> {
     this.state = state;
     if (this.window !== null && !this.window.isDestroyed()) {
@@ -79,6 +96,7 @@ export class PreviewWindowManager {
       autoHideMenuBar: true,
       alwaysOnTop: this.preferences.alwaysOnTop,
       webPreferences: {
+        backgroundThrottling: !this.keepUnthrottled,
         preload: path.join(__dirname, 'preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,

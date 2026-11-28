@@ -1,4 +1,5 @@
 import { canInstall, checkForUpdate, downloadUpdate, installUpdate } from './updater';
+import { startAutomationServer } from './automation';
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron';
 import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -26,7 +27,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const distRoot = path.join(__dirname, '..', 'dist');
-const previewWindows = new PreviewWindowManager(distRoot);
+const previewWindows = new PreviewWindowManager(distRoot, process.argv.includes('--automation'));
+// the editor window, for the automation server (see startAutomation below)
+let mainWindow: BrowserWindow | null = null;
+const automationEnabled = process.argv.includes('--automation');
 const allowedRoots = new Set<string>();
 // (settings, recent folders and the rest of the page's storage stay where ChroEditor kept them)
 {
@@ -85,13 +89,17 @@ function createWindow(reopen?: string) {
     title: 'Lumatic',
     icon: path.join(distRoot, 'icon.png'),
     autoHideMenuBar: true,
+    // automation drives the window while it may be occluded: without this the render loop and the
+    // DOM freeze at the last frame the moment another window covers the editor
     webPreferences: {
+      backgroundThrottling: !automationEnabled,
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
+  mainWindow = window;
   // (no menu: its accelerators — Ctrl+Z, Ctrl+R… — would take the keys from the editor; F12 still
   // opens the developer tools)
   window.webContents.on('before-input-event', (event, input) => {
@@ -409,6 +417,20 @@ void app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // automation for agents and tests: opt-in, bound to 127.0.0.1
+  if (process.argv.includes('--automation')) {
+    const portArg = process.argv.find((arg) => arg.startsWith('--automation-port='));
+    const port = portArg === undefined ? 9315 : Number(portArg.slice('--automation-port='.length));
+    if (Number.isFinite(port) && port > 0) {
+      startAutomationServer(port, {
+        editor: () => mainWindow,
+        preview: () => previewWindows.previewWindow(),
+      });
+    } else {
+      log('automation', 'invalid --automation-port, server not started');
+    }
+  }
 });
 
 app.on('window-all-closed', () => {
