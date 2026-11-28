@@ -119,7 +119,7 @@ export async function addDifficulty(editor: Editor, spec: NewDifficulty): Promis
   const custom: Json = spec.from === 'all' && sourceEntry !== undefined ? structuredClone((sourceEntry._customData ?? {}) as Json) : {};
   if (spec.label !== '') custom._difficultyLabel = spec.label;
   else delete custom._difficultyLabel;
-  const entry: Json = { _difficulty: spec.difficulty, _difficultyRank: rank, _beatmapFilename: file, _noteJumpMovementSpeed: spec.njs, _noteJumpStartBeatOffset: spec.offset };
+  const entry: Json = { _difficulty: spec.difficulty, _difficultyRank: rank, _beatmapFilename: file, _environmentNameIdx: 0, _beatmapColorSchemeIdx: 0, _noteJumpMovementSpeed: spec.njs, _noteJumpStartBeatOffset: spec.offset };
   if (Object.keys(custom).length > 0) entry._customData = custom;
   set._difficultyBeatmaps = [...(set._difficultyBeatmaps ?? []), entry].sort((a, b) => Number(a._difficultyRank ?? 0) - Number(b._difficultyRank ?? 0));
   info._difficultyBeatmapSets = sets;

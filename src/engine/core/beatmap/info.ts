@@ -92,8 +92,11 @@ const v4ColorSchemeSchema = z.object({
 const v2DifficultySchema = z.object({
   _difficulty: stringSchema,
   _beatmapFilename: stringSchema,
-  _environmentNameIdx: integerSchema,
-  _beatmapColorSchemeIdx: integerSchema,
+  // (these two indices are optional in practice: maps made by this editor's "add difficulty" used
+  // to omit them, and Beat Saber itself treats an absent index as 0 - a strict requirement here
+  // made zod silently drop the WHOLE difficulties array, so such maps opened as "no difficulties")
+  _environmentNameIdx: integerSchema.catch(0),
+  _beatmapColorSchemeIdx: integerSchema.catch(0),
   _noteJumpMovementSpeed: numberSchema,
   _noteJumpStartBeatOffset: numberSchema,
   _customData: v2CustomDataSchema.optional().catch(undefined),
