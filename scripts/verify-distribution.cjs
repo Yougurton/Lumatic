@@ -21,7 +21,12 @@ for (const file of ['LICENSE.txt', 'THIRD_PARTY_NOTICES.md', 'LICENSE.electron.t
 }
 sameFile('LICENSE.txt', 'LICENSE');
 sameFile('THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md');
-sameFile('LICENSE.electron.txt', 'node_modules/electron/dist/LICENSE.electron.txt');
+// (electron 45's npm package ships its own license as LICENSE instead of LICENSE.electron.txt;
+//  the packaged app keeps the distribution zip's original name)
+const electronLicenseSource = fs.existsSync(path.join(root, 'node_modules', 'electron', 'dist', 'LICENSE.electron.txt'))
+  ? 'node_modules/electron/dist/LICENSE.electron.txt'
+  : 'node_modules/electron/dist/LICENSE';
+sameFile('LICENSE.electron.txt', electronLicenseSource);
 sameFile('LICENSES.chromium.html', 'node_modules/electron/dist/LICENSES.chromium.html');
 
 const archive = path.join(unpacked, 'resources', 'app.asar');
