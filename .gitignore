@@ -12,6 +12,14 @@ tmp/
 /gls-environment.cjs
 /AGENTS.md
 .kimi-code/
+.opencode/
+opencode.jsonc
+DOMAIN_RULES.md
+PACK_MANIFEST.json
+PACK_README.md
+ollama/
+optional-model-templates/
+tests/tmp-*
 __pycache__/
 *.py[cod]
 *.tsbuildinfo
