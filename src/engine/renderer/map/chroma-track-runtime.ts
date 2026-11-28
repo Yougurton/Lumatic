@@ -24,7 +24,7 @@ import type {
   ChromaVectorPoint,
 } from '../../core/chroma-environment';
 import type { NoodleBeatmapData, NoodleParentEvent } from '../../core/noodle-data';
-import { hasNoodleParent, sampleNoodleParent, type NoodleParentSample } from '../../core/noodle-runtime';
+import { activeNoodleParent, hasNoodleParent, sampleNoodleParent, type NoodleParentSample } from '../../core/noodle-runtime';
 import type {
   EnvironmentChromaTubeTarget,
   EnvironmentLightSegment,
@@ -33,6 +33,11 @@ import type {
 } from '../environment/environment-runtime';
 import type { FogParams } from '../fog-math';
 import { shaderColorUniform, shaderNumberUniform } from '../materials/shared';
+
+// Depth-fighting stabilization constants: animation z deltas at or below STACK_MAX_DELTA are
+// treated as coplanar stacks and re-spaced to STACK_GAP (a sub-pixel world distance) each update.
+const STACK_MAX_DELTA = 0.02;
+const STACK_GAP = 0.05;
 
 interface TimedEvent {
   beat: number;
@@ -288,6 +293,7 @@ export class ChromaTrackRuntime {
   private readonly parentMatrixInverse = new Matrix4();
   private readonly noodleBasis = new Matrix4().makeScale(1, 1, -1);
   private transformTargets: TransformTarget[] = [];
+  private readonly stackPairs: Array<{ a: TransformTarget; b: TransformTarget; rx: number; ry: number }> = [];
   private readonly baseTransforms = new WeakMap<Object3D, { position: Vector3; rotation: Quaternion; scale: Vector3 }>();
   private materialTargets: MaterialTarget[] = [];
   private tubeTargets: TubeTarget[] = [];
@@ -381,6 +387,87 @@ export class ChromaTrackRuntime {
       return { target, tracks, position: base.position.clone(), rotation: base.rotation.clone(), scale: base.scale.clone() };
     });
     this.transformTargets.sort((left, right) => targetDepth(left.target) - targetDepth(right.target));
+    // Depth-fighting stabilization: some maps stack geometry in nearly coplanar layers (gaps of
+    // a few thousandths of a unit, e.g. Pictured as Perfect's card stacks). Such gaps are below
+    // depth-buffer precision at play distances, so the surfaces flicker and shimmer. Detect
+    // track pairs that overlap in x/y while separated by at most STACK_MAX_DELTA in z, using the
+    // tracks' own animation values; update() then enforces a small depth-exact gap between the
+    // live targets, preserving their front-to-back order.
+    this.stackPairs.length = 0;
+    const parked = (value: Vector3Tuple) =>
+      Math.abs(value[0]) > 60000 || Math.abs(value[1]) > 60000 || Math.abs(value[2]) > 60000;
+    interface StackSample {
+      x: number;
+      y: number;
+      z: number;
+      hx: number;
+      hy: number;
+      target: number;
+    }
+    const halfExtents = new Map<string, { hx: number; hy: number }>();
+    for (const [name, track] of this.tracks) {
+      const value = track.scale[0]?.points[0]?.value;
+      halfExtents.set(
+        name,
+        value === undefined
+          ? { hx: 0.5, hy: 0.5 }
+          : {
+              hx: Math.max((Math.abs(value[0]) + Math.abs(value[2])) / 2, 0.25),
+              hy: Math.max((Math.abs(value[1]) + Math.abs(value[2])) / 2, 0.25),
+            },
+      );
+    }
+    const samplesByCell = new Map<number, StackSample[]>();
+    for (const [index, transform] of this.transformTargets.entries()) {
+      const extents =
+        transform.tracks.map((name) => halfExtents.get(name)).find((value) => value !== undefined) ?? { hx: 0.5, hy: 0.5 };
+      for (const name of transform.tracks) {
+        const track = this.tracks.get(name);
+        if (track === undefined) continue;
+        for (const event of track.position) {
+          for (const point of event.points) {
+            const value = point.value;
+            if (value === undefined || parked(value)) continue;
+            const cellKey = Math.floor(value[0] / 32) * 100003 + Math.floor(value[1] / 32);
+            let bucket = samplesByCell.get(cellKey);
+            if (bucket === undefined) {
+              bucket = [];
+              samplesByCell.set(cellKey, bucket);
+            }
+            bucket.push({ x: value[0], y: value[1], z: value[2], hx: extents.hx, hy: extents.hy, target: index });
+          }
+        }
+      }
+    }
+    const reaches = new Map<number, { rx: number; ry: number }>();
+    const targetCount = Math.max(this.transformTargets.length, 1);
+    for (const bucket of samplesByCell.values()) {
+      for (let i = 0; i < bucket.length; i++) {
+        const a = bucket[i]!;
+        for (let j = i + 1; j < bucket.length; j++) {
+          const b = bucket[j]!;
+          if (a.target === b.target) continue;
+          const rx = a.hx + b.hx + 0.05;
+          const ry = a.hy + b.hy + 0.05;
+          if (Math.abs(a.x - b.x) > rx || Math.abs(a.y - b.y) > ry) continue;
+          const delta = Math.abs(a.z - b.z);
+          if (delta <= 0 || delta > STACK_MAX_DELTA) continue;
+          const key = Math.min(a.target, b.target) * targetCount + Math.max(a.target, b.target);
+          const reach = reaches.get(key);
+          if (reach === undefined) reaches.set(key, { rx, ry });
+          else {
+            reach.rx = Math.max(reach.rx, rx);
+            reach.ry = Math.max(reach.ry, ry);
+          }
+        }
+      }
+    }
+    for (const [key, reach] of reaches) {
+      const a = this.transformTargets[Math.floor(key / targetCount)];
+      const b = this.transformTargets[key % targetCount];
+      if (a === undefined || b === undefined) continue;
+      this.stackPairs.push({ a, b, rx: reach.rx, ry: reach.ry });
+    }
 
     const materialTracks = new Map<ShaderMaterial, string[]>();
     for (const [track, targets] of environment.chromaMaterialTracks ?? []) {
@@ -434,6 +521,21 @@ export class ChromaTrackRuntime {
     this.updateTransforms(beat, noodle, context);
     this.updateMaterials(beat, context);
     this.updateTubeComponents(beat, context);
+    // Depth-fighting stabilization: keep detected near-coplanar stacks separated by a small
+    // depth-exact gap, preserving their current front-to-back order. Parked targets stay put.
+    for (const pair of this.stackPairs) {
+      const pa = pair.a.target.position;
+      const pb = pair.b.target.position;
+      if (Math.abs(pa.x) > 60000 || Math.abs(pa.y) > 60000 || Math.abs(pa.z) > 60000) continue;
+      if (Math.abs(pb.x) > 60000 || Math.abs(pb.y) > 60000 || Math.abs(pb.z) > 60000) continue;
+      if (Math.abs(pa.x - pb.x) > pair.rx || Math.abs(pa.y - pb.y) > pair.ry) continue;
+      const closer = pa.z >= pb.z ? pair.a : pair.b;
+      const farther = closer === pair.a ? pair.b : pair.a;
+      if (closer.target.position.z - farther.target.position.z >= STACK_GAP) continue;
+      farther.target.position.z = closer.target.position.z - STACK_GAP;
+      farther.target.updateMatrix();
+      farther.target.updateWorldMatrix(false, false);
+    }
     return this.updateFog(beat, context);
   }
 
@@ -491,6 +593,25 @@ export class ChromaTrackRuntime {
       });
       const parent = hasParent;
       const moving = parent || events.some((list) => list.some((event) => dynamicEvent(event, beat)));
+      // A child track's own position event that is NEWER than its noodle parent's latest position
+      // event acts in world space (Heck re-asserts transform.position): the parked parent must not
+      // displace it. Children whose last position event predates the parent's keep riding it —
+      // that is what hides Pictured as Perfect's transition tunnel once its parent parks, while
+      // keeping its digit text (re-positioned after the park) visible.
+      let worldWins = false;
+      if (parent && noodle !== undefined) {
+        const parentEvent = activeNoodleParent(noodle, runtime.tracks, beat);
+        if (parentEvent !== undefined) {
+          let childBeat: number | undefined;
+          for (const list of events) {
+            const positionEvent = list[0];
+            if (positionEvent !== undefined && (childBeat === undefined || positionEvent.beat > childBeat)) childBeat = positionEvent.beat;
+          }
+          const parentTrack = this.track(parentEvent.parentTrack);
+          const parentBeat = parentTrack === undefined ? undefined : latestEvent(parentTrack.position, beat)?.beat;
+          worldWins = childBeat !== undefined && (parentBeat === undefined || childBeat > parentBeat);
+        }
+      }
       if (
         !moving &&
         runtime.static === true &&
@@ -545,7 +666,7 @@ export class ChromaTrackRuntime {
 
       target.updateMatrix();
       target.updateWorldMatrix(false, true);
-      if (parent && noodle !== undefined) this.applyNoodleParent(runtime, noodle, beat, context, parentCache);
+      if (parent && noodle !== undefined && !worldWins) this.applyNoodleParent(runtime, noodle, beat, context, parentCache);
       runtime.events = events;
       runtime.parent = parent;
       runtime.beat = beat;
@@ -608,7 +729,7 @@ export class ChromaTrackRuntime {
         }
         continue;
       }
-      target?.setRGB(color[0], color[1], color[2]);
+      target?.setRGB(color[0], color[1], color[2]).convertSRGBToLinear();
       if (runtime.material.uniforms._ColorAlpha !== undefined) runtime.material.uniforms._ColorAlpha.value = color[3];
       if (runtime.material.uniforms._ColorMultiplier !== undefined) {
         runtime.material.uniforms._ColorMultiplier.value = color[3];

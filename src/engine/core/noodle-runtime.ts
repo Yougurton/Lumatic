@@ -633,6 +633,11 @@ export function hasNoodleParent(data: NoodleBeatmapData, tracks: readonly string
   return latestParentEvent(data, tracks, beat) !== undefined;
 }
 
+/** The parent assignment currently active for the given tracks, if any. */
+export function activeNoodleParent(data: NoodleBeatmapData, tracks: readonly string[], beat: number) {
+  return latestParentEvent(data, tracks, beat);
+}
+
 export interface NoodleParentSample {
   matrix: number[];
   worldPositionStays: boolean;

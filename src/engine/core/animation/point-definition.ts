@@ -295,8 +295,11 @@ function segment(points: readonly (DynamicPoint & { time: number; easing?: strin
   if (first === undefined || last === undefined) return undefined;
   const firstTime = first.time;
   const lastTime = last.time;
-  if (time <= firstTime) return { left: 0, right: 0, amount: 0 };
+  // a degenerate pair (firstTime === lastTime) flips the value instantly: from that beat on the
+  // LAST point holds (Heck keeps the final keyframe), so the end of the curve is tested first —
+  // otherwise a parked parent ([0,0,0]→[0,-69420,0] at one time) would sample its start forever
   if (time >= lastTime) return { left: points.length - 1, right: points.length - 1, amount: 0 };
+  if (time <= firstTime) return { left: 0, right: 0, amount: 0 };
   let low = 1;
   let high = points.length;
   while (low < high) {

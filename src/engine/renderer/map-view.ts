@@ -382,6 +382,39 @@ export class MapView implements RenderView {
     return this.environment?.data ?? null;
   }
 
+  /** Automation/debug snapshot: per-track visibility of the map's Chroma geometry at the current
+   *  state (the render loop keeps the world matrices fresh). Objects parked far out (the -69420
+   *  convention) or hidden count as parked; rows are sorted by visible count and capped. */
+  chromaSceneStats(limit = 2500): { tracks: number; visibleTracks: number; hiddenTracks: number; rows: { track: string; targets: number; visible: number; parked: number; sample: [number, number, number] | null }[] } {
+    const environment = this.environment;
+    if (environment === null) return { tracks: 0, visibleTracks: 0, hiddenTracks: 0, rows: [] };
+    const world = new Vector3();
+    const rows: { track: string; targets: number; visible: number; parked: number; sample: [number, number, number] | null }[] = [];
+    let hiddenTracks = 0;
+    for (const [track, targets] of environment.chromaTracks ?? []) {
+      let visible = 0;
+      let parked = 0;
+      let sample: [number, number, number] | null = null;
+      for (const target of targets) {
+        target.getWorldPosition(world);
+        if (!target.visible || Math.abs(world.x) > 60000 || Math.abs(world.y) > 60000 || Math.abs(world.z) > 60000) parked += 1;
+        else {
+          visible += 1;
+          if (sample === null) {
+            sample = [Math.round(world.x * 10) / 10, Math.round(world.y * 10) / 10, Math.round(world.z * 10) / 10];
+          }
+        }
+      }
+      if (visible === 0) {
+        hiddenTracks += 1;
+        continue;
+      }
+      rows.push({ track, targets: targets.length, visible, parked, sample });
+    }
+    rows.sort((left, right) => right.visible - left.visible);
+    return { tracks: rows.length + hiddenTracks, visibleTracks: rows.length, hiddenTracks, rows: rows.slice(0, limit) };
+  }
+
   /**
    * One ring of a ring system as the player sees it down the tunnel: its parts' triangles flattened
    * onto the ring's plane (x, y pairs, three a triangle; laser beams and glows left out) and how far
