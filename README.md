@@ -4,8 +4,6 @@
 
 Lumatic brings a timeline-first lighting workflow, practical beatmap editing tools, and a 3D environment editor into one application. Create and arrange lighting effects against the music, organize environment lights by ID, edit notes and obstacles, and preview your work in a live 3D scene.
 
-> **Development status:** Lumatic is in active beta development. Features, workflows, and supported map data may change between versions. The `dev` branch is the current development branch.
-
 [![The Lumatic lighting workspace with a timeline and live 3D preview](docs/images/lumatic-showreel-poster.jpg)](docs/images/lumatic-showreel-poster.jpg)
 
 *The lighting workspace with the timeline, Light ID groups, and live 3D preview. Click any screenshot to view it at full size.*
@@ -16,7 +14,7 @@ Lumatic is built around a simple idea: complex Beat Saber lighting should be eas
 
 Instead of relying on a 3D timeline where the mapper constantly moves around the environment, Lumatic uses a flat, layered timeline inspired by video and motion-graphics editors. The 3D viewport remains available for visual feedback and scene editing, while the timeline is the main workspace for arranging and shaping a lightshow.
 
-Lumatic is a standalone desktop application built on the ChroViewer rendering and beatmap technology, with editor workflows developed specifically for Beat Saber mapping and lighting.
+Lumatic is a standalone desktop application built on the [ChroViewer](https://github.com/Umbranoxio/chroviewer) rendering and beatmap technology, with editor workflows developed specifically for Beat Saber mapping and lighting.
 
 ## Features
 
@@ -71,7 +69,7 @@ The checks draw on guidance from the Beat Saber Mapping Wiki (BSMG), BeatLeader,
 
 [![Notes, obstacles, and mapping checks on the timeline and in the 3D preview](docs/images/05-mapping-workspace.png)](docs/images/05-mapping-workspace.png)
 
-### 3D environment editor
+### 3D environment editor (Alpha)
 
 Lumatic includes a dedicated scene-editing workspace for Chroma environment modifications.
 
@@ -90,7 +88,7 @@ Lumatic includes a dedicated scene-editing workspace for Chroma environment modi
 
 The environment editor aims to provide a direct, scene-oriented workflow instead of requiring every change to be made through raw JSON.
 
-### Game environment support
+### Game environment support (Alpha)
 
 - Browse the environments included with Lumatic.
 - Use ready-made custom Chroma environments bundled with the project, subject to their individual terms and attribution requirements.
@@ -127,10 +125,6 @@ Lumatic works with standard Beat Saber beatmap data and supported custom data us
 Maps that use mod-dependent features still require the corresponding mods in Beat Saber. Lumatic does not install those mods into the game.
 
 **Format note:** Lumatic currently saves v2 and v3 maps. v4 support is incomplete. When a workflow depends on lighting or custom data that cannot yet be written to v4, use a v3 copy.
-
-## Screenshots
-
-The screenshots above show the current editor in action. Additional captures will be added as the interface evolves.
 
 ## Technology
 
@@ -261,6 +255,28 @@ Bug reports, reproducible examples, and workflow feedback are welcome. When repo
 - Relevant logs or a minimal map/project example, when it is safe and legal to share.
 
 Please do not upload or commit extracted Beat Saber game assets, converted environment bundles, or other copyrighted game files.
+
+## AI-Assisted Development Disclosure
+
+Lumatic is developed with substantial assistance from AI coding tools, including **Claude** and **KimiCode**. AI assistance is a significant part of the development workflow and is used for implementation work, not just occasional suggestions.
+
+### How AI is used
+
+- **Code implementation:** AI tools help write and modify application code, implement features from specifications, generate boilerplate, and refactor existing code.
+- **Debugging assistance:** AI tools are used to investigate errors, interpret logs, propose fixes, and iterate on implementation problems.
+- **Documentation and localization:** AI assists with drafting and revising documentation, technical explanations, and translations.
+
+### Human direction and validation
+
+- **Product direction and requirements:** The project maintainer defines Lumatic's goals, feature priorities, expected workflows, and user-facing behaviour.
+- **Design decisions:** The editor's concepts, interface direction, and feature requirements are specified and guided by the maintainer.
+- **Testing and evaluation:** AI-generated changes are evaluated in the context of the application. The maintainer tests workflows, reports unexpected behaviour, and guides further corrections.
+
+### Review limitations
+
+AI-generated code can contain bugs, incomplete implementations, or incorrect assumptions. Code review is best-effort and does not mean that every generated line has been independently audited. Automated tests and manual checks are used where appropriate, but they cannot guarantee that every issue has been found.
+
+Lumatic is an active beta project. Please report bugs, regressions, and unexpected behaviour through [GitHub Issues](https://github.com/Yougurton/Lumatic/issues). Clear reproduction steps and small example projects are especially helpful.
 
 ## License
 

@@ -57,7 +57,7 @@ checks this before building.
 
 ## Foundation
 
-[ChroViewer](https://github.com/Umbranoxio/chroviewer) (the ChroPaper 1.1.0 engine), GPL-2.0:
+[ChroViewer](https://github.com/Umbranoxio/chroviewer), GPL-2.0:
 the 3D view, map parsing and environment data. The derived code and build scripts are included in the
 Lumatic sources.
 
